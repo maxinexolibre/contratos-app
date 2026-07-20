@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Contratos · Nexolibre</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Exo:wght@300;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <img class="brand-logo" src="assets/nexolibre-logo.svg" alt="Nexolibre" />
+    <nav class="nav" id="nav">
+      <button data-view="dashboard" class="active">Tablero</button>
+      <button data-view="pipeline">Pipeline</button>
+      <button data-view="listado">Contratos</button>
+      <button data-view="agenda">Vencimientos</button>
+    </nav>
+    <span class="spacer"></span>
+    <span class="who" id="who"></span>
+    <button class="btn primary sm" id="btnNuevo">+ Nuevo</button>
+    <button class="btn ghost sm" id="btnConfig" title="Configuración de acceso">⚙</button>
+  </header>
+
+  <main class="wrap">
+    <!-- Dashboard -->
+    <section class="view active" id="view-dashboard"></section>
+    <!-- Pipeline -->
+    <section class="view" id="view-pipeline"></section>
+    <!-- Listado -->
+    <section class="view" id="view-listado"></section>
+    <!-- Agenda -->
+    <section class="view" id="view-agenda"></section>
+    <!-- Detalle -->
+    <section class="view" id="view-detalle"></section>
+    <!-- Formulario -->
+    <section class="view" id="view-form"></section>
+
+    <div class="footer-legend">
+      <span>Nexolibre es miembro de</span>
+      <img class="footer-grupo" src="assets/gruponexo-logo.svg" alt="Grupo Nexo" />
+    </div>
+  </main>
+
+  <!-- Print root para PDF de marca -->
+  <div id="printRoot"></div>
+
+  <!-- Setup / login por PAT -->
+  <div class="overlay" id="setupOverlay" style="display:none">
+    <div class="modal">
+      <div class="kicker">Acceso</div>
+      <h2>Conectá tu <span style="color:var(--orange)">repositorio</span></h2>
+      <p class="muted" style="font-size:14px">Los datos viven en el repo privado <code id="repoName"></code>. Necesitás un token personal de GitHub (se guarda solo en este navegador).</p>
+      <ol>
+        <li>Entrá a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens</a> → <b>Generate new token (fine-grained)</b>.</li>
+        <li>En <b>Repository access</b> elegí <b>Only select repositories</b> → <code id="repoName2"></code>.</li>
+        <li>En <b>Permissions → Repository → Contents</b> poné <b>Read and write</b>.</li>
+        <li>Generá el token (empieza con <code>github_pat_</code>) y pegalo acá abajo.</li>
+      </ol>
+      <div class="field" style="margin:12px 0">
+        <label for="patInput">Token (PAT)</label>
+        <input type="password" id="patInput" placeholder="github_pat_…" autocomplete="off" />
+      </div>
+      <div class="field" style="margin:12px 0">
+        <label for="userInput">Tu nombre (para la trazabilidad)</label>
+        <input type="text" id="userInput" placeholder="maxi / gabriel / geraldine" />
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px; flex-wrap:wrap">
+        <button class="btn ghost" onclick="resetDemo()" title="Descarta la copia local y vuelve a los datos de ejemplo">↻ Restablecer datos demo</button>
+        <span style="flex:1"></span>
+        <button class="btn ghost" id="setupCancel">Cancelar</button>
+        <button class="btn primary" id="setupSave">Conectar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="config.js"></script>
+  <script src="brand.js"></script>
+  <script src="planes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
