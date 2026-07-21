@@ -10,7 +10,7 @@ const LS = {
   demoVer: "nexo_demo_ver",
 };
 // Subir esto invalida la copia demo guardada en el navegador.
-const DEMO_VERSION = "4";
+const DEMO_VERSION = "5";
 
 // -------- estado global --------
 const state = {
@@ -51,6 +51,35 @@ const SERVICIOS = [
 const aplicaA = (srv, modalidad) => !srv.modalidades || srv.modalidades.includes(modalidad);
 const tieneMRI = (c) => (c.equipos || []).some((e) => e.modalidad === "MRI");
 const soloCT = (c) => (c.equipos || []).length > 0 && !tieneMRI(c);
+const cantMRI = (c) => (c.equipos || []).filter((e) => e.modalidad === "MRI").length;
+
+// Alcance del cupo de reparación de bobinas. Distinción con plata detrás:
+// "flota" = N reparaciones para TODO el parque de RM (lo habitual);
+// "porEquipo" = N reparaciones para CADA equipo de RM.
+// Con 3 MRI y N=2 eso es la diferencia entre 2 y 6 reparaciones al año.
+const BOBINAS_ALCANCE = {
+  flota: { corto: "para la flota", largo: "para el conjunto de los equipos de resonancia cubiertos" },
+  porEquipo: { corto: "por equipo", largo: "por cada equipo de resonancia cubierto" },
+};
+const bobinasIlimitadas = (c) => {
+  const v = c?.cobertura?.reparacionBobinasPorAnio;
+  return !!v && typeof v !== "number";
+};
+// Total efectivo de reparaciones al año, según el alcance elegido
+function bobinasTotal(c) {
+  const n = c?.cobertura?.reparacionBobinasPorAnio;
+  if (typeof n !== "number" || !n) return null;
+  return c?.cobertura?.bobinasAlcance === "porEquipo" ? n * Math.max(1, cantMRI(c)) : n;
+}
+// Texto corto para chips y tablas
+function bobinasTexto(c, { largo = false } = {}) {
+  const cov = c?.cobertura || {};
+  const n = cov.reparacionBobinasPorAnio;
+  if (!n) return "";
+  if (bobinasIlimitadas(c)) return String(n);
+  const alc = BOBINAS_ALCANCE[cov.bobinasAlcance] || BOBINAS_ALCANCE.flota;
+  return `${n}/año ${largo ? alc.largo : alc.corto}`;
+}
 const TIPO_ARCHIVO = {
   propuesta_pdf: "Propuesta enviada",
   acuerdo_final: "Acuerdo final negociado",
@@ -155,7 +184,11 @@ function migrar(c) {
   if (!cl.nombreComercial) cl.nombreComercial = cl.razonSocial || "";
   if (cl.razonesSociales.length && !cl.razonesSociales.some((r) => r.principal)) cl.razonesSociales[0].principal = true;
   // criogenia: ya no ofrecemos mantenimiento, solo monitoreo dentro del SaaS Cryo
-  if (c.cobertura) c.cobertura.criogeniaIncluida = false;
+  if (c.cobertura) {
+    c.cobertura.criogeniaIncluida = false;
+    // Los contratos previos se pactaron con cupo de flota, que es lo habitual.
+    if (c.cobertura.bobinasAlcance == null) c.cobertura.bobinasAlcance = "flota";
+  }
   c.archivos = c.archivos || [];
   c.plan = c.plan || { id: "", etiquetaPublica: "", modulos: [], notasInternas: "" };
   c.negociacion = c.negociacion || { desviaciones: [] };
@@ -166,6 +199,10 @@ const migrarTodos = (arr) => (Array.isArray(arr) ? arr.map(migrar) : []);
 const rsPrincipal = (c) => (c.cliente?.razonesSociales || []).find((r) => r.principal) || (c.cliente?.razonesSociales || [])[0] || { razonSocial: "", cuit: "" };
 // Nombre que se muestra en toda la app
 const nombreCliente = (c) => c.cliente?.nombreComercial || rsPrincipal(c).razonSocial || "—";
+
+// Número en letras para las cláusulas (uso contractual: "2 (dos)")
+const NUM_LETRA = ["cero", "una", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce"];
+const numLetra = (n) => NUM_LETRA[n] || String(n);
 
 const money = (n, m = "USD") => (n || n === 0 ? `${m === "USD" ? "US$" : "$"} ${Number(n).toLocaleString("es-AR")}` : "—");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -255,7 +292,7 @@ const DEMO_SEED = [
       { modelo: "Modelo A 1.5T", marca: "GE", modalidad: "MRI", serie: "", ubicacion: "Sede central" },
       { modelo: "Modelo B", marca: "GE", modalidad: "CT", serie: "", ubicacion: "Sede central" },
     ],
-    cobertura: { preventivoInspeccionesAnuales: 4, correctivoManoObra: true, reparacionBobinasPorAnio: 2, soporteRemoto: true, saasMonitoreo: true, partesIncluidas: false, viaticosIncluidos: true, enviosRepuestosIncluidos: true, reparacionesIncluidas: ["Reparación electrónica de bobinas de RM (hasta 2 por año, no acumulables)"] },
+    cobertura: { preventivoInspeccionesAnuales: 4, correctivoManoObra: true, reparacionBobinasPorAnio: 2, bobinasAlcance: "flota", soporteRemoto: true, saasMonitoreo: true, partesIncluidas: false, viaticosIncluidos: true, enviosRepuestosIncluidos: true, reparacionesIncluidas: ["Reparación electrónica de bobinas de RM: hasta 2 por año para el conjunto de los equipos de resonancia, no acumulables"] },
     economico: { canonMensual: 2000, moneda: "USD", incluyeIVA: false, ivaPct: 21, formaPago: "Mensual, antes del 5º día hábil" },
     ajuste: { periodicidad: "trimestral", indice: "US_CPI", proximoAjuste: "", historial: [] },
     vigencia: { inicio: "", meses: 12, fin: "", renovacionAutomatica: true, preavisoDias: 30 },
@@ -277,7 +314,7 @@ const DEMO_SEED = [
     plan: { id: "enterprise", etiquetaPublica: "Contrato Enterprise", modulos: ["bobinas", "prioridad"], notasInternas: "Registro de ejemplo: muestra la composición interna." },
     equipos: [{ modelo: "Modelo C 1.5T", marca: "Philips", modalidad: "MRI", serie: "", ubicacion: "Sede única" }],
     cobertura: {
-      preventivoInspeccionesAnuales: 4, correctivoManoObra: true, reparacionBobinasPorAnio: "sin límite",
+      preventivoInspeccionesAnuales: 4, correctivoManoObra: true, reparacionBobinasPorAnio: "sin límite", bobinasAlcance: "flota",
       soporteRemoto: true, saasMonitoreo: true, partesIncluidas: false,
       viaticosIncluidos: true, enviosRepuestosIncluidos: true,
       reparacionesIncluidas: [
@@ -885,7 +922,7 @@ function renderCoverage(c) {
   const val = {
     preventivo: cov.preventivoInspeccionesAnuales ? `${cov.preventivoInspeccionesAnuales}×` : null,
     correctivo: cov.correctivoManoObra,
-    bobinas: cov.reparacionBobinasPorAnio ? (typeof cov.reparacionBobinasPorAnio === "number" ? `${cov.reparacionBobinasPorAnio}×` : String(cov.reparacionBobinasPorAnio)) : false,
+    bobinas: cov.reparacionBobinasPorAnio ? bobinasTexto(c) : false,
     cryo: cov.saasMonitoreo,
     partes: cov.partesIncluidas,
   };
@@ -903,8 +940,21 @@ function renderCoverage(c) {
     <thead><tr><th>Equipo</th>${SERVICIOS.map((s) => `<th>${s.label}</th>`).join("")}</tr></thead>
     <tbody>${(c.equipos || []).map((e) => `<tr><td><b>${esc(e.marca)} ${esc(e.modelo)}</b> <span class="pill-modal">${e.modalidad}</span></td>${SERVICIOS.map((s) => `<td>${cellFor(s, e.modalidad)}</td>`).join("")}</tr>`).join("")}</tbody>
   </table></div>
-  ${(c.equipos || []).some((e) => e.modalidad === "CT") ? `<p class="muted" style="font-size:12px;margin:8px 0 0">
-    <b>n/a</b>: la reparación de bobinas y el monitoreo criogénico son propios de resonancia; los equipos de CT quedan cubiertos por preventivo, correctivo y el resto del alcance.</p>` : ""}`;
+  ${(() => {
+    const notas = [];
+    const cov = c.cobertura || {};
+    // Sin esta aclaración, ver "2/año" repetido en cada fila se lee como 2 por equipo.
+    if (cov.reparacionBobinasPorAnio && !bobinasIlimitadas(c) && tieneMRI(c)) {
+      const flota = cov.bobinasAlcance !== "porEquipo";
+      notas.push(flota
+        ? `<b>Bobinas:</b> el cupo de ${cov.reparacionBobinasPorAnio} reparación/es al año es <b>para el conjunto</b> de los ${cantMRI(c)} equipo/s de RM, no por cada uno. Total anual: <b>${bobinasTotal(c)}</b>.`
+        : `<b>Bobinas:</b> ${cov.reparacionBobinasPorAnio} reparación/es al año <b>por cada</b> equipo de RM (${cantMRI(c)} equipos). Total anual: <b>${bobinasTotal(c)}</b>.`);
+    }
+    if ((c.equipos || []).some((e) => e.modalidad === "CT")) {
+      notas.push(`<b>n/a</b>: la reparación de bobinas y el monitoreo criogénico son propios de resonancia; los equipos de CT quedan cubiertos por preventivo, correctivo y el resto del alcance.`);
+    }
+    return notas.length ? `<p class="muted" style="font-size:12px;margin:8px 0 0;line-height:1.6">${notas.join("<br>")}</p>` : "";
+  })()}`;
 }
 function coberturaChips(c) {
   const cov = c.cobertura || {};
@@ -912,7 +962,7 @@ function coberturaChips(c) {
   if (cov.preventivoInspeccionesAnuales) chips.push(`Preventivo ${cov.preventivoInspeccionesAnuales}/año`);
   if (cov.correctivoManoObra) chips.push("Correctivo (mano de obra)");
   // Bobinas y criogenia solo se anuncian si hay al menos un equipo de RM.
-  if (cov.reparacionBobinasPorAnio && tieneMRI(c)) chips.push(`Rep. bobinas ${cov.reparacionBobinasPorAnio}/año (RM)`);
+  if (cov.reparacionBobinasPorAnio && tieneMRI(c)) chips.push(`Rep. bobinas ${bobinasTexto(c)}${bobinasIlimitadas(c) ? " (RM)" : ""}`);
   if (cov.soporteRemoto) chips.push("Soporte remoto");
   if (cov.saasMonitoreo && tieneMRI(c)) chips.push("SaaS Gestión y Monitoreo Cryo (RM)");
   if (cov.viaticosIncluidos) chips.push("Viáticos incluidos");
@@ -1003,7 +1053,9 @@ function renderForm(id) {
         <div class="form-grid">
           ${inp("Inspecciones preventivas / año", "cobertura.preventivoInspeccionesAnuales", cov.preventivoInspeccionesAnuales, "", "number")}
           ${inp("Rep. bobinas / año", "cobertura.reparacionBobinasPorAnio", cov.reparacionBobinasPorAnio)}
+          ${sel("El cupo de bobinas es…", "cobertura.bobinasAlcance", cov.bobinasAlcance || "flota", [["flota", "Para toda la flota de RM"], ["porEquipo", "Por cada equipo de RM"]])}
         </div>
+        <p class="hint" style="margin:6px 0 0">Con 3 RM y un cupo de 2: <b>para la flota</b> son 2 reparaciones al año en total; <b>por equipo</b> son 6. Dejalo en flota salvo que se haya pactado lo contrario. Si el cupo es «sin límite», este campo no aplica.</p>
         <div class="field full" style="margin-top:12px">
           <label>Reparaciones / partes incluidas <span class="hint">(una por línea — p. ej. módulo amplificador de gradientes, camilla paciente, host y software)</span></label>
           <textarea data-path="cobertura.reparacionesIncluidas" data-list="1" placeholder="Bobinas de RM: todas, sin límite&#10;1 Módulo Amplificador de Gradientes&#10;Reparaciones electromecánicas de camilla paciente">${esc((cov.reparacionesIncluidas || []).join("\n"))}</textarea>
@@ -1210,10 +1262,18 @@ function generarPDF(id) {
   const hayCT = (c.equipos || []).some((e) => e.modalidad === "CT");
   const suf = conRM && hayCT ? " (aplicable a los equipos de resonancia)" : "";
   const reparaciones = conRM ? (cov.reparacionesIncluidas || []) : [];
+  // Cláusula explícita del cupo de bobinas: evita que "2 por año" se lea como
+  // 2 por cada equipo. Va sí o sí cuando el cupo es numérico, aunque las
+  // reparaciones se hayan listado a mano.
+  const cupoBobinas = (conRM && cov.reparacionBobinasPorAnio && !bobinasIlimitadas(c))
+    ? ` Se deja expresa constancia de que el cupo de <b>${cov.reparacionBobinasPorAnio} (${numLetra(cov.reparacionBobinasPorAnio)}) reparación/es de bobinas por año</b> se computa ${BOBINAS_ALCANCE[cov.bobinasAlcance || "flota"].largo}${cov.bobinasAlcance === "porEquipo" ? `, es decir ${cov.reparacionBobinasPorAnio} por cada uno de los ${cantMRI(c)} equipo/s de resonancia (total ${bobinasTotal(c)} por año)` : `, y <b>no por cada equipo</b>: con ${cantMRI(c)} equipo/s de resonancia cubiertos, el total es de ${bobinasTotal(c)} reparación/es por año para el conjunto`}. Las reparaciones no utilizadas no se acumulan al período siguiente.`
+    : "";
   const alcance = [
     cov.preventivoInspeccionesAnuales && `Mantenimiento preventivo programado: ${cov.preventivoInspeccionesAnuales} inspecciones anuales por equipo, según normas del fabricante.`,
     cov.correctivoManoObra && "Mantenimiento correctivo de mano de obra, sin límite de llamados durante la vigencia.",
-    (conRM && !reparaciones.length && cov.reparacionBobinasPorAnio) && `Diagnóstico y reparación electrónica de bobinas de RM${suf}: ${typeof cov.reparacionBobinasPorAnio === "number" ? cov.reparacionBobinasPorAnio + " por año (no acumulables)" : cov.reparacionBobinasPorAnio}.`,
+    (conRM && !reparaciones.length && cov.reparacionBobinasPorAnio) && (bobinasIlimitadas(c)
+      ? `Diagnóstico y reparación electrónica de bobinas de RM${suf}: ${cov.reparacionBobinasPorAnio}.`
+      : `Diagnóstico y reparación electrónica de bobinas de RM: hasta ${cov.reparacionBobinasPorAnio} reparación/es por año ${BOBINAS_ALCANCE[cov.bobinasAlcance || "flota"].largo}, no acumulables${cov.bobinasAlcance === "porEquipo" ? "" : " y no computables por equipo"}.`),
     cov.soporteRemoto && "Soporte técnico remoto por canal exclusivo en días hábiles.",
     (cov.saasMonitoreo && conRM) && `Acceso al SaaS Nexolibre de Gestión y Monitoreo Cryo${suf}: monitoreo continuo de los parámetros criogénicos del equipo (nivel de helio, presión, temperatura de cold-head y estado del compresor), con alertas tempranas y gestión de la base instalada.`,
     cov.stockReservado && "Disponibilidad garantizada de partes críticas para los Equipos cubiertos.",
@@ -1241,7 +1301,7 @@ function generarPDF(id) {
   const clausulas = [
     ["PRIMERA — OBJETO", `El Prestador se obliga a prestar los servicios de mantenimiento preventivo y correctivo sobre los equipos de diagnóstico por imágenes de propiedad del Cliente individualizados en la(s) Ficha(s) Técnica(s) (los «Equipos»), conforme al alcance, niveles de servicio y condiciones aquí establecidos.`],
     ["SEGUNDA — DEFINICIONES", `<b>Mantenimiento preventivo:</b> controles eléctricos, electrónicos y mecánicos, verificación de diagnósticos, calibración, limpieza técnica y ajustes conforme a las normas del fabricante, en forma programada. <b>Mantenimiento correctivo:</b> mano de obra necesaria para subsanar fallas durante la operación normal. <b>Reparación de componente:</b> recuperación en laboratorio de una pieza crítica (p. ej. bobina de RF) en lugar de su reemplazo. <b>Días y horas hábiles:</b> de lunes a viernes en horario comercial, excluyendo feriados nacionales.`],
-    ["TERCERA — ALCANCE DEL SERVICIO", `El servicio incluye, para cada Equipo: ${alcance.map((a) => a.replace(/\.$/, "")).join("; ")}.${reparaciones.length ? ` Reparaciones de partes expresamente incluidas: ${reparaciones.map((r) => r.replace(/\.$/, "")).join("; ")}.` : ""} La provisión de repuestos y partes ${cov.partesIncluidas ? "se encuentra incluida según Ficha Técnica" : "<b>no está incluida</b> y se rige por la cláusula QUINTA"}.`],
+    ["TERCERA — ALCANCE DEL SERVICIO", `El servicio incluye, para cada Equipo: ${alcance.map((a) => a.replace(/\.$/, "")).join("; ")}.${reparaciones.length ? ` Reparaciones de partes expresamente incluidas: ${reparaciones.map((r) => r.replace(/\.$/, "")).join("; ")}.` : ""}${cupoBobinas} La provisión de repuestos y partes ${cov.partesIncluidas ? "se encuentra incluida según Ficha Técnica" : "<b>no está incluida</b> y se rige por la cláusula QUINTA"}.`],
     ["CUARTA — NIVELES DE SERVICIO (SLA)", `El Prestador se compromete a los siguientes tiempos objetivo, en horas y días hábiles desde la recepción del reclamo: respuesta de soporte remoto ${slaDoc.remoto} horas hábiles; asistencia on-site por equipo detenido ${slaDoc.onsite} horas hábiles; entrega de repuesto disponible en stock ${slaDoc.repuesto} horas hábiles. Los tiempos se suspenden mientras subsistan causas ajenas al Prestador.`],
     ["QUINTA — REPUESTOS, PARTES Y GARANTÍA DE REPARACIÓN", `Toda parte o pieza a reemplazar, y toda reparación no comprendida en el alcance, será cotizada y aprobada por el Cliente en forma previa e independiente. Los componentes que tras diagnóstico no resulten reparables serán presupuestados para su reemplazo por separado. Los repuestos provistos podrán ser nuevos, usados o reacondicionados según disponibilidad y contexto. ${cov.enviosRepuestosIncluidos ? "El costo de envío de repuestos hacia y desde las oficinas del Prestador se encuentra incluido. " : ""}Las reparaciones de componentes tienen garantía de ${LEGAL.garantiaReparacionDias} días corridos desde su reinstalación, salvo elementos fungibles o de desgaste natural.`],
     ["SEXTA — CONDICIONES PREVIAS AL INICIO", `Antes de la entrada en vigor se realizará una Visita de Relevamiento Técnico General. Toda reparación o reemplazo necesario para alcanzar la operatividad inicial será presupuestado en forma independiente. El Prestador no será responsable por fallas preexistentes ni por la recuperación de condiciones previas a la puesta en servicio.`],
@@ -1363,7 +1423,7 @@ function generarPDF(id) {
           `Preventivo ${cov.preventivoInspeccionesAnuales || 0}/año`,
           cov.correctivoManoObra ? "correctivo (mano de obra)" : "sin correctivo",
           // Solo en RM: un tomógrafo no tiene bobinas de RF ni criogenia.
-          e.modalidad === "MRI" && cov.reparacionBobinasPorAnio && `rep. bobinas ${cov.reparacionBobinasPorAnio}${typeof cov.reparacionBobinasPorAnio === "number" ? "/año" : ""}`,
+          e.modalidad === "MRI" && cov.reparacionBobinasPorAnio && `rep. bobinas ${bobinasTexto(c)}`,
           e.modalidad === "MRI" && cov.saasMonitoreo && "monitoreo Cryo (SaaS)",
         ].filter(Boolean).join(" · ")}</td></tr>
       </table></div>`).join("") || "<p>Sin equipos cargados.</p>"}
@@ -1381,7 +1441,7 @@ function seleccionOTodo() {
 }
 function exportarCSV() {
   const rows = seleccionOTodo();
-  const cols = ["numero", "cliente", "razon_social", "cuit", "plan", "modulos_internos", "estado", "equipos", "modalidad", "canon", "moneda", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
+  const cols = ["numero", "cliente", "razon_social", "cuit", "plan", "modulos_internos", "estado", "equipos", "modalidad", "bobinas_cupo", "bobinas_alcance", "bobinas_total_anual", "canon", "moneda", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
   const lines = [cols.join(",")];
   for (const c of rows) {
     const fin = computeFin(c), pa = computeProximoAjuste(c);
@@ -1390,6 +1450,9 @@ function exportarCSV() {
       CAT.PLANES[c.plan?.id]?.label || "", (c.plan?.modulos || []).map((m) => CAT.MODULOS[m]?.label).filter(Boolean).join(" + "),
       ESTADO_LABEL[c.estado], (c.equipos || []).length,
       [...new Set((c.equipos || []).map((e) => e.modalidad))].join("/"),
+      c.cobertura?.reparacionBobinasPorAnio ?? "",
+      c.cobertura?.reparacionBobinasPorAnio && !bobinasIlimitadas(c) ? (c.cobertura?.bobinasAlcance === "porEquipo" ? "por equipo" : "flota") : "",
+      bobinasTotal(c) ?? (bobinasIlimitadas(c) ? "sin límite" : ""),
       c.economico?.canonMensual, c.economico?.moneda, c.vigencia?.inicio || "",
       fin ? fin.toISOString().slice(0, 10) : "", c.ajuste?.periodicidad, pa ? pa.toISOString().slice(0, 10) : "",
     ];
@@ -1434,7 +1497,7 @@ function exportarInforme() {
     if (v.preventivoInspeccionesAnuales) t.push(`${v.preventivoInspeccionesAnuales} preventivos/año`);
     if (v.correctivoManoObra) t.push("correctivo ilimitado");
     // Bobinas y criogenia solo si el contrato tiene equipos de resonancia
-    if (v.reparacionBobinasPorAnio && tieneMRI(c)) t.push(`bobinas ${typeof v.reparacionBobinasPorAnio === "number" ? v.reparacionBobinasPorAnio + "/año" : v.reparacionBobinasPorAnio} (RM)`);
+    if (v.reparacionBobinasPorAnio && tieneMRI(c)) t.push(`bobinas ${bobinasTexto(c)}${bobinasIlimitadas(c) ? " (RM)" : ""}`);
     if (v.saasMonitoreo && tieneMRI(c)) t.push("monitoreo Cryo (RM)");
     if (soloCT(c)) t.push("sin bobinas ni criogenia (CT)");
     if (v.viaticosIncluidos) t.push("viáticos incl.");

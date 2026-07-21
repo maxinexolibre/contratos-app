@@ -25,6 +25,7 @@ const PLANES = {
       correctivoManoObra: true,
       soporteRemoto: true,
       reparacionBobinasPorAnio: 0,
+      bobinasAlcance: "flota",
       saasMonitoreo: false,
       partesIncluidas: false,
       viaticosIncluidos: false,
@@ -53,17 +54,19 @@ const PLANES = {
       correctivoManoObra: true,
       soporteRemoto: true,
       reparacionBobinasPorAnio: 2,
+      // Cupo compartido por toda la flota de RM, no por equipo.
+      bobinasAlcance: "flota",
       saasMonitoreo: true,
       partesIncluidas: false,
       viaticosIncluidos: true,
       enviosRepuestosIncluidos: true,
-      reparacionesIncluidas: ["Reparación electrónica de bobinas de RM (hasta 2 por año, no acumulables)"],
+      reparacionesIncluidas: ["Reparación electrónica de bobinas de RM: hasta 2 por año para el conjunto de los equipos de resonancia, no acumulables"],
     },
     sla: { remoto: 2, onsite: 24, repuesto: 48 },
     resumenPublico: [
       "4 mantenimientos preventivos programados por año",
       "Mantenimiento correctivo de mano de obra, sin límite de llamados",
-      "Reparación electrónica de bobinas de RM incluida",
+      "Reparación electrónica de bobinas de RM incluida (cupo anual para el conjunto de los equipos de resonancia)",
       "SaaS de Gestión y Monitoreo Cryo con alertas tempranas",
       "Viáticos y envío de repuestos incluidos",
       "Reporte técnico por intervención e informe trimestral de estado",
@@ -83,6 +86,7 @@ const PLANES = {
       correctivoManoObra: true,
       soporteRemoto: true,
       reparacionBobinasPorAnio: "sin límite",
+      bobinasAlcance: "flota",
       saasMonitoreo: true,
       partesIncluidas: false,
       viaticosIncluidos: true,
@@ -120,6 +124,7 @@ const PLANES = {
       correctivoManoObra: true,
       soporteRemoto: true,
       reparacionBobinasPorAnio: 0,
+      bobinasAlcance: "flota",
       saasMonitoreo: false,
       partesIncluidas: false,
       viaticosIncluidos: false,
@@ -149,6 +154,7 @@ const MODULOS = {
     publico: "Reparación electrónica de bobinas de RM sin límite durante la vigencia",
     efecto: (cov) => {
       cov.reparacionBobinasPorAnio = "sin límite";
+      cov.bobinasAlcance = "flota"; // irrelevante al ser ilimitado, se normaliza
       addRep(cov, "Bobinas de RM: todas las del equipo, sin límite de reparaciones");
     },
   },
