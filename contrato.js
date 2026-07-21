@@ -157,7 +157,7 @@ function construirContrato(c, opts = {}) {
   const otras = rss.length > 1
     ? `, por sí y en representación de ${rss.filter((r) => !r.principal).map((r) => `<b>${esc(r.razonSocial)}</b>${r.cuit ? ` (CUIT ${esc(r.cuit)})` : ""}`).join(", ")}, sociedades alcanzadas por el presente` : "";
   const cuitPre = V(rsp.cuit, "CUIT");
-  const preambulo = `Entre <b>Nexolibre</b> («El Prestador») y <b>${T(rsp.razonSocial, "razón social")}</b>${cuitPre ? `, CUIT ${cuitPre}` : ""}${domic}${fantasia}${otras} («El Cliente»), se celebra el presente Contrato de Prestación de Servicios bajo el <b>Programa de Continuidad Operativa NexoCare®</b> (en adelante, «el Programa»), que se regirá por las cláusulas siguientes:`;
+  const preambulo = `Entre <b>Nexolibre</b> («El Prestador») y <b>${T(rsp.razonSocial, "razón social")}</b>${cuitPre ? `, CUIT ${cuitPre}` : ""}${domic}${fantasia}${otras} («El Cliente»), se celebra el presente Contrato de Prestación de Servicios bajo el <b>Programa de Continuidad Operativa NexoCare</b> (en adelante, «el Programa»), que se regirá por las cláusulas siguientes:`;
 
   // ---------- Cláusulas ----------
   // `si: false` la deja fuera y renumera el resto automáticamente.

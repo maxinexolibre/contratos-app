@@ -36,7 +36,7 @@ const blob = await R(`(async()=>{
   };
   state.data.push(T);
   const m = NEXO_CONTRATO.construirContrato(T,{plantilla:true});
-  m.etiquetaPub = "[Nivel NexoCare®]";
+  m.etiquetaPub = "[Nivel NexoCare]";
   m.pie = "Esta propuesta se rige por los Términos y Condiciones Generales del Programa aquí incluidos. Los campos [entre corchetes] se completan al perfeccionar el acuerdo.";
   return await armarDocx(window.docx, m, T);
 })()`);

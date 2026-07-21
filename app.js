@@ -10,7 +10,7 @@ const LS = {
   demoVer: "nexo_demo_ver",
 };
 // Subir esto invalida la copia demo guardada en el navegador.
-const DEMO_VERSION = "7";
+const DEMO_VERSION = "8";
 
 // -------- estado global --------
 const state = {
@@ -192,14 +192,16 @@ function migrar(c) {
   }
   c.archivos = c.archivos || [];
   c.plan = c.plan || { id: "", etiquetaPublica: "", modulos: [], notasInternas: "" };
-  // Renombre a la familia NexoCare®: los registros viejos migran solos.
+  // Renombre a la familia NexoCare: los registros viejos migran solos.
   const PLAN_VIEJO = { essential: "foundation", professional: "performance", enterprise: "assurance" };
   if (PLAN_VIEJO[c.plan.id]) c.plan.id = PLAN_VIEJO[c.plan.id];
   const ETIQ_VIEJA = {
-    "Contrato Essential": "NexoCare® Foundation", "Contrato Professional": "NexoCare® Performance",
-    "Contrato Enterprise": "NexoCare® Assurance", "Contrato Nexo Custom": "NexoCare® Custom",
+    "Contrato Essential": "NexoCare Foundation", "Contrato Professional": "NexoCare Performance",
+    "Contrato Enterprise": "NexoCare Assurance", "Contrato Nexo Custom": "NexoCare Custom",
   };
   if (ETIQ_VIEJA[c.plan.etiquetaPublica]) c.plan.etiquetaPublica = ETIQ_VIEJA[c.plan.etiquetaPublica];
+  // La marca se escribe sin símbolo: se limpia lo ya guardado con él.
+  if (typeof c.plan.etiquetaPublica === "string") c.plan.etiquetaPublica = c.plan.etiquetaPublica.replace(/[\u00AE\u2122]/g, "").replace(/\s{2,}/g, " ").trim();
   c.negociacion = c.negociacion || { desviaciones: [] };
   return c;
 }
@@ -296,7 +298,7 @@ const DEMO_SEED = [
       razonesSociales: [{ razonSocial: "Centro de Imágenes Ejemplo S.A.", cuit: "30-00000000-0", domicilio: "Calle Ejemplo 100", principal: true }],
       contacto: "Contacto de ejemplo", localidad: "Ciudad Ejemplo", provincia: "Buenos Aires",
     },
-    plan: { id: "performance", etiquetaPublica: "NexoCare® Performance", modulos: ["cryo"], notasInternas: "Registro de ejemplo para probar la interfaz." },
+    plan: { id: "performance", etiquetaPublica: "NexoCare Performance", modulos: ["cryo"], notasInternas: "Registro de ejemplo para probar la interfaz." },
     equipos: [
       { modelo: "Modelo A 1.5T", marca: "GE", modalidad: "MRI", serie: "", ubicacion: "Sede central" },
       { modelo: "Modelo B", marca: "GE", modalidad: "CT", serie: "", ubicacion: "Sede central" },
@@ -320,7 +322,7 @@ const DEMO_SEED = [
       ],
       contacto: "Contacto de ejemplo", localidad: "Ciudad Ejemplo", provincia: "Santa Fe",
     },
-    plan: { id: "assurance", etiquetaPublica: "NexoCare® Assurance", modulos: ["bobinas", "prioridad"], notasInternas: "Registro de ejemplo: muestra la composición interna." },
+    plan: { id: "assurance", etiquetaPublica: "NexoCare Assurance", modulos: ["bobinas", "prioridad"], notasInternas: "Registro de ejemplo: muestra la composición interna." },
     equipos: [{ modelo: "Modelo C 1.5T", marca: "Philips", modalidad: "MRI", serie: "", ubicacion: "Sede única" }],
     cobertura: {
       preventivoInspeccionesAnuales: 4, correctivoManoObra: true, reparacionBobinasPorAnio: "sin límite", bobinasAlcance: "flota",
@@ -1026,7 +1028,7 @@ function renderForm(id) {
         <button type="button" class="btn sm" onclick="addRazon()">+ Razón social</button>
       </div></fieldset>
 
-      <fieldset><legend>Programa NexoCare®</legend>
+      <fieldset><legend>Programa NexoCare</legend>
         <div class="form-grid">
           ${sel("Nivel del Programa", "plan.id", c.plan?.id || "", [["", "— sin nivel —"], ...CAT.PLAN_ORDEN.map((p) => [p, `${CAT.PLANES[p].label} (${CAT.PLANES[p].precioTxt})`])])}
           ${inp("Etiqueta que ve el cliente", "plan.etiquetaPublica", c.plan?.etiquetaPublica, "", "text")}
@@ -1179,7 +1181,7 @@ function nuevoContrato() {
   return {
     id: "ctr_" + Date.now(), tipo: "propuesta", numero: "P" + d.replace(/-/g, ""), estado: "borrador",
     cliente: { nombreComercial: "", razonesSociales: [{ razonSocial: "", cuit: "", domicilio: "", principal: true }], contacto: "", localidad: "", provincia: "" },
-    plan: { id: "performance", etiquetaPublica: "NexoCare® Performance", modulos: [], notasInternas: "" },
+    plan: { id: "performance", etiquetaPublica: "NexoCare Performance", modulos: [], notasInternas: "" },
     negociacion: { desviaciones: [] },
     equipos: [], cobertura: Object.assign(structuredClone(CAT.PLANES.performance.base), { incluirSLA: true }),
     economico: { canonMensual: 0, moneda: "USD", incluyeIVA: false, ivaPct: 21, formaPago: "Mensual, antes del 5º día hábil" },

@@ -236,7 +236,7 @@ async function armarDocx(D, m, c) {
   // ---------- Documento ----------
   const doc = new Document({
     creator: "Nexolibre",
-    title: `${m.esContrato ? "Contrato" : "Propuesta"} · Programa de Continuidad Operativa NexoCare®`,
+    title: `${m.esContrato ? "Contrato" : "Propuesta"} · Programa de Continuidad Operativa NexoCare`,
     description: "Generado desde el sistema de gestión de contratos de Nexolibre",
     sections: [{
       properties: { page: { size: { width: PAGINA.ancho, height: PAGINA.alto }, margin: PAGINA.margen } },

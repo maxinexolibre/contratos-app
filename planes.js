@@ -1,12 +1,12 @@
 /* ============================================================
-   Nexolibre · Catálogo comercial — Programa NexoCare®
+   Nexolibre · Catálogo comercial — Programa NexoCare
    ------------------------------------------------------------
    El producto es el «Programa de Continuidad Operativa», que se vende
-   bajo la marca NexoCare® en tres niveles.
+   bajo la marca NexoCare en tres niveles.
 
    DOS CAPAS:
    1) PLANES  → lo que el cliente ve. Tres niveles públicos + un
-      servicio a medida (NexoCare® Custom, sin precio publicado).
+      servicio a medida (NexoCare Custom, sin precio publicado).
    2) MODULOS → lo que el cliente NO ve. Piezas internas con las
       que se arma la propuesta y se justifica el precio.
 
@@ -18,7 +18,7 @@ const PLANES = {
   foundation: {
     id: "foundation",
     label: "Foundation",
-    etiquetaPublica: "NexoCare® Foundation",
+    etiquetaPublica: "NexoCare Foundation",
     claim: "Cobertura preventiva.",
     precioTxt: "desde USD 890",
     desde: 890,
@@ -47,7 +47,7 @@ const PLANES = {
   performance: {
     id: "performance",
     label: "Performance",
-    etiquetaPublica: "NexoCare® Performance",
+    etiquetaPublica: "NexoCare Performance",
     claim: "Continuidad operativa.",
     precioTxt: "USD 1.800 – 2.500",
     desde: 1800,
@@ -79,7 +79,7 @@ const PLANES = {
   assurance: {
     id: "assurance",
     label: "Assurance",
-    etiquetaPublica: "NexoCare® Assurance",
+    etiquetaPublica: "NexoCare Assurance",
     claim: "Máxima cobertura.",
     precioTxt: "hasta USD 3.900",
     desde: 2500,
@@ -116,7 +116,7 @@ const PLANES = {
   custom: {
     id: "custom",
     label: "Nexo Custom",
-    etiquetaPublica: "NexoCare® Custom",
+    etiquetaPublica: "NexoCare Custom",
     claim: "Diseñamos un programa exactamente para su operación.",
     precioTxt: "a medida",
     desde: null,
