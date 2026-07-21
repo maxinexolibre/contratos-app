@@ -10,7 +10,7 @@ const LS = {
   demoVer: "nexo_demo_ver",
 };
 // Subir esto invalida la copia demo guardada en el navegador.
-const DEMO_VERSION = "5";
+const DEMO_VERSION = "6";
 
 // -------- estado global --------
 const state = {
@@ -188,6 +188,7 @@ function migrar(c) {
     c.cobertura.criogeniaIncluida = false;
     // Los contratos previos se pactaron con cupo de flota, que es lo habitual.
     if (c.cobertura.bobinasAlcance == null) c.cobertura.bobinasAlcance = "flota";
+    if (c.cobertura.incluirSLA == null) c.cobertura.incluirSLA = true;
   }
   c.archivos = c.archivos || [];
   c.plan = c.plan || { id: "", etiquetaPublica: "", modulos: [], notasInternas: "" };
@@ -678,7 +679,8 @@ function renderDetalle(id) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${state.soloLectura ? "" : `<button class="btn sm" onclick="location.hash='form/${c.id}'">✎ Editar</button>`}
-        <button class="btn sm" onclick="generarPDF('${c.id}')">🧾 Ver / descargar documento</button>
+        <button class="btn sm" onclick="generarPDF('${c.id}')">🧾 Ver / imprimir</button>
+        <button class="btn sm" onclick="generarDocx('${c.id}')" title="Descarga un .docx editable en Word">⬇ Descargar .docx</button>
         ${!state.soloLectura && c.estado !== "firme_vigente" && ["enviada", "negociacion", "borrador"].includes(c.estado) ? `<button class="btn primary sm" onclick="hacerFirme('${c.id}')">✔ Marcar firme</button>` : ""}
       </div>
     </div>
@@ -964,6 +966,7 @@ function coberturaChips(c) {
   // Bobinas y criogenia solo se anuncian si hay al menos un equipo de RM.
   if (cov.reparacionBobinasPorAnio && tieneMRI(c)) chips.push(`Rep. bobinas ${bobinasTexto(c)}${bobinasIlimitadas(c) ? " (RM)" : ""}`);
   if (cov.soporteRemoto) chips.push("Soporte remoto");
+  if (cov.incluirSLA === false) chips.push("Sin cláusula de SLA");
   if (cov.saasMonitoreo && tieneMRI(c)) chips.push("SaaS Gestión y Monitoreo Cryo (RM)");
   if (cov.viaticosIncluidos) chips.push("Viáticos incluidos");
   if (cov.enviosRepuestosIncluidos) chips.push("Envío de repuestos incluido");
@@ -1061,6 +1064,7 @@ function renderForm(id) {
           <textarea data-path="cobertura.reparacionesIncluidas" data-list="1" placeholder="Bobinas de RM: todas, sin límite&#10;1 Módulo Amplificador de Gradientes&#10;Reparaciones electromecánicas de camilla paciente">${esc((cov.reparacionesIncluidas || []).join("\n"))}</textarea>
         </div>
         <div class="check-row" style="margin-top:12px">
+          ${chk("Incluir cláusula de SLA", "cobertura.incluirSLA", cov.incluirSLA !== false)}
           ${chk("Correctivo mano de obra", "cobertura.correctivoManoObra", cov.correctivoManoObra)}
           ${chk("Soporte remoto", "cobertura.soporteRemoto", cov.soporteRemoto)}
           ${chk("SaaS Gestión y Monitoreo Cryo", "cobertura.saasMonitoreo", cov.saasMonitoreo)}
@@ -1169,7 +1173,7 @@ function nuevoContrato() {
     cliente: { nombreComercial: "", razonesSociales: [{ razonSocial: "", cuit: "", domicilio: "", principal: true }], contacto: "", localidad: "", provincia: "" },
     plan: { id: "professional", etiquetaPublica: "Contrato Professional", modulos: [], notasInternas: "" },
     negociacion: { desviaciones: [] },
-    equipos: [], cobertura: structuredClone(CAT.PLANES.professional.base),
+    equipos: [], cobertura: Object.assign(structuredClone(CAT.PLANES.professional.base), { incluirSLA: true }),
     economico: { canonMensual: 0, moneda: "USD", incluyeIVA: false, ivaPct: 21, formaPago: "Mensual, antes del 5º día hábil" },
     ajuste: { periodicidad: "trimestral", indice: "US_CPI", proximoAjuste: "", historial: [] },
     vigencia: { inicio: "", meses: 12, fin: "", renovacionAutomatica: true, preavisoDias: 30 },
@@ -1225,8 +1229,14 @@ async function guardarForm(isNew) {
   else { const i = state.data.findIndex((x) => x.id === state.editId); state.data[i] = c; }
   try {
     await persist(`${isNew ? "Alta" : "Edición"} ${c.numero} · ${nombreCliente(c)}`);
-    toast("Guardado ✓");
     go("detalle/" + c.id);
+    // Recién creada: se ofrece el .docx para editarlo y mandarlo.
+    if (isNew) {
+      toast("Creada ✓ — generando el .docx…");
+      setTimeout(() => generarDocx(c.id), 400);
+    } else {
+      toast("Guardado ✓");
+    }
   } catch (e) { toast("Error: " + e.message, true, true); }
 }
 
@@ -1241,195 +1251,96 @@ const LEGAL = {
 };
 function generarPDF(id) {
   const c = state.data.find((x) => x.id === id);
-  const fin = computeFin(c), pa = computeProximoAjuste(c);
-  const cov = c.cobertura || {};
-  const esContrato = c.tipo === "contrato";
-  const ph = (v, txt) => (v || v === 0 ? esc(v) : `<span class="ph">[${txt}]</span>`);
-  const idx = LEGAL.indiceLabel[c.ajuste?.indice] || c.ajuste?.indice || "";
-  const pctMora = c.economico?.moneda === "ARS" ? "10% mensual" : "2% mensual";
+  if (!c) return;
+  const m = NEXO_CONTRATO.construirContrato(c, { plantilla: false });
+  document.getElementById("printRoot").innerHTML = renderContratoHTML(m);
+  window.print();
+}
 
-  const rss = c.cliente?.razonesSociales || [];
-  const rsp = rsPrincipal(c);
-  // Lo único que el cliente lee sobre el "plan": el rótulo público. Los módulos internos nunca salen del sistema.
-  const etiquetaPub = c.plan?.etiquetaPublica || CAT.PLANES[c.plan?.id]?.etiquetaPublica || "Programa de Mantenimiento MRI / CT";
-  // El SLA publicado sale del plan (el módulo Prioridad lo mejora sin nombrarse).
-  const slaDoc = c.plan?.id
-    ? CAT.derivarDePlan(c.plan.id, c.plan.modulos || []).sla
-    : { remoto: LEGAL.slaRemoto, onsite: LEGAL.slaOnsite, repuesto: LEGAL.slaRepuesto };
-  // Bobinas y criogenia solo existen en resonancia: si el contrato no tiene
-  // ningún equipo de RM, no se ofrecen ni se mencionan.
-  const conRM = tieneMRI(c);
-  const hayCT = (c.equipos || []).some((e) => e.modalidad === "CT");
-  const suf = conRM && hayCT ? " (aplicable a los equipos de resonancia)" : "";
-  const reparaciones = conRM ? (cov.reparacionesIncluidas || []) : [];
-  // Cláusula explícita del cupo de bobinas: evita que "2 por año" se lea como
-  // 2 por cada equipo. Va sí o sí cuando el cupo es numérico, aunque las
-  // reparaciones se hayan listado a mano.
-  const cupoBobinas = (conRM && cov.reparacionBobinasPorAnio && !bobinasIlimitadas(c))
-    ? ` Se deja expresa constancia de que el cupo de <b>${cov.reparacionBobinasPorAnio} (${numLetra(cov.reparacionBobinasPorAnio)}) reparación/es de bobinas por año</b> se computa ${BOBINAS_ALCANCE[cov.bobinasAlcance || "flota"].largo}${cov.bobinasAlcance === "porEquipo" ? `, es decir ${cov.reparacionBobinasPorAnio} por cada uno de los ${cantMRI(c)} equipo/s de resonancia (total ${bobinasTotal(c)} por año)` : `, y <b>no por cada equipo</b>: con ${cantMRI(c)} equipo/s de resonancia cubiertos, el total es de ${bobinasTotal(c)} reparación/es por año para el conjunto`}. Las reparaciones no utilizadas no se acumulan al período siguiente.`
-    : "";
-  const alcance = [
-    cov.preventivoInspeccionesAnuales && `Mantenimiento preventivo programado: ${cov.preventivoInspeccionesAnuales} inspecciones anuales por equipo, según normas del fabricante.`,
-    cov.correctivoManoObra && "Mantenimiento correctivo de mano de obra, sin límite de llamados durante la vigencia.",
-    (conRM && !reparaciones.length && cov.reparacionBobinasPorAnio) && (bobinasIlimitadas(c)
-      ? `Diagnóstico y reparación electrónica de bobinas de RM${suf}: ${cov.reparacionBobinasPorAnio}.`
-      : `Diagnóstico y reparación electrónica de bobinas de RM: hasta ${cov.reparacionBobinasPorAnio} reparación/es por año ${BOBINAS_ALCANCE[cov.bobinasAlcance || "flota"].largo}, no acumulables${cov.bobinasAlcance === "porEquipo" ? "" : " y no computables por equipo"}.`),
-    cov.soporteRemoto && "Soporte técnico remoto por canal exclusivo en días hábiles.",
-    (cov.saasMonitoreo && conRM) && `Acceso al SaaS Nexolibre de Gestión y Monitoreo Cryo${suf}: monitoreo continuo de los parámetros criogénicos del equipo (nivel de helio, presión, temperatura de cold-head y estado del compresor), con alertas tempranas y gestión de la base instalada.`,
-    cov.stockReservado && "Disponibilidad garantizada de partes críticas para los Equipos cubiertos.",
-    cov.bancoHoras && `Banco de ${cov.bancoHoras} horas de ingeniería aplicables a tareas fuera del alcance ordinario.`,
-    cov.capacitacion && "Capacitación anual al personal técnico y de operación del Cliente.",
-    cov.auditoria && "Auditoría periódica de performance y gestión de obsolescencia de la base instalada.",
-    cov.viaticosIncluidos && "Viáticos y traslados del personal técnico incluidos.",
-    cov.enviosRepuestosIncluidos && "Costo de envío de repuestos hacia y desde nuestras oficinas incluido.",
-    "Documentación y reporte técnico por intervención.",
-  ].filter(Boolean);
-  const exclus = [
-    !cov.partesIncluidas && "Provisión de repuestos y partes no reparables (cotizados y aprobados aparte). Los repuestos podrán ser nuevos, usados o reacondicionados según disponibilidad y contexto.",
-    // Ofrecemos monitoreo criogénico, no mantenimiento de criogenia: se dice explícito para que no haya lectura ambigua.
-    // Si no hay equipos de RM, la criogenia no existe y no corresponde ni nombrarla.
-    conRM && (cov.saasMonitoreo
-      ? "Mantenimiento de la cadena de frío y criogenia (provisión y recarga de helio o nitrógeno, intervención sobre cold-head, compresores y líneas). El servicio contratado comprende el monitoreo y la gestión de la información criogénica, no su mantenimiento; las intervenciones se cotizan por separado."
-      : "Cadena de frío y criogenia de los equipos (helio, nitrógeno, cold-head, compresores), tanto en monitoreo como en mantenimiento."),
-    hayCT && "En los equipos de tomografía computada, el alcance comprende el mantenimiento preventivo programado y el correctivo de mano de obra; la reparación de bobinas y el monitoreo criogénico son propios de resonancia magnética y no resultan aplicables. El tubo de rayos X, el detector y demás componentes de desgaste se rigen por la cláusula QUINTA.",
-    "Reparaciones por uso inadecuado, instalación eléctrica/climatización fuera de especificación o intervención de terceros no autorizados.",
-    "Chiller, obra civil e infraestructura del sitio; upgrades de versión, hardware o software.",
-    !cov.viaticosIncluidos && "Viáticos asociados a servicios correctivos, salvo pacto expreso.",
-  ].filter(Boolean);
+// Renderiza el modelo de contrato.js a HTML imprimible.
+// Misma puesta en página que el .docx: A4 y márgenes de la plantilla final.
+function renderContratoHTML(m) {
+  const filaCli = ([l1, v1, l2, v2]) => (l2 === null && v2 === null)
+    ? `<tr><th>${l1}</th><td colspan="3">${v1 ?? "—"}</td></tr>`
+    : `<tr><th>${l1}</th><td>${v1 ?? "—"}</td><th>${l2}</th><td>${v2 ?? "—"}</td></tr>`;
+  const filaFicha = ([l1, v1, l2, v2]) => (l2 === null)
+    ? `<tr><th>${l1}</th><td colspan="3">${v1 || "—"}</td></tr>`
+    : `<tr><th>${l1}</th><td>${v1 || "—"}</td><th>${l2}</th><td>${v2 || "—"}</td></tr>`;
 
-  // ---- Términos y Condiciones Generales (20 cláusulas) ----
-  const clausulas = [
-    ["PRIMERA — OBJETO", `El Prestador se obliga a prestar los servicios de mantenimiento preventivo y correctivo sobre los equipos de diagnóstico por imágenes de propiedad del Cliente individualizados en la(s) Ficha(s) Técnica(s) (los «Equipos»), conforme al alcance, niveles de servicio y condiciones aquí establecidos.`],
-    ["SEGUNDA — DEFINICIONES", `<b>Mantenimiento preventivo:</b> controles eléctricos, electrónicos y mecánicos, verificación de diagnósticos, calibración, limpieza técnica y ajustes conforme a las normas del fabricante, en forma programada. <b>Mantenimiento correctivo:</b> mano de obra necesaria para subsanar fallas durante la operación normal. <b>Reparación de componente:</b> recuperación en laboratorio de una pieza crítica (p. ej. bobina de RF) en lugar de su reemplazo. <b>Días y horas hábiles:</b> de lunes a viernes en horario comercial, excluyendo feriados nacionales.`],
-    ["TERCERA — ALCANCE DEL SERVICIO", `El servicio incluye, para cada Equipo: ${alcance.map((a) => a.replace(/\.$/, "")).join("; ")}.${reparaciones.length ? ` Reparaciones de partes expresamente incluidas: ${reparaciones.map((r) => r.replace(/\.$/, "")).join("; ")}.` : ""}${cupoBobinas} La provisión de repuestos y partes ${cov.partesIncluidas ? "se encuentra incluida según Ficha Técnica" : "<b>no está incluida</b> y se rige por la cláusula QUINTA"}.`],
-    ["CUARTA — NIVELES DE SERVICIO (SLA)", `El Prestador se compromete a los siguientes tiempos objetivo, en horas y días hábiles desde la recepción del reclamo: respuesta de soporte remoto ${slaDoc.remoto} horas hábiles; asistencia on-site por equipo detenido ${slaDoc.onsite} horas hábiles; entrega de repuesto disponible en stock ${slaDoc.repuesto} horas hábiles. Los tiempos se suspenden mientras subsistan causas ajenas al Prestador.`],
-    ["QUINTA — REPUESTOS, PARTES Y GARANTÍA DE REPARACIÓN", `Toda parte o pieza a reemplazar, y toda reparación no comprendida en el alcance, será cotizada y aprobada por el Cliente en forma previa e independiente. Los componentes que tras diagnóstico no resulten reparables serán presupuestados para su reemplazo por separado. Los repuestos provistos podrán ser nuevos, usados o reacondicionados según disponibilidad y contexto. ${cov.enviosRepuestosIncluidos ? "El costo de envío de repuestos hacia y desde las oficinas del Prestador se encuentra incluido. " : ""}Las reparaciones de componentes tienen garantía de ${LEGAL.garantiaReparacionDias} días corridos desde su reinstalación, salvo elementos fungibles o de desgaste natural.`],
-    ["SEXTA — CONDICIONES PREVIAS AL INICIO", `Antes de la entrada en vigor se realizará una Visita de Relevamiento Técnico General. Toda reparación o reemplazo necesario para alcanzar la operatividad inicial será presupuestado en forma independiente. El Prestador no será responsable por fallas preexistentes ni por la recuperación de condiciones previas a la puesta en servicio.`],
-    ["SÉPTIMA — EXCLUSIONES", `No se encuentran incluidos: ${exclus.map((a) => a.replace(/\.$/, "")).join("; ")}. Todo lo no detallado expresamente en este contrato y sus Fichas Técnicas.`],
-    ["OCTAVA — OBLIGACIONES DEL CLIENTE", `Garantizar el libre acceso del personal técnico autorizado en los horarios acordados; mantener las condiciones ambientales y eléctricas dentro de las especificaciones del fabricante; abstenerse de permitir la intervención de los Equipos por terceros no autorizados (cuyo incumplimiento faculta a rescindir de inmediato); comunicar por medio fehaciente, dentro de las 48 horas, toda situación que afecte a los Equipos; y abonar el precio en tiempo y forma.`],
-    ["NOVENA — OBLIGACIONES DEL PRESTADOR", `Prestar los servicios con personal idóneo conforme a las normas del fabricante; cumplir los niveles de servicio de la cláusula CUARTA; entregar documentación y reporte técnico de cada intervención; y mantener la confidencialidad conforme la cláusula DUODÉCIMA.`],
-    ["DÉCIMA — PRECIO, PAGO, AJUSTE Y MORA", `El Cliente abonará un canon mensual de ${money(c.economico?.canonMensual, c.economico?.moneda)} ${c.economico?.incluyeIVA ? "(IVA incluido)" : "más IVA"}, aun cuando en el período no se hubiere requerido servicio, ${esc(c.economico?.formaPago || "en la forma pactada")}. Los pagos en pesos se convierten al tipo de cambio vendedor del Banco de la Nación Argentina del día de la factura. El canon se ajustará en forma ${c.ajuste?.periodicidad || "—"} según ${idx || "[índice]"}. La mora se produce de forma automática, devengando un interés punitorio del ${pctMora}. Ante falta de pago a los 10 días corridos del vencimiento, el Prestador podrá suspender el servicio con previo aviso, sin extensión del plazo, hasta su regularización.`],
-    ["DECIMOPRIMERA — RESPONSABILIDAD Y LÍMITE", `La obligación del Prestador se limita a la fiel ejecución de los servicios. No responderá por daños directos o indirectos, lucro cesante, pérdida de ingresos ni por el tiempo de indisponibilidad del Equipo derivados de fallas no causadas por su personal, demoras logísticas o aduaneras de terceros, uso inadecuado o intervención de terceros. La responsabilidad total y acumulada se limita al equivalente a los últimos ${LEGAL.limiteCanones} (tres) cánones mensuales efectivamente abonados.`],
-    ["DECIMOSEGUNDA — CONFIDENCIALIDAD Y PROTECCIÓN DE DATOS", `Cada parte mantendrá la confidencialidad de la información a la que acceda y la usará solo para la ejecución del contrato. El Prestador tratará todo dato personal o de paciente conforme a la Ley 25.326, con medidas técnicas y organizativas de seguridad. Esta obligación subsiste por ${LEGAL.confidAnios} (dos) años tras la finalización.`],
-    ["DECIMOTERCERA — SaaS DE GESTIÓN Y MONITOREO CRYO", `${cov.saasMonitoreo ? "El servicio incluye el acceso a la plataforma <b>Nexolibre Cryo</b> de gestión y monitoreo de la base instalada, que releva en forma continua los parámetros criogénicos del Equipo (nivel de helio, presión, temperatura de cold-head y estado del compresor) y emite alertas tempranas ante desvíos. " : ""}Se deja expresa constancia de que la prestación comprende el <b>monitoreo, registro y gestión de la información criogénica</b>, y <b>no constituye servicio de mantenimiento de la cadena de frío</b>: la provisión y recarga de helio o nitrógeno, y toda intervención sobre cold-head, compresores y líneas criogénicas, se encuentran excluidas y se cotizan por separado. La alerta emitida por la plataforma no sustituye las obligaciones de operación y custodia del Equipo a cargo del Cliente. El acceso se otorga como licencia de uso no exclusiva, intransferible y limitada a la vigencia del contrato; la propiedad intelectual permanece en el Prestador, que podrá usar los datos de operación en forma agregada y anonimizada con fines de mantenimiento predictivo.`],
-    ["DECIMOCUARTA — VIGENCIA, RENOVACIÓN Y RESCISIÓN", `Duración inicial de ${ph(c.vigencia?.meses, "N")} meses desde su suscripción${c.vigencia?.renovacionAutomatica ? ", con renovación automática por períodos iguales salvo notificación con " + LEGAL.preavisoNoRenovacion + " días de anticipación al vencimiento" : ""}. Cualquiera de las partes podrá rescindir sin causa mediante notificación fehaciente con ${ph(c.vigencia?.preavisoDias, "30")} días de anticipación, sin penalidad. Las reparaciones aprobadas y pendientes de pago siguen siendo exigibles.`],
-    ["DECIMOQUINTA — FUERZA MAYOR", `Ninguna parte será responsable por incumplimientos —salvo los de pago— derivados de caso fortuito o fuerza mayor (arts. 1730 y ss. del Código Civil y Comercial). La parte afectada lo notificará dentro de las 48 horas.`],
-    ["DECIMOSEXTA — CESIÓN E INDEPENDENCIA", `El contrato no podrá cederse sin consentimiento previo y por escrito de la otra parte. La relación es civil y comercial; no configura vínculo laboral entre una parte y el personal de la otra. Cada parte es responsable exclusiva de las obligaciones laborales y previsionales de su personal.`],
-    ["DECIMOSÉPTIMA — MODIFICACIONES, DIVISIBILIDAD Y RENUNCIA", `Toda modificación deberá constar por escrito y suscribirse por ambas partes. La invalidez de una cláusula no afecta a las restantes. La tolerancia ante un incumplimiento no implica renuncia de derechos.`],
-    ["DECIMOCTAVA — NOTIFICACIONES", `Toda notificación se cursará por medio fehaciente a los domicilios y correos constituidos: Prestador, ${ph(null, "domicilio / correo Nexolibre")}; Cliente, ${ph(null, "domicilio / correo del Cliente")}.`],
-    ["DECIMONOVENA — LEY, MEDIACIÓN Y JURISDICCIÓN", `Rige la ley de la República Argentina. Toda controversia se procurará resolver de buena fe y, de subsistir, se someterá a mediación previa. Agotada ésta, las partes se someten a los Tribunales Ordinarios de ${ph(null, "jurisdicción")}, con renuncia a todo otro fuero.`],
-    ["VIGÉSIMA — ACEPTACIÓN FORMAL", `La recepción de esta propuesta no constituye su aceptación. El contrato se perfecciona cuando el Cliente remita nota de aceptación consignando su CUIT ${ph(rsp.cuit, "CUIT")}, firmada por representante con facultades suficientes, o suscriba el presente. La orden de compra o la recepción conforme del servicio importan aceptación de estos términos.`],
-  ];
-
-  document.getElementById("printRoot").innerHTML = `
+  return `
     <style>
-      @page { margin: 18mm 16mm; }
+      @page { size: A4; margin: 20mm 22mm 27mm 22mm; }
       #printRoot { font-family: var(--body); color: #211c16; font-size: 12.5px; line-height: 1.5; }
       #printRoot .hd { border-bottom: 3px solid #ef8f03; padding-bottom: 10px; margin-bottom: 16px; break-inside: avoid; }
       #printRoot .hd img { height: 30px; width: auto; display: block; margin-bottom: 6px; }
       #printRoot .kick { color:#ef8f03; font-weight:700; font-size:11px; letter-spacing:.12em; }
-      #printRoot h1 { font-family: var(--head); font-weight: 800; color: #645d56; font-size: 26px; margin: 6px 0 4px; break-after: avoid; page-break-after: avoid; }
+      #printRoot h1 { font-family: var(--head); font-weight: 800; color: #ef8f03; font-size: 26px; margin: 6px 0 4px; break-after: avoid; page-break-after: avoid; }
       #printRoot h2 { font-family: var(--head); font-weight:800; color: #645d56; font-size: 15px; text-transform: uppercase; letter-spacing: .04em; margin: 16px 0 6px; border-bottom: 1px solid #e0dacf; padding-bottom: 4px; break-after: avoid; page-break-after: avoid; break-inside: avoid; }
       #printRoot h3 { font-family: var(--head); font-weight:700; color:#645d56; font-size:12.5px; margin:12px 0 2px; break-after: avoid; page-break-after: avoid; }
       #printRoot table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; break-inside: auto; }
       #printRoot thead { display: table-header-group; }
       #printRoot tr { break-inside: avoid; page-break-inside: avoid; }
       #printRoot td, #printRoot th { border: 1px solid #d9d3ca; padding: 6px 9px; text-align: left; vertical-align: top; }
-      #printRoot th { background: #f4f1ec; color: #645d56; }
+      #printRoot th { background: #f4f1ec; color: #645d56; font-weight: 700; }
+      #printRoot table.eq th, #printRoot table.eco th { background: #645d56; color: #fff; }
+      #printRoot table.eco th { width: 32%; }
       #printRoot ul { font-size: 12px; padding-left: 18px; margin:4px 0; }
-      #printRoot li { break-inside: avoid; }
-      #printRoot .eco th { background: #645d56; color: #fff; width: 32%; }
+      #printRoot li { break-inside: avoid; color: #747474; }
+      #printRoot li > span { color: #211c16; }
       #printRoot .foot { margin-top: 22px; color: #8c867d; font-size: 10.5px; border-top: 1px solid #e0dacf; padding-top: 8px; break-inside: avoid; }
       #printRoot .foot img { height: 18px; width: auto; vertical-align: middle; margin-left: 4px; }
       #printRoot .num { color: #ef8f03; font-weight: 800; }
       #printRoot .ph { color:#ef8f03; font-weight:700; }
       #printRoot p { orphans: 3; widows: 3; }
       #printRoot p.cl { margin: 0 0 8px; text-align: justify; }
-      /* Cada cláusula (título + cuerpo) se mantiene unida: nada de títulos
-         colgando al final de una página con el texto en la siguiente. */
       #printRoot .clause { break-inside: avoid; page-break-inside: avoid; margin: 12px 0 0; }
       #printRoot .pg { page-break-before: always; }
       #printRoot .sign { margin-top: 40px; display:flex; gap:40px; break-inside: avoid; page-break-inside: avoid; }
       #printRoot .sign div { flex:1; border-top:1px solid #211c16; padding-top:6px; font-size:11px; }
-      /* Bloque "sección + su tabla/lista": no se separan del encabezado. */
       #printRoot .blk { break-inside: avoid; page-break-inside: avoid; }
     </style>
 
-    <!-- Portada / Propuesta -->
     <div class="hd">
       <img src="${NEXO_BRAND.logo}" alt="Nexolibre" />
       <div style="color:#8c867d;font-size:12px">Ingeniería médica multimarca · Diagnóstico por imágenes MRI / CT</div>
     </div>
-    <div class="kick">${esContrato ? "CONTRATO DE SERVICIO" : "PROPUESTA DE SERVICIO"} · ${esc(c.numero)}</div>
-    <h1>${esc(etiquetaPub)}</h1>
-    <p style="color:#8c867d;margin:0 0 10px">Programa de mantenimiento preventivo y correctivo · MRI / CT</p>
-    <table><tr><th>Cliente</th><td>${esc(nombreCliente(c))}</td><th>Contacto</th><td>${esc(c.cliente.contacto || "—")}</td></tr>
-    <tr><th>Razón social${rss.length > 1 ? " (facturación)" : ""}</th><td>${ph(rsp.razonSocial, "razón social")}</td><th>CUIT</th><td>${ph(rsp.cuit, "CUIT")}</td></tr>
-    ${rss.length > 1 ? `<tr><th>Otras razones sociales alcanzadas</th><td colspan="3">${rss.filter((r) => !r.principal).map((r) => esc(r.razonSocial) + (r.cuit ? ` (CUIT ${esc(r.cuit)})` : "")).join(" · ")}</td></tr>` : ""}
-    <tr><th>Localidad</th><td>${esc(c.cliente.localidad || "—")}</td><th>Provincia</th><td>${esc(c.cliente.provincia || "—")}</td></tr>
-    <tr><th>Fecha</th><td>${fmt(new Date())}</td><th>Vigencia</th><td>${c.vigencia?.meses || "—"} meses${fin ? " · vence " + fmt(fin) : ""}</td></tr></table>
+    <div class="kick">${m.kicker}</div>
+    <h1>${m.etiquetaPub}</h1>
+    <p style="color:#8c867d;margin:0 0 10px">${m.subtitulo}</p>
 
-    <div class="blk"><h2>Equipos cubiertos</h2>
-    <table><thead><tr><th>#</th><th>Equipo</th><th>Marca</th><th>Modalidad</th><th>Ubicación</th></tr></thead>
-    <tbody>${(c.equipos || []).map((e, i) => `<tr><td>${i + 1}</td><td>${esc(e.modelo)}</td><td>${esc(e.marca)}</td><td>${e.modalidad}</td><td>${esc(e.ubicacion || "—")}</td></tr>`).join("") || `<tr><td colspan="5">Sin equipos cargados</td></tr>`}</tbody></table></div>
+    ${m.filasCliente.length ? `<table>${m.filasCliente.map(filaCli).join("")}</table>` : ""}
 
-    <h2>Alcance del servicio</h2><ul>${alcance.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
+    ${m.equipos.length ? `<div class="blk"><h2>Equipos cubiertos</h2>
+    <table class="eq"><thead><tr><th>#</th><th>Equipo</th><th>Marca</th><th>Modalidad</th><th>Ubicación</th></tr></thead>
+    <tbody>${m.equipos.map((e) => `<tr><td>${e.n}</td><td>${e.modelo || "—"}</td><td>${e.marca || "—"}</td><td>${e.modalidad}</td><td>${e.ubicacion || "—"}</td></tr>`).join("")}</tbody></table></div>` : ""}
 
-    ${reparaciones.length ? `<h2>Reparaciones de partes incluidas</h2><ul>${reparaciones.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+    ${m.alcance.length ? `<h2>Alcance del servicio</h2><ul>${m.alcance.map((a) => `<li><span>${a}</span></li>`).join("")}</ul>` : ""}
 
-    <div class="blk"><h2>Condiciones económicas</h2>
-    ${(() => {
-      const canon = Number(c.economico.canonMensual) || 0;
-      const pct = Number(c.economico.ivaPct ?? 21);
-      const m = c.economico.moneda;
-      let rows = "";
-      if (canon && !c.economico.incluyeIVA) {
-        const iva = Math.round(canon * pct / 100), tot = canon + iva;
-        rows = `<tr><th>Canon mensual (neto)</th><td class="num">${money(canon, m)} + IVA</td></tr>
-        <tr><th>IVA ${pct}%</th><td>${money(iva, m)}</td></tr>
-        <tr><th>Total mensual c/ IVA</th><td class="num">${money(tot, m)}</td></tr>`;
-      } else {
-        rows = `<tr><th>Canon mensual</th><td class="num">${money(canon, m)} (IVA incl.)</td></tr>`;
-      }
-      return `<table class="eco">${rows}
-      <tr><th>Forma de pago</th><td>${esc(c.economico.formaPago || "—")}</td></tr>
-      <tr><th>Ajuste</th><td>${c.ajuste.periodicidad} según ${idx}</td></tr>
-      <tr><th>Niveles de servicio</th><td>Remoto ${slaDoc.remoto} h · on-site ${slaDoc.onsite} h · repuesto en stock ${slaDoc.repuesto} h (hábiles)</td></tr></table>`;
-    })()}</div>
+    ${m.reparaciones.length ? `<h2>Reparaciones de partes incluidas</h2><ul>${m.reparaciones.map((r) => `<li><span>${r}</span></li>`).join("")}</ul>` : ""}
 
-    <h2>Exclusiones</h2><ul>${exclus.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
+    ${m.economico.length ? `<div class="blk"><h2>Condiciones económicas</h2>
+    <table class="eco">${m.economico.map(([l, v, destacado]) => `<tr><th>${l}</th><td${destacado ? ' class="num"' : ""}>${v}</td></tr>`).join("")}</table></div>` : ""}
 
-    <!-- Términos y Condiciones -->
+    ${m.exclusiones.length ? `<h2>Exclusiones</h2><ul>${m.exclusiones.map((e) => `<li><span>${e}</span></li>`).join("")}</ul>` : ""}
+
     <div class="pg"></div>
     <div class="kick">Anexo I</div>
-    <h1 style="font-size:22px">Términos y Condiciones Generales del Servicio</h1>
-    <p class="cl">Entre <b>Nexolibre</b> («El Prestador») y <b>${ph(rsp.razonSocial, "razón social")}</b>, CUIT ${ph(rsp.cuit, "CUIT")}${rsp.domicilio ? `, con domicilio en ${esc(rsp.domicilio)}` : ""}${c.cliente.nombreComercial && c.cliente.nombreComercial !== rsp.razonSocial ? `, que gira comercialmente bajo la denominación «${esc(c.cliente.nombreComercial)}»` : ""}${rss.length > 1 ? `, por sí y en representación de ${rss.filter((r) => !r.principal).map((r) => `<b>${esc(r.razonSocial)}</b>${r.cuit ? ` (CUIT ${esc(r.cuit)})` : ""}`).join(", ")}, sociedades alcanzadas por el presente` : ""} («El Cliente»), se celebra el presente Contrato de Prestación de Servicios de Mantenimiento, que se regirá por las cláusulas siguientes:</p>
-    ${clausulas.map(([t, body]) => `<div class="clause"><h3>${t}</h3><p class="cl">${body}</p></div>`).join("")}
+    <h1 style="font-size:22px;color:#645d56">Términos y Condiciones Generales del Servicio</h1>
+    <p class="cl">${m.preambulo}</p>
+    ${m.clausulas.map((cl) => `<div class="clause"><h3>${cl.titulo}</h3><p class="cl">${cl.cuerpo}</p></div>`).join("")}
     <div class="sign">
       <div><b>Por el Prestador · Nexolibre</b><br>Aclaración / cargo:</div>
-      <div><b>Por el Cliente · ${esc(rsp.razonSocial || nombreCliente(c))}</b><br>Aclaración / cargo:</div>
+      <div><b>Por el Cliente · ${m.firmaCliente}</b><br>Aclaración / cargo:</div>
     </div>
 
-    <!-- Ficha técnica por equipo -->
-    <div class="pg"></div>
+    ${m.fichas.length ? `<div class="pg"></div>
     <div class="kick">Anexo II</div>
-    <h1 style="font-size:22px">Ficha Técnica por Equipo</h1>
-    ${(c.equipos || []).map((e, i) => `
-      <div class="blk"><h3>Ficha Técnica N.º ${i + 1}</h3>
-      <table>
-        <tr><th>Equipo / Modelo</th><td>${esc(e.marca)} ${esc(e.modelo)}</td><th>Modalidad</th><td>${e.modalidad}</td></tr>
-        <tr><th>N.º de serie</th><td>${ph(e.serie, "serie")}</td><th>Ubicación</th><td>${esc(e.ubicacion || "—")}</td></tr>
-        <tr><th>Cobertura</th><td colspan="3">${[
-          `Preventivo ${cov.preventivoInspeccionesAnuales || 0}/año`,
-          cov.correctivoManoObra ? "correctivo (mano de obra)" : "sin correctivo",
-          // Solo en RM: un tomógrafo no tiene bobinas de RF ni criogenia.
-          e.modalidad === "MRI" && cov.reparacionBobinasPorAnio && `rep. bobinas ${bobinasTexto(c)}`,
-          e.modalidad === "MRI" && cov.saasMonitoreo && "monitoreo Cryo (SaaS)",
-        ].filter(Boolean).join(" · ")}</td></tr>
-      </table></div>`).join("") || "<p>Sin equipos cargados.</p>"}
+    <h1 style="font-size:22px;color:#645d56">Ficha Técnica por Equipo</h1>
+    ${m.fichas.map((f) => `<div class="blk"><h3>Ficha Técnica N.º ${f.n}</h3>
+      <table>${f.filas.map(filaFicha).join("")}</table></div>`).join("")}
+    ${m.notaCT ? `<p style="font-size:11px;color:#8c867d;font-style:italic;margin-top:10px">${m.notaCT}</p>` : ""}` : ""}
 
-    <div class="foot">${esContrato ? "Copia del contrato suscripto." : "Esta propuesta se rige por los Términos y Condiciones Generales del Servicio aquí incluidos."} Los campos <span class="ph">[entre corchetes]</span> se completan al perfeccionar el acuerdo.<br>Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.</div>`;
-  window.print();
+    <div class="foot">${m.pie}${m.plantilla ? ' Los campos <span class="ph">[entre corchetes]</span> se completan al perfeccionar el acuerdo.' : ""}<br>Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.</div>`;
 }
 
 // ============================================================
