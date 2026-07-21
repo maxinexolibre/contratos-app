@@ -1,5 +1,5 @@
 /* ============================================================
-   Nexolibre · Generación del contrato en .docx (editable)
+   Nexolibre · Generación del Programa de Continuidad Operativa en .docx
    ------------------------------------------------------------
    Toma el modelo de contrato.js y arma un Word real, con la puesta en
    página de la plantilla final: A4, márgenes de diseño y viñetas grises.
@@ -52,7 +52,7 @@ async function generarDocx(id) {
     const D = await cargarDocx();
     const m = NEXO_CONTRATO.construirContrato(c, { plantilla: false });
     const blob = await armarDocx(D, m, c);
-    const nombre = `${c.numero || "Contrato"} - ${nombreCliente(c)} - ${m.esContrato ? "Contrato" : "Propuesta"} MRI-CT.docx`
+    const nombre = `${c.numero || "Contrato"} - ${nombreCliente(c)} - ${m.esContrato ? "Programa" : "Propuesta"} de Continuidad Operativa.docx`
       .replace(/[\/\\:*?"<>|]/g, "-");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -183,7 +183,7 @@ async function armarDocx(D, m, c) {
   // ---------- ANEXO I ----------
   kids.push(new Paragraph({ children: [new PageBreak()] }));
   kids.push(new Paragraph({ children: [new TextRun({ text: "ANEXO I", bold: true, color: DC.orange, size: 16, font: FB })], spacing: { after: 40 } }));
-  kids.push(new Paragraph({ children: [new TextRun({ text: "Términos y Condiciones Generales del Servicio", bold: true, color: DC.taupe, size: 34, font: FH })], spacing: { after: 160 } }));
+  kids.push(new Paragraph({ children: [new TextRun({ text: "Términos y Condiciones Generales del Programa", bold: true, color: DC.taupe, size: 34, font: FH })], spacing: { after: 160 } }));
   kids.push(P(m.preambulo, { size: 20, align: AlignmentType.JUSTIFIED, after: 180 }));
   for (const cl of m.clausulas) {
     kids.push(H3(cl.titulo));
@@ -236,7 +236,7 @@ async function armarDocx(D, m, c) {
   // ---------- Documento ----------
   const doc = new Document({
     creator: "Nexolibre",
-    title: `${m.esContrato ? "Contrato" : "Propuesta"} de Mantenimiento MRI / CT`,
+    title: `${m.esContrato ? "Contrato" : "Propuesta"} · Programa de Continuidad Operativa NexoCare®`,
     description: "Generado desde el sistema de gestión de contratos de Nexolibre",
     sections: [{
       properties: { page: { size: { width: PAGINA.ancho, height: PAGINA.alto }, margin: PAGINA.margen } },

@@ -10,7 +10,7 @@ const LS = {
   demoVer: "nexo_demo_ver",
 };
 // Subir esto invalida la copia demo guardada en el navegador.
-const DEMO_VERSION = "6";
+const DEMO_VERSION = "7";
 
 // -------- estado global --------
 const state = {
@@ -192,6 +192,14 @@ function migrar(c) {
   }
   c.archivos = c.archivos || [];
   c.plan = c.plan || { id: "", etiquetaPublica: "", modulos: [], notasInternas: "" };
+  // Renombre a la familia NexoCare®: los registros viejos migran solos.
+  const PLAN_VIEJO = { essential: "foundation", professional: "performance", enterprise: "assurance" };
+  if (PLAN_VIEJO[c.plan.id]) c.plan.id = PLAN_VIEJO[c.plan.id];
+  const ETIQ_VIEJA = {
+    "Contrato Essential": "NexoCare® Foundation", "Contrato Professional": "NexoCare® Performance",
+    "Contrato Enterprise": "NexoCare® Assurance", "Contrato Nexo Custom": "NexoCare® Custom",
+  };
+  if (ETIQ_VIEJA[c.plan.etiquetaPublica]) c.plan.etiquetaPublica = ETIQ_VIEJA[c.plan.etiquetaPublica];
   c.negociacion = c.negociacion || { desviaciones: [] };
   return c;
 }
@@ -288,7 +296,7 @@ const DEMO_SEED = [
       razonesSociales: [{ razonSocial: "Centro de Imágenes Ejemplo S.A.", cuit: "30-00000000-0", domicilio: "Calle Ejemplo 100", principal: true }],
       contacto: "Contacto de ejemplo", localidad: "Ciudad Ejemplo", provincia: "Buenos Aires",
     },
-    plan: { id: "professional", etiquetaPublica: "Contrato Professional", modulos: ["cryo"], notasInternas: "Registro de ejemplo para probar la interfaz." },
+    plan: { id: "performance", etiquetaPublica: "NexoCare® Performance", modulos: ["cryo"], notasInternas: "Registro de ejemplo para probar la interfaz." },
     equipos: [
       { modelo: "Modelo A 1.5T", marca: "GE", modalidad: "MRI", serie: "", ubicacion: "Sede central" },
       { modelo: "Modelo B", marca: "GE", modalidad: "CT", serie: "", ubicacion: "Sede central" },
@@ -312,7 +320,7 @@ const DEMO_SEED = [
       ],
       contacto: "Contacto de ejemplo", localidad: "Ciudad Ejemplo", provincia: "Santa Fe",
     },
-    plan: { id: "enterprise", etiquetaPublica: "Contrato Enterprise", modulos: ["bobinas", "prioridad"], notasInternas: "Registro de ejemplo: muestra la composición interna." },
+    plan: { id: "assurance", etiquetaPublica: "NexoCare® Assurance", modulos: ["bobinas", "prioridad"], notasInternas: "Registro de ejemplo: muestra la composición interna." },
     equipos: [{ modelo: "Modelo C 1.5T", marca: "Philips", modalidad: "MRI", serie: "", ubicacion: "Sede única" }],
     cobertura: {
       preventivoInspeccionesAnuales: 4, correctivoManoObra: true, reparacionBobinasPorAnio: "sin límite", bobinasAlcance: "flota",
@@ -1018,9 +1026,9 @@ function renderForm(id) {
         <button type="button" class="btn sm" onclick="addRazon()">+ Razón social</button>
       </div></fieldset>
 
-      <fieldset><legend>Plan comercial</legend>
+      <fieldset><legend>Programa NexoCare®</legend>
         <div class="form-grid">
-          ${sel("Plan", "plan.id", c.plan?.id || "", [["", "— sin plan —"], ...CAT.PLAN_ORDEN.map((p) => [p, `${CAT.PLANES[p].label} (${CAT.PLANES[p].precioTxt})`])])}
+          ${sel("Nivel del Programa", "plan.id", c.plan?.id || "", [["", "— sin nivel —"], ...CAT.PLAN_ORDEN.map((p) => [p, `${CAT.PLANES[p].label} (${CAT.PLANES[p].precioTxt})`])])}
           ${inp("Etiqueta que ve el cliente", "plan.etiquetaPublica", c.plan?.etiquetaPublica, "", "text")}
         </div>
         <p class="hint" style="margin:8px 0 0">La etiqueta es el único nombre que aparece en el documento. Podés vender un armado a medida bajo el rótulo «Contrato Professional».</p>
@@ -1171,9 +1179,9 @@ function nuevoContrato() {
   return {
     id: "ctr_" + Date.now(), tipo: "propuesta", numero: "P" + d.replace(/-/g, ""), estado: "borrador",
     cliente: { nombreComercial: "", razonesSociales: [{ razonSocial: "", cuit: "", domicilio: "", principal: true }], contacto: "", localidad: "", provincia: "" },
-    plan: { id: "professional", etiquetaPublica: "Contrato Professional", modulos: [], notasInternas: "" },
+    plan: { id: "performance", etiquetaPublica: "NexoCare® Performance", modulos: [], notasInternas: "" },
     negociacion: { desviaciones: [] },
-    equipos: [], cobertura: Object.assign(structuredClone(CAT.PLANES.professional.base), { incluirSLA: true }),
+    equipos: [], cobertura: Object.assign(structuredClone(CAT.PLANES.performance.base), { incluirSLA: true }),
     economico: { canonMensual: 0, moneda: "USD", incluyeIVA: false, ivaPct: 21, formaPago: "Mensual, antes del 5º día hábil" },
     ajuste: { periodicidad: "trimestral", indice: "US_CPI", proximoAjuste: "", historial: [] },
     vigencia: { inicio: "", meses: 12, fin: "", renovacionAutomatica: true, preavisoDias: 30 },
@@ -1325,7 +1333,7 @@ function renderContratoHTML(m) {
 
     <div class="pg"></div>
     <div class="kick">Anexo I</div>
-    <h1 style="font-size:22px;color:#645d56">Términos y Condiciones Generales del Servicio</h1>
+    <h1 style="font-size:22px;color:#645d56">Términos y Condiciones Generales del Programa</h1>
     <p class="cl">${m.preambulo}</p>
     ${m.clausulas.map((cl) => `<div class="clause"><h3>${cl.titulo}</h3><p class="cl">${cl.cuerpo}</p></div>`).join("")}
     <div class="sign">
@@ -1352,7 +1360,7 @@ function seleccionOTodo() {
 }
 function exportarCSV() {
   const rows = seleccionOTodo();
-  const cols = ["numero", "cliente", "razon_social", "cuit", "plan", "modulos_internos", "estado", "equipos", "modalidad", "bobinas_cupo", "bobinas_alcance", "bobinas_total_anual", "canon", "moneda", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
+  const cols = ["numero", "cliente", "razon_social", "cuit", "programa", "modulos_internos", "estado", "equipos", "modalidad", "bobinas_cupo", "bobinas_alcance", "bobinas_total_anual", "canon", "moneda", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
   const lines = [cols.join(",")];
   for (const c of rows) {
     const fin = computeFin(c), pa = computeProximoAjuste(c);
@@ -1475,11 +1483,11 @@ function exportarInforme() {
     </div>
 
     <h2>Contratos vigentes</h2>
-    ${vig.length ? `<table><thead><tr><th style="width:20%">Cliente</th><th style="width:15%">Plan</th><th style="width:23%">Equipos cubiertos</th><th style="width:13%">Canon mensual</th><th style="width:14%">Vencimiento</th><th style="width:15%">Próximo ajuste</th></tr></thead>
+    ${vig.length ? `<table><thead><tr><th style="width:20%">Cliente</th><th style="width:15%">Programa</th><th style="width:23%">Equipos cubiertos</th><th style="width:13%">Canon mensual</th><th style="width:14%">Vencimiento</th><th style="width:15%">Próximo ajuste</th></tr></thead>
       <tbody>${vig.map(filaVig).join("")}</tbody></table>` : `<p style="color:#8c867d">Sin contratos vigentes.</p>`}
 
     <h2>Propuestas en curso</h2>
-    ${pipe.length ? `<table><thead><tr><th>Cliente</th><th>Plan propuesto</th><th>Estado</th><th>Equipos</th><th>Canon propuesto</th></tr></thead>
+    ${pipe.length ? `<table><thead><tr><th>Cliente</th><th>Programa propuesto</th><th>Estado</th><th>Equipos</th><th>Canon propuesto</th></tr></thead>
       <tbody>${pipe.map((c) => `<tr>
         <td><b>${esc(nombreCliente(c))}</b><br><span class="sub">${esc(c.numero)}</span></td>
         <td>${esc(planPub(c))}</td>

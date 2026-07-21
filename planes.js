@@ -1,9 +1,12 @@
 /* ============================================================
-   Nexolibre · Catálogo comercial
+   Nexolibre · Catálogo comercial — Programa NexoCare®
    ------------------------------------------------------------
+   El producto es el «Programa de Continuidad Operativa», que se vende
+   bajo la marca NexoCare® en tres niveles.
+
    DOS CAPAS:
-   1) PLANES  → lo que el cliente ve. Tres nombres públicos + un
-      servicio a medida (Nexo Custom, sin precio publicado).
+   1) PLANES  → lo que el cliente ve. Tres niveles públicos + un
+      servicio a medida (NexoCare® Custom, sin precio publicado).
    2) MODULOS → lo que el cliente NO ve. Piezas internas con las
       que se arma la propuesta y se justifica el precio.
 
@@ -12,11 +15,11 @@
    ============================================================ */
 
 const PLANES = {
-  essential: {
-    id: "essential",
-    label: "Essential",
-    etiquetaPublica: "Contrato Essential",
-    claim: "Para quien quiere empezar.",
+  foundation: {
+    id: "foundation",
+    label: "Foundation",
+    etiquetaPublica: "NexoCare® Foundation",
+    claim: "Cobertura preventiva.",
     precioTxt: "desde USD 890",
     desde: 890,
     hasta: null,
@@ -41,11 +44,11 @@ const PLANES = {
     ],
   },
 
-  professional: {
-    id: "professional",
-    label: "Professional",
-    etiquetaPublica: "Contrato Professional",
-    claim: "El equilibrio entre cobertura y costo. El que elige la mayoría.",
+  performance: {
+    id: "performance",
+    label: "Performance",
+    etiquetaPublica: "NexoCare® Performance",
+    claim: "Continuidad operativa.",
     precioTxt: "USD 1.800 – 2.500",
     desde: 1800,
     hasta: 2500,
@@ -73,11 +76,11 @@ const PLANES = {
     ],
   },
 
-  enterprise: {
-    id: "enterprise",
-    label: "Enterprise",
-    etiquetaPublica: "Contrato Enterprise",
-    claim: "Continuidad operativa como estándar.",
+  assurance: {
+    id: "assurance",
+    label: "Assurance",
+    etiquetaPublica: "NexoCare® Assurance",
+    claim: "Máxima cobertura.",
     precioTxt: "hasta USD 3.900",
     desde: 2500,
     hasta: 3900,
@@ -113,8 +116,8 @@ const PLANES = {
   custom: {
     id: "custom",
     label: "Nexo Custom",
-    etiquetaPublica: "Contrato Nexo Custom",
-    claim: "Diseñamos un contrato exactamente para su operación.",
+    etiquetaPublica: "NexoCare® Custom",
+    claim: "Diseñamos un programa exactamente para su operación.",
     precioTxt: "a medida",
     desde: null,
     hasta: null,
@@ -133,12 +136,12 @@ const PLANES = {
     },
     sla: { remoto: 2, onsite: 24, repuesto: 48 },
     resumenPublico: [
-      "Programa de mantenimiento diseñado sobre el relevamiento de su operación",
+      "Programa de Continuidad Operativa diseñado sobre el relevamiento de su operación",
     ],
   },
 };
 
-const PLAN_ORDEN = ["essential", "professional", "enterprise", "custom"];
+const PLAN_ORDEN = ["foundation", "performance", "assurance", "custom"];
 
 /* ------------------------------------------------------------
    MÓDULOS INTERNOS — NUNCA se nombran en el documento del cliente.
@@ -215,7 +218,7 @@ function addRep(cov, txt) {
    Devuelve { cobertura, sla, resumenPublico, valorSugerido }.
    ------------------------------------------------------------ */
 function derivarDePlan(planId, modulosIds = []) {
-  const plan = PLANES[planId] || PLANES.professional;
+  const plan = PLANES[planId] || PLANES.performance;
   const cov = structuredClone(plan.base);
   let sla = { ...plan.sla };
   const publico = [...plan.resumenPublico];
