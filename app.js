@@ -101,6 +101,36 @@ function computeFin(c) {
   }
   return fin;
 }
+// ---- Control de ajustes de canon ----
+// Un ajuste pactado que no se aplica no se recupera nunca, y además arrastra:
+// el período siguiente arranca sobre una base vieja. Por eso el sistema no
+// alcanza con mostrar "próximo ajuste": tiene que saber si el anterior se hizo.
+function fechasAjusteVencidas(c) {
+  const step = AJUSTE_STEP[c?.ajuste?.periodicidad] || 0;
+  const inicio = parseDate(c?.vigencia?.inicio);
+  if (!step || !inicio) return [];
+  // `controlDesde` permite regularizar contratos cargados a mitad de vida,
+  // sin arrastrar como pendientes ajustes que se aplicaron antes del sistema.
+  const desde = parseDate(c?.ajuste?.controlDesde);
+  const out = [];
+  let d = addMonths(inicio, step), guard = 0;
+  while (d <= hoy() && guard++ < 400) {
+    if (!desde || d > desde) out.push(new Date(d));
+    d = addMonths(d, step);
+  }
+  return out;
+}
+function ajustesPendientes(c) {
+  if (!ACTIVOS.has(c?.estado)) return [];
+  const step = AJUSTE_STEP[c?.ajuste?.periodicidad] || 0;
+  const hist = (c?.ajuste?.historial || []).map((h) => parseDate(h.fecha)).filter(Boolean);
+  return fechasAjusteVencidas(c).filter((d) => {
+    // Se considera cubierta si hay un ajuste registrado en su ventana
+    // (con un mes de tolerancia hacia atrás, por si se aplicó anticipado).
+    const desde = addMonths(d, -1), hasta = addMonths(d, step);
+    return !hist.some((h) => h >= desde && h < hasta);
+  });
+}
 function computeProximoAjuste(c) {
   const ex = parseDate(c?.ajuste?.proximoAjuste);
   if (ex && ex >= hoy()) return ex;
@@ -351,17 +381,20 @@ function bindChrome() {
 //  Alertas / cálculos de portfolio
 // ============================================================
 function calcAlertas() {
-  const venc = [], aum = [];
+  const venc = [], aum = [], pend = [];
   for (const c of state.data) {
     if (!ACTIVOS.has(c.estado)) continue;
     const fin = computeFin(c), dv = daysUntil(fin);
     if (dv !== null && dv <= 30) venc.push({ c, fin, dias: dv });
     const pa = computeProximoAjuste(c), da = daysUntil(pa);
     if (da !== null && da <= 15 && da >= -3) aum.push({ c, fecha: pa, dias: da });
+    const p = ajustesPendientes(c);
+    if (p.length) pend.push({ c, fechas: p, dias: -daysUntil(p[p.length - 1]) });
   }
   venc.sort((a, b) => a.dias - b.dias);
   aum.sort((a, b) => a.dias - b.dias);
-  return { venc, aum };
+  pend.sort((a, b) => b.dias - a.dias);
+  return { venc, aum, pend };
 }
 
 // ============================================================
@@ -372,7 +405,7 @@ function renderDashboard() {
   const vigentes = state.data.filter((c) => ACTIVOS.has(c.estado));
   const pipeline = state.data.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado));
   const mrr = vigentes.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
-  const { venc, aum } = calcAlertas();
+  const { venc, aum, pend } = calcAlertas();
 
   el.innerHTML = `
     <div class="kicker">Panel general</div>
@@ -388,8 +421,18 @@ function renderDashboard() {
       ${kpi("En pipeline", pipeline.length, "propuestas abiertas")}
       ${kpi("Ingreso mensual", money(mrr), "USD/mes recurrente")}
       ${kpi("Por vencer", venc.length, "≤ 30 días", venc.length ? "warn" : "")}
-      ${kpi("Aumentos", aum.length, "≤ 15 días", aum.length ? "warn" : "")}
+      ${kpi("Ajustes sin registrar", pend.length, pend.length ? "revisar si se aplicaron" : "todo al día", pend.length ? "danger" : "")}
     </div>
+    ${pend.length ? `<div class="card alert-panel danger">
+      <h3>⚠ Ajustes de canon sin registrar</h3>
+      <p class="muted" style="font-size:13.5px;margin:0 0 10px">Estas fechas de ajuste ya pasaron y el sistema no tiene registro de que se hayan aplicado. Un ajuste no aplicado no se recupera y arrastra la base del período siguiente.</p>
+      ${pend.map((p) => `<div class="alert-row" onclick="location.hash='detalle/${p.c.id}'" style="cursor:pointer">
+        <span class="tag pend">${p.fechas.length} sin registrar</span>
+        <b>${esc(p.c.numero)}</b> · ${esc(nombreCliente(p.c))}
+        <span style="flex:1"></span>
+        <span class="muted">${p.fechas.map(fmt).join(" · ")}</span>
+      </div>`).join("")}
+    </div>` : ""}
     <div class="card alert-panel">
       <h3>🔔 Próximas acciones</h3>
       ${venc.length || aum.length ? [
@@ -403,7 +446,8 @@ function renderDashboard() {
     </div>`;
 }
 function kpi(label, num, sub, tone = "") {
-  return `<div class="kpi"><div class="label">${label}</div><div class="num" ${tone === "warn" ? 'style="color:var(--warn)"' : ""}>${num}</div><div class="sub">${sub}</div></div>`;
+  const color = { warn: "var(--warn)", danger: "var(--danger)" }[tone];
+  return `<div class="kpi"><div class="label">${label}</div><div class="num"${color ? ` style="color:${color}"` : ""}>${num}</div><div class="sub">${sub}</div></div>`;
 }
 function alertRow(tipo, tag, c, detail) {
   return `<div class="alert-row" onclick="location.hash='detalle/${c.id}'" style="cursor:pointer">
@@ -622,6 +666,7 @@ function renderDetalle(id) {
             <dt>Próximo ajuste</dt><dd>${fmt(pa)}</dd>
           </dl>
         </div>
+        ${renderAjustes(c)}
         <div class="card"><h3>Vigencia</h3>
           <dl class="kv">
             <dt>Inicio</dt><dd>${fmt(c.vigencia?.inicio)}</dd>
@@ -647,6 +692,111 @@ function renderDetalle(id) {
     </div>
     <p style="margin-top:14px"><a href="#listado">← Volver al listado</a></p>`;
 }
+// ---- Ajustes de canon: historial, pendientes y registro ----
+function renderAjustes(c) {
+  const step = AJUSTE_STEP[c.ajuste?.periodicidad] || 0;
+  if (!step) return "";
+  const pend = ajustesPendientes(c);
+  const hist = (c.ajuste?.historial || []).slice().sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const canon = Number(c.economico?.canonMensual) || 0;
+  const m = c.economico?.moneda;
+  const ro = state.soloLectura;
+  return `<div class="card${pend.length ? " alerta" : ""}"><h3>Ajustes de canon</h3>
+    ${pend.length ? `<div class="pend-box">
+      <b>${pend.length} ajuste${pend.length > 1 ? "s" : ""} sin registrar</b>
+      <div class="muted" style="font-size:12.5px;margin-top:2px">${pend.map(fmt).join(" · ")}</div>
+      ${ro ? "" : `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn sm" onclick="regularizarAjustes('${c.id}')" title="Marca los anteriores como ya aplicados fuera del sistema, sin tocar el canon">Ya estaban aplicados</button>
+      </div>`}
+    </div>` : `<p class="muted" style="font-size:13px;margin:0 0 10px">Ajustes al día. ✅</p>`}
+
+    ${ro ? "" : `<div class="aj-form">
+      <div class="aj-row">
+        <label>Fecha<input type="date" id="ajFecha" value="${(pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)}"></label>
+        <label>%<input type="number" step="0.01" id="ajPct" placeholder="0.00" oninput="calcAjuste('${c.id}')"></label>
+        <label>Canon nuevo<input type="number" step="0.01" id="ajCanon" placeholder="${canon}" oninput="calcAjustePct('${c.id}')"></label>
+      </div>
+      <button class="btn primary sm" onclick="registrarAjuste('${c.id}')">Registrar ajuste</button>
+      <span class="muted" style="font-size:12px" id="ajHint">Canon actual: ${money(canon, m)}</span>
+    </div>`}
+
+    ${hist.length ? `<table class="aj-hist">
+      <thead><tr><th>Fecha</th><th>%</th><th>Canon</th><th>Quién</th></tr></thead>
+      <tbody>${hist.map((h) => `<tr>
+        <td>${fmt(h.fecha)}</td>
+        <td>${h.porcentaje != null && h.porcentaje !== "" ? `<b>${h.porcentaje > 0 ? "+" : ""}${h.porcentaje}%</b>` : "—"}</td>
+        <td>${h.canonAnterior ? `<span class="muted">${money(h.canonAnterior, m)} →</span> ` : ""}${h.canonNuevo ? money(h.canonNuevo, m) : "—"}</td>
+        <td class="muted">${esc(h.usuario || "—")}${h.nota ? ` · ${esc(h.nota)}` : ""}</td>
+      </tr>`).join("")}</tbody></table>`
+      : `<p class="muted" style="font-size:12.5px;margin:8px 0 0">Todavía no hay ajustes registrados.</p>`}
+  </div>`;
+}
+// Los dos campos se completan entre sí: cargás el % y sale el canon, o al revés.
+function calcAjuste(id) {
+  const c = state.data.find((x) => x.id === id);
+  const base = Number(c.economico?.canonMensual) || 0;
+  const pct = parseFloat(document.getElementById("ajPct").value);
+  if (isNaN(pct)) return;
+  document.getElementById("ajCanon").value = Math.round(base * (1 + pct / 100) * 100) / 100;
+  hintAjuste(c, base);
+}
+function calcAjustePct(id) {
+  const c = state.data.find((x) => x.id === id);
+  const base = Number(c.economico?.canonMensual) || 0;
+  const nuevo = parseFloat(document.getElementById("ajCanon").value);
+  if (isNaN(nuevo) || !base) return;
+  document.getElementById("ajPct").value = Math.round((nuevo / base - 1) * 10000) / 100;
+  hintAjuste(c, base);
+}
+function hintAjuste(c, base) {
+  const nuevo = parseFloat(document.getElementById("ajCanon").value);
+  const el = document.getElementById("ajHint");
+  if (!el) return;
+  el.textContent = isNaN(nuevo)
+    ? `Canon actual: ${money(base, c.economico?.moneda)}`
+    : `${money(base, c.economico?.moneda)} → ${money(nuevo, c.economico?.moneda)} · ${money(Math.round((nuevo - base) * 12), c.economico?.moneda)}/año de diferencia`;
+}
+async function registrarAjuste(id) {
+  const c = state.data.find((x) => x.id === id);
+  const fecha = document.getElementById("ajFecha").value;
+  const pct = document.getElementById("ajPct").value;
+  const nuevo = Number(document.getElementById("ajCanon").value);
+  if (!fecha) { toast("Falta la fecha del ajuste", true, true); return; }
+  if (!nuevo || nuevo <= 0) { toast("Falta el canon nuevo", true, true); return; }
+  const anterior = Number(c.economico?.canonMensual) || 0;
+  c.ajuste.historial = c.ajuste.historial || [];
+  c.ajuste.historial.push({
+    fecha, porcentaje: pct === "" ? null : Number(pct),
+    canonAnterior: anterior, canonNuevo: nuevo,
+    usuario: state.user || "—",
+  });
+  c.economico.canonMensual = nuevo;
+  try {
+    await persist(`Ajuste ${c.numero} · ${money(anterior)} → ${money(nuevo)}`);
+    toast(`Ajuste registrado · canon ${money(nuevo)}`);
+    router();
+  } catch (e) { toast("Error: " + e.message, true, true); }
+}
+// Contratos cargados a mitad de vida: los ajustes previos ya se aplicaron
+// fuera del sistema. Se marca la línea de corte sin tocar el canon.
+async function regularizarAjustes(id) {
+  const c = state.data.find((x) => x.id === id);
+  const pend = ajustesPendientes(c);
+  if (!confirm(`¿Marcar ${pend.length} ajuste(s) anterior(es) como ya aplicados fuera del sistema?\n\nNo modifica el canon actual (${money(c.economico?.canonMensual)}). A partir de acá el sistema controla solo los nuevos.`)) return;
+  c.ajuste.controlDesde = new Date().toISOString().slice(0, 10);
+  c.ajuste.historial = c.ajuste.historial || [];
+  c.ajuste.historial.push({
+    fecha: c.ajuste.controlDesde, porcentaje: null,
+    canonAnterior: null, canonNuevo: Number(c.economico?.canonMensual) || null,
+    usuario: state.user || "—", nota: "regularización de ajustes previos al sistema",
+  });
+  try {
+    await persist(`Regulariza ajustes previos · ${c.numero}`);
+    toast("Ajustes anteriores regularizados");
+    router();
+  } catch (e) { toast("Error: " + e.message, true, true); }
+}
+
 // ---- Composición interna: SOLO para el equipo Nexolibre. No se imprime. ----
 function renderComposicionInterna(c) {
   const plan = CAT.PLANES[c.plan?.id];
@@ -1421,6 +1571,7 @@ function toast(msg, show = true, isErr = false) {
 Object.assign(window, {
   avanzar, toggleSel, exportarCSV, exportarInforme, generarPDF, hacerFirme, addEquipo,
   addRazon, aplicarPlanAForm, subirArchivo, quitarArchivo, resetDemo,
+  registrarAjuste, regularizarAjustes, calcAjuste, calcAjustePct,
 });
 
 init();
