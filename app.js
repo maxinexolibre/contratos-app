@@ -256,12 +256,16 @@ const PRE_ESTADO_LABEL = Object.fromEntries(PRE_ESTADOS.map((e) => [e.id, e.labe
 const PRE_ABIERTOS = new Set(["borrador", "enviado", "negociacion"]);
 // Probabilidad de cierre por etapa, para ponderar el pipeline.
 const PRE_PROB = { borrador: 0.2, enviado: 0.5, negociacion: 0.7, ganado: 1, perdido: 0 };
+// Tipos según el registro comercial real: Servicio y Venta. La Venta se
+// desglosa en subtipos para poder analizarla sin cambiar la nomenclatura.
 const PRE_TIPOS = {
   servicio: { label: "Servicio", requiereTicket: true },
-  partes: { label: "Venta de partes", requiereTicket: false },
-  equipos: { label: "Venta de equipos", requiereTicket: false },
+  venta: { label: "Venta", requiereTicket: true },
   saas: { label: "SaaS Cryo / Gestión", requiereTicket: false },
 };
+const PRE_SUBTIPOS = { "": "—", partes: "Partes", intercambio: "Partes por intercambio", equipo: "Equipo completo" };
+// Tipos viejos del sistema → tipos reales.
+const TIPO_VIEJO = { partes: ["venta", "partes"], equipos: ["venta", "equipo"] };
 function migrarPresupuesto(p) {
   p.cliente = p.cliente || {};
   const cl = p.cliente;
@@ -269,6 +273,10 @@ function migrarPresupuesto(p) {
   if (!cl.nombreComercial) cl.nombreComercial = cl.razonSocial || "";
   if (cl.razonesSociales.length && !cl.razonesSociales.some((r) => r.principal)) cl.razonesSociales[0].principal = true;
   p.tipo = p.tipo || "servicio";
+  // Migración de los tipos viejos (partes/equipos) a Venta + subtipo.
+  if (TIPO_VIEJO[p.tipo]) { const [t, s] = TIPO_VIEJO[p.tipo]; p.tipo = t; p.subtipo = p.subtipo || s; }
+  if (p.subtipo == null) p.subtipo = "";
+  if (p.titulo == null) p.titulo = "";
   p.estado = p.estado || "borrador";
   p.items = Array.isArray(p.items) ? p.items : [];
   p.saas = Array.isArray(p.saas) ? p.saas : [];
@@ -276,6 +284,7 @@ function migrarPresupuesto(p) {
   if (p.economico.moneda == null) p.economico.moneda = "USD";
   if (p.economico.ivaPct == null) p.economico.ivaPct = 21;
   if (p.economico.validezDias == null) p.economico.validezDias = 15;
+  if (p.economico.recurrencia == null) p.economico.recurrencia = "unica";
   p.archivos = p.archivos || [];
   p.historialEstados = p.historialEstados || [];
   return p;
@@ -481,8 +490,22 @@ function proxNumero(arr, prefijo) {
   }, 0);
   return `${prefijo}-${anio}-${String(max + 1).padStart(3, "0")}`;
 }
-const proxNumeroTicket = () => proxNumero(state.tickets, "TK");
-const proxNumeroPresu = () => proxNumero(state.presupuestos, "PRE");
+// Numeración real del área comercial: P + AAAA + MM + correlativo del mes
+// (P20260413 = cuarto mes de 2026, presupuesto 13). El ticket la espeja.
+function proxSecuenciaMes() {
+  const d = new Date();
+  const ym = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const rx = new RegExp(`^(?:P|TK-)${ym}(\\d{2})`);
+  // Se mira en los dos registros: ticket y presupuesto comparten correlativo,
+  // así el pedido TK-20260805 se corresponde con el presupuesto P20260805.
+  const max = [...(state.presupuestos || []), ...(state.tickets || [])].reduce((m, x) => {
+    const g = String(x.numero || "").match(rx);
+    return g ? Math.max(m, Number(g[1])) : m;
+  }, 0);
+  return { ym, n: String(max + 1).padStart(2, "0") };
+}
+function proxNumeroPresu() { const { ym, n } = proxSecuenciaMes(); return `P${ym}${n}`; }
+function proxNumeroTicket() { const { ym, n } = proxSecuenciaMes(); return `TK-${ym}${n}`; }
 
 // ============================================================
 //  Init
@@ -1967,8 +1990,8 @@ function presuRow(p) {
   return `<tr onclick="location.hash='presudetalle/${p.id}'">
     <td><b>${esc(p.numero)}</b></td>
     <td>${fmt(p.fecha)}</td>
-    <td><b>${esc(p.cliente?.nombreComercial || "—")}</b></td>
-    <td>${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)}</td>
+    <td><b>${esc(p.cliente?.nombreComercial || "—")}</b>${p.titulo ? `<br><span class="muted" style="font-size:12px">${esc(p.titulo.slice(0, 62))}${p.titulo.length > 62 ? "…" : ""}</span>` : ""}</td>
+    <td>${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)}${p.subtipo ? `<br><span class="muted" style="font-size:12px">${esc(PRE_SUBTIPOS[p.subtipo] || p.subtipo)}</span>` : ""}</td>
     <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span>${presuVencido(p) ? ' <span class="badge vencida" title="La validez de la oferta ya venció">validez vencida</span>' : ""}</td>
     <td>${totalTxt}</td></tr>`;
 }
@@ -1984,7 +2007,8 @@ function renderPresuDetalle(id) {
       <div>
         <div class="kicker">${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)} · <span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span></div>
         <h1>${esc(p.cliente?.nombreComercial || "—")}</h1>
-        <p class="muted">${esc(p.numero)} · ${fmt(p.fecha)}${tk ? ` · <a href="#tkdetalle/${tk.id}">ticket ${esc(tk.numero)}</a>` : ""}</p>
+        ${p.titulo ? `<p style="font-size:15px;margin:2px 0 4px;color:var(--taupe)">${esc(p.titulo)}</p>` : ""}
+        <p class="muted">${esc(p.numero)} · ${fmt(p.fecha)}${p.estadoOrigen ? ` · registro: ${esc(p.estadoOrigen)}` : ""}${tk ? ` · <a href="#tkdetalle/${tk.id}">ticket ${esc(tk.numero)}</a>` : ""}</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${ro ? "" : `<button class="btn sm" onclick="location.hash='presuform/${p.id}'">✎ Editar</button>`}
@@ -2083,13 +2107,14 @@ async function duplicarPresu(id) {
 function nuevoPresupuesto(ticketId) {
   const d = new Date().toISOString().slice(0, 10);
   const tk = ticketId ? ticketPorId(ticketId) : null;
-  const tipoDeTk = { servicio: "servicio", parte: "partes", equipo: "equipos", saas: "saas" };
+  const tipoDeTk = { servicio: "servicio", parte: "venta", equipo: "venta", saas: "saas" };
   return {
     id: "pre_" + Date.now(), numero: proxNumeroPresu(), tipo: tk ? (tipoDeTk[tk.tipoPedido] || "servicio") : "servicio",
     estado: "borrador", fecha: d, ticketId: tk?.id || "", ticketNumero: tk?.numero || "",
+    subtipo: "", titulo: tk?.descripcion || "",
     cliente: tk ? structuredClone(tk.cliente) : { nombreComercial: "", razonesSociales: [{ razonSocial: "", cuit: "", domicilio: "", principal: true }], contacto: "", localidad: "", provincia: "" },
     items: [], saas: [],
-    economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15, formaPago: "", descuentoPct: 0 },
+    economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15, formaPago: "", descuentoPct: 0, recurrencia: "unica" },
     notas: "", archivos: [], usuario: state.user || "—", historialEstados: [{ estado: "borrador", fecha: d, usuario: state.user || "—" }],
   };
 }
@@ -2108,10 +2133,13 @@ function renderPresuForm(id, ticketId) {
     <form id="pform">
       <fieldset><legend>Tipo y pedido</legend><div class="form-grid">
         ${sel("Tipo de presupuesto", "tipo", p.tipo, Object.entries(PRE_TIPOS).map(([k, v]) => [k, v.label]))}
+        ${sel("Subtipo (si es venta)", "subtipo", p.subtipo || "", Object.entries(PRE_SUBTIPOS))}
         <div class="field"><label>Ticket vinculado <span class="hint">(pedido del cliente)</span></label>
           <select data-path="ticketId" id="preTicket"><option value="">— sin ticket —</option>${ticketsAbiertos.map((t) => `<option value="${t.id}" ${p.ticketId === t.id ? "selected" : ""}>${esc(t.numero)} · ${esc(t.cliente?.nombreComercial || "")}</option>`).join("")}</select></div>
         ${!isNew ? sel("Estado", "estado", p.estado, PRE_ESTADOS.map((e) => [e.id, e.label])) : ""}
       </div>
+      ${inp("Título del presupuesto", "titulo", p.titulo, "full")}
+      <p class="hint" style="margin:4px 0 0">Es el que va al documento y al nombre del archivo: «Servicio de diagnóstico y reparación de bobina — MRI GE Profile 0.2T».</p>
       <p class="hint" id="tipoHint" style="margin:6px 0 0"></p>
       </fieldset>
 
@@ -2131,6 +2159,7 @@ function renderPresuForm(id, ticketId) {
 
       <fieldset><legend>Condiciones económicas</legend><div class="form-grid">
         ${sel("Moneda", "economico.moneda", eco.moneda, [["USD", "USD"], ["ARS", "ARS"]])}
+        ${sel("Cobro", "economico.recurrencia", eco.recurrencia || "unica", [["unica", "Pago único"], ["mensual", "Abono mensual"]])}
         ${inp("IVA %", "economico.ivaPct", eco.ivaPct, "", "number")}
         ${inp("Descuento % (única vez)", "economico.descuentoPct", eco.descuentoPct || 0, "", "number")}
         ${inp("Validez (días)", "economico.validezDias", eco.validezDias, "", "number")}
@@ -2393,12 +2422,21 @@ function kpisDireccion() {
   const perdidos = state.presupuestos.filter((p) => p.estado === "perdido");
   const winRate = ganados.length + perdidos.length ? ganados.length / (ganados.length + perdidos.length) : null;
 
-  const porTipo = {};
-  for (const p of ganados) { const v = valorPresu(p); porTipo[p.tipo] = (porTipo[p.tipo] || 0) + v.anual; }
+  // Los montos se agrupan por moneda: sumar USD con ARS daría un número falso.
+  // Los tableros muestran la moneda principal (USD) y listan el resto aparte.
+  const porTipoMon = {};   // { tipo: { USD: n, ARS: m } }
+  for (const p of ganados) {
+    const v = valorPresu(p);
+    const e = porTipoMon[p.tipo] || (porTipoMon[p.tipo] = {});
+    e[v.moneda] = (e[v.moneda] || 0) + v.anual;
+  }
+  const porTipo = Object.fromEntries(Object.entries(porTipoMon).map(([t, m]) => [t, m.USD || 0]).filter(([, v]) => v));
   const ventasTotal = Object.values(porTipo).reduce((a, b) => a + b, 0);
+  const ventasOtrasMonedas = {};
+  for (const m of Object.values(porTipoMon)) for (const [mon, v] of Object.entries(m)) if (mon !== "USD") ventasOtrasMonedas[mon] = (ventasOtrasMonedas[mon] || 0) + v;
 
   const pipePorEtapa = {};
-  for (const p of abiertos) pipePorEtapa[p.estado] = (pipePorEtapa[p.estado] || 0) + valorPresu(p).anual;
+  for (const p of abiertos) { const v = valorPresu(p); if (v.moneda === "USD") pipePorEtapa[p.estado] = (pipePorEtapa[p.estado] || 0) + v.anual; }
 
   const tkAbiertos = state.tickets.filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto");
   // Antigüedad promedio de los tickets abiertos (días)
@@ -2416,7 +2454,7 @@ function kpisDireccion() {
   }
   const tProm = tiempos.length ? Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length) : null;
 
-  return { vig, mrr, equipos, abiertos, pipeAnual, pipePond, ganados, perdidos, winRate, porTipo, ventasTotal, pipePorEtapa, tkAbiertos, edadProm, tProm };
+  return { vig, mrr, equipos, abiertos, pipeAnual, pipePond, ganados, perdidos, winRate, porTipo, porTipoMon, ventasOtrasMonedas, ventasTotal, pipePorEtapa, tkAbiertos, edadProm, tProm };
 }
 function barra(label, val, max, sub) {
   const pct = max > 0 ? Math.round((val / max) * 100) : 0;
@@ -2485,7 +2523,7 @@ function renderPTablero() {
   const vencidos = state.presupuestos.filter(presuVencido).length;
   // Funnel del pipeline por etapa (monto anualizado)
   const etapas = ["borrador", "enviado", "negociacion", "ganado"];
-  const stageAmt = (e) => state.presupuestos.filter((p) => p.estado === e).reduce((s, p) => s + valorPresu(p).anual, 0);
+  const stageAmt = (e) => state.presupuestos.filter((p) => p.estado === e).reduce((s, p) => { const v = valorPresu(p); return s + (v.moneda === "USD" ? v.anual : 0); }, 0);
   const funnelData = etapas.map((e) => { const v = stageAmt(e); return { label: PRE_ESTADO_LABEL[e], value: v, text: moneyK(v) }; });
   // Ventas cerradas por tipo (dona)
   const tipoItems = Object.entries(k.porTipo).map(([t, v]) => ({ label: (PRE_TIPOS[t] || {}).label || t, value: v, text: moneyK(v) }));
@@ -2519,8 +2557,9 @@ function renderPTablero() {
     <div class="dir-2col">
       <div class="card"><h3>Pipeline por etapa <span class="muted" style="font-weight:400">· anualizado</span></h3>
         ${funnelData.some((s) => s.value) ? chartFunnel(funnelData) : `<p class="muted">Sin presupuestos cargados.</p>`}</div>
-      <div class="card"><h3>Ventas cerradas por tipo <span class="muted" style="font-weight:400">· anualizado</span></h3>
-        ${tipoItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(tipoItems, { centro: moneyK(k.ventasTotal) })}${chartLegend(tipoItems)}</div>` : `<p class="muted">Todavía sin presupuestos ganados.</p>`}</div>
+      <div class="card"><h3>Ventas cerradas por tipo <span class="muted" style="font-weight:400">· anualizado, USD</span></h3>
+        ${tipoItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(tipoItems, { centro: moneyK(k.ventasTotal) })}${chartLegend(tipoItems)}</div>` : `<p class="muted">Todavía sin presupuestos ganados.</p>`}
+        ${Object.keys(k.ventasOtrasMonedas).length ? `<p class="muted" style="font-size:12.5px;margin:10px 0 0">Además, cerrado en otra moneda: <b>${Object.entries(k.ventasOtrasMonedas).map(([m, v]) => money(Math.round(v), m)).join(" · ")}</b> anualizado (no se suma al gráfico).</p>` : ""}</div>
     </div>
     <div class="dir-2col">
       <div class="card"><h3>Presupuestos por mes <span class="muted" style="font-weight:400">· últimos 6</span></h3>

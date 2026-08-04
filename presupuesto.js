@@ -33,18 +33,22 @@ function calcPresupuesto(p) {
 
   const itemsNeto = items.reduce((s, it) => s + (Number(it.cantidad) || 0) * unitarioEfectivo(it), 0);
   const setup = saas.reduce((s, x) => s + (Number(x.setup) || 0), 0);
-  const brutoUnaVez = itemsNeto + setup;
+  // Un presupuesto de abono (p. ej. mantenimiento) cotiza un valor MENSUAL:
+  // sus ítems no son un pago único sino el canon que se factura cada mes.
+  const esMensual = eco.recurrencia === "mensual";
   const descPct = Number(eco.descuentoPct) || 0;
+  const brutoUnaVez = (esMensual ? 0 : itemsNeto) + setup;
   const descuento = Math.round(brutoUnaVez * descPct / 100);
   const netoUnaVez = brutoUnaVez - descuento;
 
-  const abonoMensualNeto = saas.reduce((s, x) => s + (Number(x.abonoMensual) || 0), 0);
+  const abonoItems = esMensual ? Math.round(itemsNeto * (1 - descPct / 100)) : 0;
+  const abonoMensualNeto = saas.reduce((s, x) => s + (Number(x.abonoMensual) || 0), 0) + abonoItems;
 
   const ivaUnaVez = incl ? 0 : Math.round(netoUnaVez * ivaPct / 100);
   const ivaMensual = incl ? 0 : Math.round(abonoMensualNeto * ivaPct / 100);
 
   return {
-    moneda: eco.moneda || "USD", ivaPct, incl, descuento, descPct,
+    moneda: eco.moneda || "USD", ivaPct, incl, descuento, descPct, esMensual,
     netoUnaVez, ivaUnaVez, totalUnaVez: netoUnaVez + ivaUnaVez,
     abonoMensualNeto, ivaMensual, totalMensual: abonoMensualNeto + ivaMensual,
     hayUnaVez: netoUnaVez > 0, hayRecurrente: abonoMensualNeto > 0,
@@ -169,12 +173,13 @@ function construirPresupuesto(p, opts = {}) {
     }
   }
   if (cc.hayRecurrente) {
+    const lbl = cc.esMensual ? "Costo mensual del servicio" : "Abono mensual";
     if (cc.incl) {
-      totales.push(["Abono mensual (IVA incluido)", money(cc.totalMensual, M), true]);
+      totales.push([`${lbl} (IVA incluido)`, money(cc.totalMensual, M), true]);
     } else {
-      totales.push(["Abono mensual neto", money(cc.abonoMensualNeto, M), false]);
+      totales.push([`${lbl} (neto)`, money(cc.abonoMensualNeto, M), false]);
       totales.push([ivaLbl + " (mensual)", money(cc.ivaMensual, M), false]);
-      totales.push(["Total mensual c/ IVA", money(cc.totalMensual, M), true]);
+      totales.push([`Total mensual c/ IVA`, money(cc.totalMensual, M), true]);
     }
   }
 
@@ -189,7 +194,8 @@ function construirPresupuesto(p, opts = {}) {
   return {
     plantilla, tipo, tipoLabel, kicker,
     etiqueta: "Presupuesto",
-    titulo: tipoLabel,
+    // El título comercial manda; si no se cargó, se cae al nombre del tipo.
+    titulo: esc(p.titulo) || tipoLabel,
     subtitulo: "Presupuesto comercial · Ingeniería médica MRI / CT",
     numeroTxt: numero || "",
     filasCliente, intro, tabla, saasTabla, totales, condiciones,
