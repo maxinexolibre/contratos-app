@@ -8,12 +8,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Exo:wght@300;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
+  <script>
+    // Se aplica antes de pintar para que no haya un parpadeo de tema claro.
+    (function () {
+      var t = localStorage.getItem("nexo_tema");
+      if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
 </head>
 <body>
   <button class="skip-link" onclick="document.getElementById('contenido').focus()">Saltar al contenido</button>
   <header class="topbar">
     <div class="topbar-main">
-      <img class="brand-logo" src="assets/nexolibre-logo.svg" alt="Nexolibre" />
+      <img class="brand-logo light-only" src="assets/nexolibre-logo.svg" alt="Nexolibre" />
+      <img class="brand-logo dark-only" src="assets/nexolibre-logo-dark.svg" alt="Nexolibre" />
       <div class="ws-switch" id="wsSwitch" role="tablist" aria-label="Área de trabajo">
         <button type="button" data-ws="contratos" role="tab">Contratos</button>
         <button type="button" data-ws="presupuestos" role="tab">Presupuestos</button>
@@ -21,7 +30,8 @@
       <span class="spacer"></span>
       <span class="who" id="who"></span>
       <button class="btn primary sm" id="btnNuevo">+ Nuevo</button>
-      <button class="btn ghost sm" id="btnConfig" aria-label="Configuración de acceso" title="Configuración de acceso">⚙</button>
+      <button class="btn ghost sm icon-btn" id="btnTema" aria-label="Cambiar tema claro u oscuro" title="Cambiar tema"></button>
+      <button class="btn ghost sm icon-btn" id="btnConfig" aria-label="Configuración de acceso" title="Configuración de acceso">⚙</button>
     </div>
     <nav class="nav" id="nav" aria-label="Secciones"></nav>
   </header>

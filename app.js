@@ -10,6 +10,7 @@ const LS = {
   demoPresu: "nexo_demo_presu",
   demoTickets: "nexo_demo_tickets",
   demoVer: "nexo_demo_ver",
+  tema: "nexo_tema",
 };
 // Subir esto invalida la copia demo guardada en el navegador.
 const DEMO_VERSION = "9";
@@ -627,6 +628,27 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("hashchange", router);
 const go = (h) => (location.hash = h);
 
+// ---- Tema claro / oscuro ----
+// El oscuro es el taupe de marca (el mundo "software"). La preferencia queda
+// en el navegador; sin elección guardada se sigue la del sistema.
+const temaActual = () => document.documentElement.getAttribute("data-theme") || "light";
+function alternarTema() {
+  const nuevo = temaActual() === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", nuevo);
+  localStorage.setItem(LS.tema, nuevo);
+  refrescarBotonTema();
+  // Los gráficos llevan el color en atributos SVG, no en CSS: hay que repintarlos.
+  router();
+}
+function refrescarBotonTema() {
+  const b = document.getElementById("btnTema");
+  if (!b) return;
+  const oscuro = temaActual() === "dark";
+  b.textContent = oscuro ? "☀" : "☾";
+  b.title = oscuro ? "Cambiar a tema claro" : "Cambiar a tema oscuro";
+  b.setAttribute("aria-label", b.title);
+}
+
 // El botón "+ Nuevo" crea la entidad del área activa.
 function nuevoDesdeContexto() {
   return go(state.ws === "presupuestos" ? "presuform/new" : "form/new");
@@ -635,6 +657,8 @@ function nuevoDesdeContexto() {
 function bindChrome() {
   document.querySelectorAll("#wsSwitch button").forEach((b) => (b.onclick = () => { state.ws = b.dataset.ws; go(WS_HOME[state.ws]); }));
   document.getElementById("btnNuevo").onclick = nuevoDesdeContexto;
+  document.getElementById("btnTema").onclick = alternarTema;
+  refrescarBotonTema();
   document.getElementById("btnConfig").onclick = openSetup;
   document.getElementById("setupCancel").onclick = closeSetup;
   document.getElementById("setupSave").onclick = saveSetup;
@@ -732,9 +756,17 @@ function renderDashboard() {
       ${renderBarras()}
     </div>`;
 }
+// El número es el protagonista de la tarjeta, pero un importe largo
+// ("US$ 19.700 · $ 800.000") no puede desbordarla: la escala baja por tramos
+// según cuántos caracteres tenga el valor.
 function kpi(label, num, sub, tone = "") {
-  const color = { warn: "var(--warn)", danger: "var(--danger)" }[tone];
-  return `<div class="kpi"><div class="label">${label}</div><div class="num"${color ? ` style="color:${color}"` : ""}>${num}</div><div class="sub">${sub}</div></div>`;
+  const txt = String(num);
+  const size = txt.length > 22 ? "xs" : txt.length > 15 ? "sm" : txt.length > 9 ? "md" : "lg";
+  return `<div class="kpi${tone ? " " + tone : ""}">
+    <div class="label">${label}</div>
+    <div class="num num-${size}">${num}</div>
+    ${sub ? `<div class="sub">${sub}</div>` : ""}
+  </div>`;
 }
 function alertRow(tipo, tag, c, detail) {
   return `<div class="alert-row" onclick="location.hash='detalle/${c.id}'" style="cursor:pointer">
@@ -2464,7 +2496,11 @@ function barra(label, val, max, sub) {
 }
 
 // ---- Gráficos (SVG vanilla, paleta de marca, sin dependencias) ----
-const CHART_PALETTE = ["#ef8f03", "#645d56", "#ffa62e", "#b26a00", "#8c867d", "#2e7d5b", "#c9c0b4"];
+// El taupe #645d56 es el FONDO del tema oscuro: ahí se volvería invisible,
+// así que cada tema tiene su propia serie (siempre dentro de la marca).
+const CHART_PAL_LIGHT = ["#ef8f03", "#645d56", "#ffa62e", "#b26a00", "#8c867d", "#2e7d5b", "#c9c0b4"];
+const CHART_PAL_DARK = ["#ffa62e", "#f4efe6", "#ef8f03", "#ff8a5c", "#c9c0b4", "#8fd6b4", "#a89e90"];
+const paleta = () => (document.documentElement.getAttribute("data-theme") === "dark" ? CHART_PAL_DARK : CHART_PAL_LIGHT);
 // Monto compacto para etiquetas de gráfico: US$ 36k / US$ 1,2M.
 function moneyK(n, m = "USD") {
   const s = m === "USD" ? "US$" : "$";
@@ -2482,7 +2518,7 @@ function chartDonut(items, { size = 148, thick = 24, centro = "" } = {}) {
   let off = 0;
   const segs = data.map((i, k) => {
     const len = C * (i.value / total);
-    const s = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${i.color || CHART_PALETTE[k % CHART_PALETTE.length]}" stroke-width="${thick}" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"><title>${esc(i.label)}: ${i.text || i.value}</title></circle>`;
+    const s = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${i.color || paleta()[k % paleta().length]}" stroke-width="${thick}" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"><title>${esc(i.label)}: ${i.text || i.value}</title></circle>`;
     off += len; return s;
   }).join("");
   return `<svg class="donut" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="Gráfico de dona">
@@ -2493,7 +2529,7 @@ function chartDonut(items, { size = 148, thick = 24, centro = "" } = {}) {
 // Leyenda para dona/series.
 function chartLegend(items) {
   return `<div class="legend">${items.filter((i) => i.value > 0).map((i, k) =>
-    `<span><i style="background:${i.color || CHART_PALETTE[k % CHART_PALETTE.length]}"></i>${esc(i.label)} <b>${i.text != null ? i.text : i.value}</b></span>`).join("")}</div>`;
+    `<span><i style="background:${i.color || paleta()[k % paleta().length]}"></i>${esc(i.label)} <b>${i.text != null ? i.text : i.value}</b></span>`).join("")}</div>`;
 }
 // Columnas verticales: items = [{label, value, color?, text?}].
 function chartColumns(items, { h = 130 } = {}) {
@@ -2505,11 +2541,14 @@ function chartColumns(items, { h = 130 } = {}) {
       <div class="col-lb">${esc(i.label)}</div></div>`).join("")}</div>`;
 }
 // Embudo: stages = [{label, value, text}]. Ancho proporcional al valor.
+// El color va del naranja de marca al taupe a medida que avanza la etapa:
+// se lee como un solo recorrido, no como categorías sueltas.
+const FUNNEL_COLORS = ["#ffc98a", "#ffa62e", "#ef8f03", "#c47404"];
 function chartFunnel(stages) {
   const max = Math.max(1, ...stages.map((s) => s.value));
   return `<div class="funnel">${stages.map((s, k) => `
     <div class="fn-row"><span class="fn-lb">${esc(s.label)}</span>
-      <div class="fn-track"><div class="fn-bar" style="width:${s.value > 0 ? Math.max(8, Math.round(s.value / max * 100)) : 0}%;background:${CHART_PALETTE[k % CHART_PALETTE.length]}"></div></div>
+      <div class="fn-track">${s.value > 0 ? `<div class="fn-bar" style="width:${Math.max(4, Math.round(s.value / max * 100))}%;background:${FUNNEL_COLORS[k % FUNNEL_COLORS.length]}"></div>` : ""}</div>
       <span class="fn-val">${s.text != null ? s.text : s.value}</span></div>`).join("")}</div>`;
 }
 // ---- Tablero del área de Presupuestos ----
