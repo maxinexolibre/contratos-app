@@ -195,6 +195,46 @@ fieldset legend { font: 800 13px var(--body); text-transform: uppercase; letter-
 .footer-legend { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--mut); font-size: 12px; margin-top: 40px; }
 .footer-grupo { height: 20px; width: auto; opacity: .9; }
 
+/* ---------- Estados de tickets y presupuestos ---------- */
+.badge.enviado { background: #e6eef5; color: #3d6b93; }
+.badge.abierto { background: #e6eef5; color: #3d6b93; }
+.badge.presupuestado { background: var(--orange-soft); color: var(--orange-hover); }
+.badge.ganado { background: var(--ok-soft); color: var(--ok); }
+.badge.perdido { background: #ece7e0; color: #857c70; }
+.badge.cerrado { background: #ece7e0; color: #857c70; }
+
+/* ---------- Editor de ítems (presupuestos) ---------- */
+.items-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.it-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.it-row > input, .it-row > select { flex: 1 1 auto; min-width: 90px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font-size: 13.5px; font-family: var(--body); background: var(--surface); }
+.it-row .rs-pri { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--taupe); font-weight: 600; white-space: nowrap; }
+.it-row .btn.danger { flex: 0 0 auto; }
+
+/* ---------- Previsualización de totales ---------- */
+.presu-totales { margin-top: 12px; }
+.totales-prev { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px 20px; font-size: 14px; }
+.totales-prev > div { display: flex; flex-direction: column; }
+.totales-prev .lb { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); font-weight: 600; }
+.totales-prev .accent { color: var(--orange); }
+
+/* ---------- Dirección: secciones, barras ---------- */
+h2.sect { font-family: var(--head); font-weight: 800; color: var(--taupe); font-size: 15px; text-transform: uppercase; letter-spacing: .05em; margin: 26px 0 12px; }
+.dir-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 6px; }
+@media (max-width: 780px) { .dir-2col { grid-template-columns: 1fr; } }
+.bar-row { display: grid; grid-template-columns: 190px 1fr 110px; gap: 10px; align-items: center; margin: 9px 0; font-size: 13.5px; }
+.bar-lb { color: var(--ink); font-weight: 600; }
+.bar-lb .bar-sub { color: var(--mut); font-weight: 400; margin-left: 6px; font-size: 12px; }
+.bar-track { background: var(--surface-2); border-radius: 8px; height: 14px; overflow: hidden; border: 1px solid var(--line); }
+.bar-fill { height: 100%; background: linear-gradient(90deg, var(--orange), #ffa62e); border-radius: 8px; }
+.bar-val { text-align: right; font-weight: 700; color: var(--taupe); white-space: nowrap; }
+.bar-total { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 14px; color: var(--taupe); }
+@media (max-width: 560px) { .bar-row { grid-template-columns: 1fr; } .bar-val { text-align: left; } }
+
+/* ---------- Reportes ---------- */
+.rep-filtros { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.rep-filtros .field { min-width: 130px; flex: 1 1 130px; }
+.data tfoot th { background: var(--surface-2); color: var(--ink); font-weight: 800; border-top: 2px solid var(--line-strong); }
+
 /* ---------- Print (PDF de marca) ---------- */
 #printRoot { display: none; }
 @media print {

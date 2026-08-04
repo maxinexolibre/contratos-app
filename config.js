@@ -4,5 +4,7 @@ window.NEXO_CONFIG = {
   owner: "maxinexolibre",
   dataRepo: "contratos-data",
   dataPath: "data/contratos.json",
+  presupuestosPath: "data/presupuestos.json",
+  ticketsPath: "data/tickets.json",
   branch: "main",
 };

@@ -7,19 +7,27 @@ const LS = {
   pat: "nexo_pat",
   user: "nexo_user",
   demo: "nexo_demo_data",
+  demoPresu: "nexo_demo_presu",
+  demoTickets: "nexo_demo_tickets",
   demoVer: "nexo_demo_ver",
 };
 // Subir esto invalida la copia demo guardada en el navegador.
-const DEMO_VERSION = "8";
+const DEMO_VERSION = "9";
 
 // -------- estado global --------
 const state = {
   mode: "demo", // 'connected' | 'demo'
-  data: [],
+  data: [],          // contratos / propuestas
   sha: null,
+  presupuestos: [],  // presupuestos (servicio / partes / equipos / saas)
+  presuSha: null,
+  tickets: [],       // tickets de pedido de cliente
+  ticketsSha: null,
   user: localStorage.getItem(LS.user) || "",
   selected: new Set(),
   filtro: { q: "", estado: "", modalidad: "" },
+  filtroPre: { q: "", estado: "", tipo: "" },
+  filtroTk: { q: "", estado: "" },
   editId: null,
   soloLectura: false, // se activa solo si el token no tiene permiso de escritura
 };
@@ -206,6 +214,72 @@ function migrar(c) {
   return c;
 }
 const migrarTodos = (arr) => (Array.isArray(arr) ? arr.map(migrar) : []);
+
+// ---- migración de tickets y presupuestos ----
+// Un ticket nace de un pedido de cliente y ata la trazabilidad: de él cuelgan
+// los presupuestos que se le hacen.
+const TK_ESTADOS = [
+  { id: "abierto", label: "Abierto", grupo: "abierto" },
+  { id: "presupuestado", label: "Presupuestado", grupo: "abierto" },
+  { id: "ganado", label: "Ganado", grupo: "cerrado" },
+  { id: "perdido", label: "Perdido", grupo: "cerrado" },
+  { id: "cerrado", label: "Cerrado", grupo: "cerrado" },
+];
+const TK_ESTADO_LABEL = Object.fromEntries(TK_ESTADOS.map((e) => [e.id, e.label]));
+const TK_TIPO_PEDIDO = {
+  servicio: "Servicio", parte: "Venta de partes", equipo: "Venta de equipo",
+  saas: "SaaS Cryo / Gestión", consulta: "Consulta general",
+};
+function migrarTicket(t) {
+  t.cliente = t.cliente || {};
+  const cl = t.cliente;
+  if (!Array.isArray(cl.razonesSociales)) cl.razonesSociales = cl.razonSocial ? [{ razonSocial: cl.razonSocial, cuit: cl.cuit || "", principal: true }] : [];
+  if (!cl.nombreComercial) cl.nombreComercial = cl.razonSocial || "";
+  t.estado = t.estado || "abierto";
+  t.tipoPedido = t.tipoPedido || "servicio";
+  t.presupuestoIds = t.presupuestoIds || [];
+  t.historial = t.historial || [];
+  return t;
+}
+const migrarTickets = (arr) => (Array.isArray(arr) ? arr.map(migrarTicket) : []);
+
+// Estados del presupuesto (pipeline comercial propio, distinto del de contratos).
+const PRE_ESTADOS = [
+  { id: "borrador", label: "Borrador", grupo: "abierto" },
+  { id: "enviado", label: "Enviado", grupo: "abierto" },
+  { id: "negociacion", label: "Negociación", grupo: "abierto" },
+  { id: "ganado", label: "Ganado", grupo: "ganado" },
+  { id: "perdido", label: "Perdido", grupo: "perdido" },
+];
+const PRE_ESTADO_LABEL = Object.fromEntries(PRE_ESTADOS.map((e) => [e.id, e.label]));
+const PRE_ABIERTOS = new Set(["borrador", "enviado", "negociacion"]);
+// Probabilidad de cierre por etapa, para ponderar el pipeline.
+const PRE_PROB = { borrador: 0.2, enviado: 0.5, negociacion: 0.7, ganado: 1, perdido: 0 };
+const PRE_TIPOS = {
+  servicio: { label: "Servicio", requiereTicket: true },
+  partes: { label: "Venta de partes", requiereTicket: false },
+  equipos: { label: "Venta de equipos", requiereTicket: false },
+  saas: { label: "SaaS Cryo / Gestión", requiereTicket: false },
+};
+function migrarPresupuesto(p) {
+  p.cliente = p.cliente || {};
+  const cl = p.cliente;
+  if (!Array.isArray(cl.razonesSociales)) cl.razonesSociales = cl.razonSocial ? [{ razonSocial: cl.razonSocial, cuit: cl.cuit || "", domicilio: "", principal: true }] : [];
+  if (!cl.nombreComercial) cl.nombreComercial = cl.razonSocial || "";
+  if (cl.razonesSociales.length && !cl.razonesSociales.some((r) => r.principal)) cl.razonesSociales[0].principal = true;
+  p.tipo = p.tipo || "servicio";
+  p.estado = p.estado || "borrador";
+  p.items = Array.isArray(p.items) ? p.items : [];
+  p.saas = Array.isArray(p.saas) ? p.saas : [];
+  p.economico = p.economico || { moneda: "USD", ivaPct: 21, validezDias: 15 };
+  if (p.economico.moneda == null) p.economico.moneda = "USD";
+  if (p.economico.ivaPct == null) p.economico.ivaPct = 21;
+  if (p.economico.validezDias == null) p.economico.validezDias = 15;
+  p.archivos = p.archivos || [];
+  p.historialEstados = p.historialEstados || [];
+  return p;
+}
+const migrarPresupuestos = (arr) => (Array.isArray(arr) ? arr.map(migrarPresupuesto) : []);
 // Razón social que firma/factura
 const rsPrincipal = (c) => (c.cliente?.razonesSociales || []).find((r) => r.principal) || (c.cliente?.razonesSociales || [])[0] || { razonSocial: "", cuit: "" };
 // Nombre que se muestra en toda la app
@@ -243,25 +317,37 @@ async function ghPuedeEscribir() {
     return !!(j.permissions?.push || j.permissions?.admin);
   } catch { return false; }
 }
-async function ghLoad() {
-  const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${CFG.dataPath}?ref=${CFG.branch}`;
+// Registro de los tres archivos de datos del repo privado. Cada uno se
+// carga y guarda por separado, con su propio sha, para que un cambio en
+// presupuestos no pise una edición de contratos hecha en paralelo.
+const STORE_DEF = {
+  contratos: { path: () => CFG.dataPath, key: "data", shaKey: "sha", ls: LS.demo, seed: () => DEMO_SEED, migrate: (a) => migrarTodos(a) },
+  presupuestos: { path: () => CFG.presupuestosPath, key: "presupuestos", shaKey: "presuSha", ls: LS.demoPresu, seed: () => DEMO_PRESU, migrate: (a) => migrarPresupuestos(a) },
+  tickets: { path: () => CFG.ticketsPath, key: "tickets", shaKey: "ticketsSha", ls: LS.demoTickets, seed: () => DEMO_TICKETS, migrate: (a) => migrarTickets(a) },
+};
+async function ghLoadFile(path) {
+  const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${path}?ref=${CFG.branch}`;
   const r = await fetch(url, { headers: ghHeaders() });
-  if (r.status === 404) return { data: [], sha: null };
+  if (r.status === 404) return { arr: [], sha: null };
   if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.json()).message || r.statusText}`);
   const j = await r.json();
-  return { data: migrarTodos(JSON.parse(b64decode(j.content))), sha: j.sha };
+  return { arr: JSON.parse(b64decode(j.content)), sha: j.sha };
 }
-async function ghSave(msg) {
-  const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${CFG.dataPath}`;
-  const body = {
-    message: msg,
-    content: b64encode(JSON.stringify(state.data, null, 2) + "\n"),
-    branch: CFG.branch,
-  };
-  if (state.sha) body.sha = state.sha;
+async function ghSaveFile(path, arr, sha, msg) {
+  const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${path}`;
+  const body = { message: msg, content: b64encode(JSON.stringify(arr, null, 2) + "\n"), branch: CFG.branch };
+  if (sha) body.sha = sha;
   const r = await fetch(url, { method: "PUT", headers: ghHeaders(), body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.json()).message || r.statusText}`);
-  state.sha = (await r.json()).content.sha;
+  return (await r.json()).content.sha;
+}
+// Carga un store desde el repo y lo migra. Los archivos de presupuestos y
+// tickets pueden no existir todavía (404) → arrancan vacíos.
+async function loadStore(store) {
+  const def = STORE_DEF[store];
+  const { arr, sha } = await ghLoadFile(def.path());
+  state[def.key] = def.migrate(arr);
+  state[def.shaKey] = sha;
 }
 async function ghUploadFile(path, base64, msg) {
   const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${path}`;
@@ -275,12 +361,13 @@ async function ghUploadFile(path, base64, msg) {
   if (!r.ok) throw new Error(`Upload ${r.status}`);
 }
 
-async function persist(msg) {
+async function persist(msg, store = "contratos") {
   if (state.soloLectura) throw new Error("Tu acceso es de solo lectura: podés consultar y descargar, no modificar.");
+  const def = STORE_DEF[store];
   if (state.mode === "connected") {
-    await ghSave(msg);
+    state[def.shaKey] = await ghSaveFile(def.path(), state[def.key], state[def.shaKey], msg);
   } else {
-    localStorage.setItem(LS.demo, JSON.stringify(state.data));
+    localStorage.setItem(def.ls, JSON.stringify(state[def.key]));
     localStorage.setItem(LS.demoVer, DEMO_VERSION);
     toast("Modo demo: cambios guardados solo en este navegador", true, false);
   }
@@ -348,6 +435,54 @@ const DEMO_SEED = [
   },
 ];
 
+// Datasets demo de tickets y presupuestos: FICTICIOS a propósito (repo público).
+const DEMO_TICKETS = [
+  {
+    id: "demo_tk1", numero: "TK-2026-001", fecha: "2026-02-10",
+    cliente: { nombreComercial: "Centro de Imágenes Ejemplo", razonesSociales: [{ razonSocial: "Centro de Imágenes Ejemplo S.A.", cuit: "30-00000000-0", principal: true }], contacto: "Contacto de ejemplo" },
+    tipoPedido: "servicio", descripcion: "Solicitan presupuesto de reparación de bobina de RF con falla intermitente.",
+    estado: "presupuestado", presupuestoIds: ["demo_pre1"], usuario: "demo", historial: [{ estado: "abierto", fecha: "2026-02-10", usuario: "demo" }, { estado: "presupuestado", fecha: "2026-02-12", usuario: "demo" }],
+  },
+];
+const DEMO_PRESU = [
+  {
+    id: "demo_pre1", numero: "PRE-2026-001", tipo: "servicio", estado: "enviado", fecha: "2026-02-12", ticketId: "demo_tk1",
+    cliente: { nombreComercial: "Centro de Imágenes Ejemplo", razonesSociales: [{ razonSocial: "Centro de Imágenes Ejemplo S.A.", cuit: "30-00000000-0", domicilio: "Calle Ejemplo 100", principal: true }], contacto: "Contacto de ejemplo", localidad: "Ciudad Ejemplo", provincia: "Buenos Aires" },
+    items: [
+      { detalle: "Diagnóstico y reparación electrónica de bobina de RF", cantidad: 1, unitario: 3200 },
+      { detalle: "Visita técnica y viáticos", cantidad: 1, unitario: 400 },
+    ],
+    saas: [],
+    economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15, formaPago: "50% anticipo, 50% contra entrega" },
+    notas: "Registro de ejemplo. Los datos reales se cargan al conectar con el repositorio privado.",
+    archivos: [], usuario: "demo", historialEstados: [{ estado: "borrador", fecha: "2026-02-12", usuario: "demo" }, { estado: "enviado", fecha: "2026-02-12", usuario: "demo" }],
+  },
+  {
+    id: "demo_pre2", numero: "PRE-2026-002", tipo: "partes", estado: "borrador", fecha: "2026-03-01",
+    cliente: { nombreComercial: "Diagnóstico Demo", razonesSociales: [{ razonSocial: "Diagnóstico Demo S.R.L.", cuit: "30-11111111-1", principal: true }], contacto: "Contacto de ejemplo", provincia: "Santa Fe" },
+    items: [
+      { detalle: "Gradient amplifier (reacondicionado)", sku: "GA-000", cantidad: 1, unitario: 18500, unitarioIntercambio: 12500, intercambio: true },
+    ],
+    saas: [],
+    economico: { moneda: "USD", ivaPct: 10.5, incluyeIVA: false, validezDias: 20, formaPago: "Contado" },
+    notas: "Registro de ejemplo.", archivos: [], usuario: "demo", historialEstados: [{ estado: "borrador", fecha: "2026-03-01", usuario: "demo" }],
+  },
+];
+
+// ---- numeración ----
+// TK-AAAA-NNN / PRE-AAAA-NNN, correlativo por año sobre lo ya existente.
+function proxNumero(arr, prefijo) {
+  const anio = new Date().getFullYear();
+  const rx = new RegExp(`^${prefijo}-${anio}-(\\d+)$`);
+  const max = (arr || []).reduce((m, x) => {
+    const g = (x.numero || "").match(rx);
+    return g ? Math.max(m, Number(g[1])) : m;
+  }, 0);
+  return `${prefijo}-${anio}-${String(max + 1).padStart(3, "0")}`;
+}
+const proxNumeroTicket = () => proxNumero(state.tickets, "TK");
+const proxNumeroPresu = () => proxNumero(state.presupuestos, "PRE");
+
 // ============================================================
 //  Init
 // ============================================================
@@ -356,10 +491,10 @@ async function init() {
   const pat = localStorage.getItem(LS.pat);
   if (pat) {
     try {
-      const { data, sha } = await ghLoad();
       state.mode = "connected";
-      state.data = data;
-      state.sha = sha;
+      await loadStore("contratos");
+      await loadStore("presupuestos");
+      await loadStore("tickets");
       state.soloLectura = !(await ghPuedeEscribir());
     } catch (e) {
       toast("No se pudo conectar: " + e.message + " — modo demo", true, true);
@@ -375,14 +510,18 @@ function loadDemo() {
   state.mode = "demo";
   // Si la semilla cambió de versión, la copia guardada queda obsoleta y se descarta:
   // si no, un navegador con datos viejos nunca vería los registros nuevos.
-  const saved = localStorage.getItem(LS.demo);
   const ver = localStorage.getItem(LS.demoVer);
-  state.data = saved && ver === DEMO_VERSION ? migrarTodos(JSON.parse(saved)) : structuredClone(DEMO_SEED).map(migrar);
+  const vigente = ver === DEMO_VERSION;
+  for (const store of Object.keys(STORE_DEF)) {
+    const def = STORE_DEF[store];
+    const saved = localStorage.getItem(def.ls);
+    state[def.key] = vigente && saved ? def.migrate(JSON.parse(saved)) : def.migrate(structuredClone(def.seed()));
+    state[def.shaKey] = null;
+  }
   localStorage.setItem(LS.demoVer, DEMO_VERSION);
 }
 function resetDemo() {
-  localStorage.removeItem(LS.demo);
-  localStorage.removeItem(LS.demoVer);
+  [LS.demo, LS.demoPresu, LS.demoTickets, LS.demoVer].forEach((k) => localStorage.removeItem(k));
   loadDemo();
   toast("Datos demo restablecidos");
   closeSetup();
@@ -409,15 +548,29 @@ function router() {
   document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   const target = document.getElementById("view-" + name) || document.getElementById("view-dashboard");
   target.classList.add("active");
-  const R = { dashboard: renderDashboard, pipeline: renderPipeline, listado: renderListado, agenda: renderAgenda, detalle: () => renderDetalle(view[1]), form: () => renderForm(view[1]) };
+  const R = {
+    dashboard: renderDashboard, pipeline: renderPipeline, listado: renderListado, agenda: renderAgenda,
+    detalle: () => renderDetalle(view[1]), form: () => renderForm(view[1]),
+    presupuestos: renderPresupuestos, presudetalle: () => renderPresuDetalle(view[1]), presuform: () => renderPresuForm(view[1], view[2]),
+    tickets: renderTickets, tkdetalle: () => renderTicketDetalle(view[1]), tkform: () => renderTicketForm(view[1]),
+    direccion: renderDireccion, reportes: renderReportes,
+  };
   (R[name] || renderDashboard)();
 }
 window.addEventListener("hashchange", router);
 const go = (h) => (location.hash = h);
 
+// El botón "+ Nuevo" del topbar crea la entidad de la sección donde estás.
+function nuevoDesdeContexto() {
+  const name = (location.hash.replace("#", "") || "dashboard").split("/")[0];
+  if (name.startsWith("presu")) return go("presuform/new");
+  if (name.startsWith("tk") || name === "tickets") return go("tkform/new");
+  return go("form/new");
+}
+
 function bindChrome() {
   document.querySelectorAll("#nav button").forEach((b) => (b.onclick = () => go(b.dataset.view)));
-  document.getElementById("btnNuevo").onclick = () => go("form/new");
+  document.getElementById("btnNuevo").onclick = nuevoDesdeContexto;
   document.getElementById("btnConfig").onclick = openSetup;
   document.getElementById("setupCancel").onclick = closeSetup;
   document.getElementById("setupSave").onclick = saveSetup;
@@ -1516,6 +1669,864 @@ function exportarInforme() {
       Los importes son netos de IVA salvo donde se indica lo contrario.<br>
       <b>Documento de circulación interna.</b> Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.
     </div>`;
+  window.print();
+}
+
+// ============================================================
+//  TICKETS  (pedidos de cliente — trazabilidad ligera)
+// ============================================================
+const ticketPorId = (id) => state.tickets.find((t) => t.id === id);
+const presupuestosDeTicket = (tk) => state.presupuestos.filter((p) => p.ticketId === tk.id);
+
+function renderTickets() {
+  const el = document.getElementById("view-tickets");
+  const q = state.filtroTk.q.toLowerCase();
+  const rows = state.tickets.filter((t) => {
+    if (state.filtroTk.estado && t.estado !== state.filtroTk.estado) return false;
+    if (q && !(`${t.numero} ${t.cliente?.nombreComercial || ""} ${t.descripcion || ""}`.toLowerCase().includes(q))) return false;
+    return true;
+  }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const abiertos = state.tickets.filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto").length;
+  el.innerHTML = `
+    <div class="kicker">Pedidos de cliente</div>
+    <div class="page-head">
+      <h1><span class="accent">Tickets</span></h1>
+      ${state.soloLectura ? "" : `<button class="btn primary sm" onclick="location.hash='tkform/new'">+ Nuevo ticket</button>`}
+    </div>
+    <div class="table-tools">
+      <input type="search" id="tkq" placeholder="Buscar cliente, N° o descripción…" value="${esc(state.filtroTk.q)}" />
+      <select id="tkfe"><option value="">Todos los estados</option>${TK_ESTADOS.map((e) => `<option value="${e.id}" ${state.filtroTk.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
+      <span class="muted" style="font-size:13px">${abiertos} abierto${abiertos === 1 ? "" : "s"} · ${rows.length} de ${state.tickets.length}</span>
+    </div>
+    <div class="overflow"><table class="data">
+      <thead><tr><th>N°</th><th>Fecha</th><th>Cliente</th><th>Pedido</th><th>Estado</th><th>Presup.</th></tr></thead>
+      <tbody>${rows.map(ticketRow).join("") || `<tr><td colspan="6" class="empty">Sin tickets todavía.</td></tr>`}</tbody>
+    </table></div>`;
+  document.getElementById("tkq").oninput = (e) => { state.filtroTk.q = e.target.value; renderTickets(); };
+  document.getElementById("tkfe").onchange = (e) => { state.filtroTk.estado = e.target.value; renderTickets(); };
+}
+function ticketRow(t) {
+  const np = presupuestosDeTicket(t).length;
+  return `<tr onclick="location.hash='tkdetalle/${t.id}'">
+    <td><b>${esc(t.numero)}</b></td>
+    <td>${fmt(t.fecha)}</td>
+    <td><b>${esc(t.cliente?.nombreComercial || "—")}</b></td>
+    <td>${esc(TK_TIPO_PEDIDO[t.tipoPedido] || t.tipoPedido)}<br><span class="muted" style="font-size:12px">${esc((t.descripcion || "").slice(0, 70))}${(t.descripcion || "").length > 70 ? "…" : ""}</span></td>
+    <td><span class="badge ${t.estado}">${TK_ESTADO_LABEL[t.estado]}</span></td>
+    <td>${np || "—"}</td></tr>`;
+}
+function renderTicketDetalle(id) {
+  const t = ticketPorId(id);
+  const el = document.getElementById("view-tkdetalle");
+  if (!t) { el.innerHTML = `<p class="empty">No encontrado. <a href="#tickets">Volver</a></p>`; return; }
+  const presus = presupuestosDeTicket(t);
+  const ro = state.soloLectura;
+  el.innerHTML = `
+    <div class="page-head">
+      <div>
+        <div class="kicker">Ticket · <span class="badge ${t.estado}">${TK_ESTADO_LABEL[t.estado]}</span></div>
+        <h1>${esc(t.cliente?.nombreComercial || "—")}</h1>
+        <p class="muted">${esc(t.numero)} · ${fmt(t.fecha)} · ${esc(TK_TIPO_PEDIDO[t.tipoPedido] || "")}${t.cliente?.contacto ? " · " + esc(t.cliente.contacto) : ""}</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${ro ? "" : `<button class="btn sm" onclick="location.hash='tkform/${t.id}'">✎ Editar</button>`}
+        ${ro ? "" : `<button class="btn primary sm" onclick="location.hash='presuform/new/${t.id}'">+ Presupuesto</button>`}
+        ${ro ? "" : estadoTicketBtns(t)}
+      </div>
+    </div>
+    <div class="detail-grid">
+      <div>
+        <div class="card"><h3>Pedido</h3><p style="font-size:14px;white-space:pre-wrap">${esc(t.descripcion || "—")}</p></div>
+        <div class="card"><h3>Presupuestos vinculados</h3>
+          ${presus.length ? `<div class="overflow"><table class="data"><thead><tr><th>N°</th><th>Tipo</th><th>Estado</th><th>Total</th></tr></thead>
+            <tbody>${presus.map((p) => { const v = valorPresu(p); return `<tr onclick="location.hash='presudetalle/${p.id}'">
+              <td><b>${esc(p.numero)}</b></td><td>${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)}</td>
+              <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span></td>
+              <td>${money(v.unaVez || v.mensual, v.moneda)}${v.mensual ? "/mes" : ""}</td></tr>`; }).join("")}</tbody></table></div>`
+            : `<p class="muted" style="font-size:13px">Todavía sin presupuestos. ${ro ? "" : `<a href="#presuform/new/${t.id}">Crear uno</a>.`}</p>`}
+        </div>
+      </div>
+      <div>
+        <div class="card"><h3>Cliente</h3>
+          <dl class="kv">
+            <dt>Nombre</dt><dd><b>${esc(t.cliente?.nombreComercial || "—")}</b></dd>
+            <dt>Contacto</dt><dd>${esc(t.cliente?.contacto || "—")}</dd>
+            <dt>Razón social</dt><dd>${esc(rsPrincipal(t).razonSocial || "—")}</dd>
+          </dl>
+        </div>
+        <div class="card"><h3>Trazabilidad</h3>
+          <ul class="tl">${(t.historial || []).slice().reverse().map((h) => `<li><span class="est">${TK_ESTADO_LABEL[h.estado] || h.estado}</span> <span class="fch">${fmt(h.fecha)} · ${esc(h.usuario || "")}</span></li>`).join("") || '<li class="muted">Sin movimientos</li>'}</ul>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:14px"><a href="#tickets">← Volver a tickets</a></p>`;
+}
+function estadoTicketBtns(t) {
+  const b = [];
+  if (t.estado === "abierto" || t.estado === "presupuestado") {
+    b.push(`<button class="btn sm" onclick="cambiarEstadoTicket('${t.id}','ganado')">✔ Ganado</button>`);
+    b.push(`<button class="btn sm danger" onclick="cambiarEstadoTicket('${t.id}','perdido')">✕ Perdido</button>`);
+  }
+  if (t.estado !== "cerrado" && t.estado !== "abierto") b.push(`<button class="btn sm" onclick="cambiarEstadoTicket('${t.id}','cerrado')">Cerrar</button>`);
+  return b.join("");
+}
+async function cambiarEstadoTicket(id, nuevo) {
+  const t = ticketPorId(id);
+  if (!t) return;
+  t.estado = nuevo;
+  t.historial = t.historial || [];
+  t.historial.push({ estado: nuevo, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
+  try { await persist(`Ticket ${t.numero} → ${nuevo}`, "tickets"); toast(`${t.numero}: ${TK_ESTADO_LABEL[nuevo]}`); router(); }
+  catch (e) { toast("Error: " + e.message, true, true); }
+}
+function nuevoTicket() {
+  const d = new Date().toISOString().slice(0, 10);
+  return {
+    id: "tk_" + Date.now(), numero: proxNumeroTicket(), fecha: d,
+    cliente: { nombreComercial: "", razonesSociales: [], contacto: "" },
+    tipoPedido: "servicio", descripcion: "", estado: "abierto", presupuestoIds: [],
+    usuario: state.user || "—", historial: [{ estado: "abierto", fecha: d, usuario: state.user || "—" }],
+  };
+}
+function renderTicketForm(id) {
+  const el = document.getElementById("view-tkform");
+  const isNew = !id || id === "new";
+  const t = isNew ? nuevoTicket() : structuredClone(ticketPorId(id));
+  if (!t) { el.innerHTML = `<p class="empty">No encontrado</p>`; return; }
+  window._draftTk = t;
+  el.innerHTML = `
+    <div class="kicker">${isNew ? "Alta" : "Edición"}</div>
+    <div class="page-head"><h1>${isNew ? "Nuevo" : "Editar"} <span class="accent">ticket</span></h1></div>
+    <form id="tkform">
+      <fieldset><legend>Pedido</legend><div class="form-grid">
+        ${inp("Cliente (nombre comercial)", "cliente.nombreComercial", t.cliente?.nombreComercial, "full")}
+        ${inp("Contacto", "cliente.contacto", t.cliente?.contacto)}
+        ${sel("Tipo de pedido", "tipoPedido", t.tipoPedido, Object.entries(TK_TIPO_PEDIDO))}
+        ${!isNew ? sel("Estado", "estado", t.estado, TK_ESTADOS.map((e) => [e.id, e.label])) : ""}
+      </div>
+      <div class="field full" style="margin-top:12px"><label>Descripción del pedido</label>
+        <textarea data-path="descripcion" rows="4" placeholder="Qué necesita el cliente, equipo involucrado, urgencia…">${esc(t.descripcion || "")}</textarea></div>
+      </fieldset>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button type="button" class="btn ghost" onclick="location.hash='${isNew ? "tickets" : "tkdetalle/" + id}'">Cancelar</button>
+        <button type="submit" class="btn primary">${isNew ? "Crear ticket" : "Guardar"}</button>
+      </div>
+    </form>`;
+  document.getElementById("tkform").onsubmit = (e) => { e.preventDefault(); guardarTicket(isNew, id); };
+}
+async function guardarTicket(isNew, id) {
+  const t = window._draftTk;
+  const prev = isNew ? null : ticketPorId(id)?.estado;
+  document.querySelectorAll("#tkform [data-path]").forEach((f) => setPath(t, f.dataset.path, f.value));
+  if (!t.cliente.nombreComercial) { toast("Falta el nombre del cliente", true, true); return; }
+  if (!t.cliente.razonesSociales) t.cliente.razonesSociales = [];
+  if (!isNew && prev !== t.estado) t.historial.push({ estado: t.estado, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
+  if (isNew) state.tickets.push(t);
+  else { const i = state.tickets.findIndex((x) => x.id === id); state.tickets[i] = t; }
+  try { await persist(`${isNew ? "Alta" : "Edición"} ticket ${t.numero} · ${t.cliente.nombreComercial}`, "tickets"); go("tkdetalle/" + t.id); toast(isNew ? "Ticket creado ✓" : "Guardado ✓"); }
+  catch (e) { toast("Error: " + e.message, true, true); }
+}
+
+// ============================================================
+//  PRESUPUESTOS
+// ============================================================
+const presuPorId = (id) => state.presupuestos.find((p) => p.id === id);
+// Valor de un presupuesto, neto de IVA (para pipeline, dashboard y reportes).
+function valorPresu(p) {
+  const cc = NEXO_PRESUPUESTO.calcPresupuesto(p);
+  return { unaVez: cc.netoUnaVez, mensual: cc.abonoMensualNeto, anual: cc.netoUnaVez + cc.abonoMensualNeto * 12, moneda: cc.moneda };
+}
+const CATEGORIAS_EQUIPO = ["Equipo", "Logística e instalación", "Puesta en marcha y garantía", "Capacitación", "Financiación"];
+
+function renderPresupuestos() {
+  const el = document.getElementById("view-presupuestos");
+  const q = state.filtroPre.q.toLowerCase();
+  const rows = state.presupuestos.filter((p) => {
+    if (state.filtroPre.tipo && p.tipo !== state.filtroPre.tipo) return false;
+    if (state.filtroPre.estado && p.estado !== state.filtroPre.estado) return false;
+    const rs = (p.cliente?.razonesSociales || []).map((r) => r.razonSocial).join(" ");
+    if (q && !(`${p.numero} ${p.cliente?.nombreComercial || ""} ${rs}`.toLowerCase().includes(q))) return false;
+    return true;
+  }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const abiertos = state.presupuestos.filter((p) => PRE_ABIERTOS.has(p.estado));
+  const pipe = abiertos.reduce((s, p) => s + valorPresu(p).anual, 0);
+  el.innerHTML = `
+    <div class="kicker">Cotizaciones</div>
+    <div class="page-head">
+      <h1>Todos los <span class="accent">presupuestos</span></h1>
+      <div style="display:flex;gap:8px">
+        <button class="btn sm" onclick="exportarPresuCSV()">⬇ CSV</button>
+        ${state.soloLectura ? "" : `<button class="btn primary sm" onclick="location.hash='presuform/new'">+ Nuevo</button>`}
+      </div>
+    </div>
+    <div class="table-tools">
+      <input type="search" id="pq" placeholder="Buscar cliente o N°…" value="${esc(state.filtroPre.q)}" />
+      <select id="pfe"><option value="">Todos los estados</option>${PRE_ESTADOS.map((e) => `<option value="${e.id}" ${state.filtroPre.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
+      <select id="pft"><option value="">Todo tipo</option>${Object.entries(PRE_TIPOS).map(([k, v]) => `<option value="${k}" ${state.filtroPre.tipo === k ? "selected" : ""}>${v.label}</option>`).join("")}</select>
+      <span class="muted" style="font-size:13px">${abiertos.length} abiertos · ${money(pipe)} anualizado en juego</span>
+    </div>
+    <div class="overflow"><table class="data">
+      <thead><tr><th>N°</th><th>Fecha</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th>Total</th></tr></thead>
+      <tbody>${rows.map(presuRow).join("") || `<tr><td colspan="6" class="empty">Sin presupuestos todavía.</td></tr>`}</tbody>
+    </table></div>`;
+  document.getElementById("pq").oninput = (e) => { state.filtroPre.q = e.target.value; renderPresupuestos(); };
+  document.getElementById("pfe").onchange = (e) => { state.filtroPre.estado = e.target.value; renderPresupuestos(); };
+  document.getElementById("pft").onchange = (e) => { state.filtroPre.tipo = e.target.value; renderPresupuestos(); };
+}
+function presuRow(p) {
+  const v = valorPresu(p);
+  const totalTxt = v.mensual && v.unaVez ? `${money(v.unaVez, v.moneda)} + ${money(v.mensual, v.moneda)}/mes`
+    : v.mensual ? `${money(v.mensual, v.moneda)}/mes` : money(v.unaVez, v.moneda);
+  return `<tr onclick="location.hash='presudetalle/${p.id}'">
+    <td><b>${esc(p.numero)}</b></td>
+    <td>${fmt(p.fecha)}</td>
+    <td><b>${esc(p.cliente?.nombreComercial || "—")}</b></td>
+    <td>${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)}</td>
+    <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span></td>
+    <td>${totalTxt}</td></tr>`;
+}
+function renderPresuDetalle(id) {
+  const p = presuPorId(id);
+  const el = document.getElementById("view-presudetalle");
+  if (!p) { el.innerHTML = `<p class="empty">No encontrado. <a href="#presupuestos">Volver</a></p>`; return; }
+  const cc = NEXO_PRESUPUESTO.calcPresupuesto(p);
+  const tk = p.ticketId ? ticketPorId(p.ticketId) : null;
+  const ro = state.soloLectura;
+  el.innerHTML = `
+    <div class="page-head">
+      <div>
+        <div class="kicker">${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)} · <span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span></div>
+        <h1>${esc(p.cliente?.nombreComercial || "—")}</h1>
+        <p class="muted">${esc(p.numero)} · ${fmt(p.fecha)}${tk ? ` · <a href="#tkdetalle/${tk.id}">ticket ${esc(tk.numero)}</a>` : ""}</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${ro ? "" : `<button class="btn sm" onclick="location.hash='presuform/${p.id}'">✎ Editar</button>`}
+        <button class="btn sm" onclick="generarPresuPDF('${p.id}')">🧾 Ver / imprimir</button>
+        <button class="btn sm" onclick="generarPresupuestoDocx('${p.id}')" title="Descarga un .docx editable">⬇ Descargar .docx</button>
+        ${ro ? "" : estadoPresuBtns(p)}
+      </div>
+    </div>
+    <div class="detail-grid">
+      <div>
+        <div class="card"><h3>Ítems</h3>${renderPresuItemsTabla(p)}</div>
+        ${p.notas ? `<div class="card"><h3>Notas</h3><p style="font-size:14px;white-space:pre-wrap">${esc(p.notas)}</p></div>` : ""}
+      </div>
+      <div>
+        <div class="card"><h3>Totales</h3>
+          <dl class="kv">
+            ${cc.hayUnaVez ? `<dt>Neto (única vez)</dt><dd>${money(cc.netoUnaVez, cc.moneda)}</dd>
+              <dt>IVA ${cc.ivaPct}%</dt><dd>${money(cc.ivaUnaVez, cc.moneda)}</dd>
+              <dt>Total única vez</dt><dd><b>${money(cc.totalUnaVez, cc.moneda)}</b></dd>` : ""}
+            ${cc.hayRecurrente ? `<dt>Abono mensual neto</dt><dd>${money(cc.abonoMensualNeto, cc.moneda)}</dd>
+              <dt>Total mensual c/IVA</dt><dd><b>${money(cc.totalMensual, cc.moneda)}</b></dd>` : ""}
+          </dl>
+        </div>
+        <div class="card"><h3>Condiciones</h3>
+          <dl class="kv">
+            <dt>Forma de pago</dt><dd>${esc(p.economico?.formaPago || "—")}</dd>
+            <dt>Validez</dt><dd>${p.economico?.validezDias || "—"} días</dd>
+            <dt>Moneda</dt><dd>${p.economico?.moneda || "USD"}</dd>
+          </dl>
+        </div>
+        <div class="card"><h3>Trazabilidad</h3>
+          <ul class="tl">${(p.historialEstados || []).slice().reverse().map((h) => `<li><span class="est">${PRE_ESTADO_LABEL[h.estado] || h.estado}</span> <span class="fch">${fmt(h.fecha)} · ${esc(h.usuario || "")}</span></li>`).join("") || '<li class="muted">Sin movimientos</li>'}</ul>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:14px"><a href="#presupuestos">← Volver a presupuestos</a></p>`;
+}
+function renderPresuItemsTabla(p) {
+  const m = NEXO_PRESUPUESTO.construirPresupuesto(p, { plantilla: false });
+  const t = m.tabla;
+  let html = `<div class="overflow"><table class="data"><thead><tr>${t.head.map((h) => `<th${h.num ? ' style="text-align:right"' : ""}>${h.t}</th>`).join("")}</tr></thead><tbody>`;
+  html += t.rows.map((r) => `<tr>${r.map((c, i) => `<td${t.head[i]?.num ? ' style="text-align:right"' : ""}>${c.strong ? `<b>${c.t}</b>` : c.t}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${t.head.length}" class="muted">Sin ítems</td></tr>`;
+  html += `</tbody></table></div>`;
+  if (m.saasTabla) {
+    html += `<h4 style="margin:12px 0 4px;color:var(--taupe)">SaaS</h4><div class="overflow"><table class="data"><thead><tr>${m.saasTabla.head.map((h) => `<th${h.num ? ' style="text-align:right"' : ""}>${h.t}</th>`).join("")}</tr></thead><tbody>${m.saasTabla.rows.map((r) => `<tr>${r.map((c, i) => `<td${m.saasTabla.head[i]?.num ? ' style="text-align:right"' : ""}>${c.t}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  }
+  return html;
+}
+function estadoPresuBtns(p) {
+  const flujo = ["borrador", "enviado", "negociacion", "ganado"];
+  const b = [];
+  const i = flujo.indexOf(p.estado);
+  if (i >= 0 && i < flujo.length - 1) b.push(`<button class="btn primary sm" onclick="cambiarEstadoPresu('${p.id}','${flujo[i + 1]}')">→ ${PRE_ESTADO_LABEL[flujo[i + 1]]}</button>`);
+  if (PRE_ABIERTOS.has(p.estado)) b.push(`<button class="btn sm danger" onclick="cambiarEstadoPresu('${p.id}','perdido')">✕ Perdido</button>`);
+  return b.join("");
+}
+async function cambiarEstadoPresu(id, nuevo) {
+  const p = presuPorId(id);
+  if (!p) return;
+  p.estado = nuevo;
+  p.historialEstados = p.historialEstados || [];
+  p.historialEstados.push({ estado: nuevo, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
+  try {
+    await persist(`Presupuesto ${p.numero} → ${nuevo}`, "presupuestos");
+    // Si se gana un presupuesto de un ticket, el ticket pasa a ganado.
+    if (nuevo === "ganado" && p.ticketId) { const tk = ticketPorId(p.ticketId); if (tk && tk.estado !== "ganado") await cambiarEstadoTicket(tk.id, "ganado"); }
+    toast(`${p.numero}: ${PRE_ESTADO_LABEL[nuevo]}`);
+    router();
+  } catch (e) { toast("Error: " + e.message, true, true); }
+}
+
+function nuevoPresupuesto(ticketId) {
+  const d = new Date().toISOString().slice(0, 10);
+  const tk = ticketId ? ticketPorId(ticketId) : null;
+  const tipoDeTk = { servicio: "servicio", parte: "partes", equipo: "equipos", saas: "saas" };
+  return {
+    id: "pre_" + Date.now(), numero: proxNumeroPresu(), tipo: tk ? (tipoDeTk[tk.tipoPedido] || "servicio") : "servicio",
+    estado: "borrador", fecha: d, ticketId: tk?.id || "", ticketNumero: tk?.numero || "",
+    cliente: tk ? structuredClone(tk.cliente) : { nombreComercial: "", razonesSociales: [{ razonSocial: "", cuit: "", domicilio: "", principal: true }], contacto: "", localidad: "", provincia: "" },
+    items: [], saas: [],
+    economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15, formaPago: "", descuentoPct: 0 },
+    notas: "", archivos: [], usuario: state.user || "—", historialEstados: [{ estado: "borrador", fecha: d, usuario: state.user || "—" }],
+  };
+}
+function renderPresuForm(id, ticketId) {
+  const el = document.getElementById("view-presuform");
+  const isNew = !id || id === "new";
+  const p = isNew ? nuevoPresupuesto(ticketId) : structuredClone(presuPorId(id));
+  if (!p) { el.innerHTML = `<p class="empty">No encontrado</p>`; return; }
+  if (!p.cliente.razonesSociales?.length) p.cliente.razonesSociales = [{ razonSocial: "", cuit: "", domicilio: "", principal: true }];
+  window._draftPre = p;
+  const eco = p.economico;
+  const ticketsAbiertos = state.tickets.filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto" || t.id === p.ticketId);
+  el.innerHTML = `
+    <div class="kicker">${isNew ? "Alta" : "Edición"}</div>
+    <div class="page-head"><h1>${isNew ? "Nuevo" : "Editar"} <span class="accent">presupuesto</span></h1></div>
+    <form id="pform">
+      <fieldset><legend>Tipo y pedido</legend><div class="form-grid">
+        ${sel("Tipo de presupuesto", "tipo", p.tipo, Object.entries(PRE_TIPOS).map(([k, v]) => [k, v.label]))}
+        <div class="field"><label>Ticket vinculado <span class="hint">(pedido del cliente)</span></label>
+          <select data-path="ticketId" id="preTicket"><option value="">— sin ticket —</option>${ticketsAbiertos.map((t) => `<option value="${t.id}" ${p.ticketId === t.id ? "selected" : ""}>${esc(t.numero)} · ${esc(t.cliente?.nombreComercial || "")}</option>`).join("")}</select></div>
+        ${!isNew ? sel("Estado", "estado", p.estado, PRE_ESTADOS.map((e) => [e.id, e.label])) : ""}
+      </div>
+      <p class="hint" id="tipoHint" style="margin:6px 0 0"></p>
+      </fieldset>
+
+      <fieldset><legend>Cliente</legend><div class="form-grid">
+        ${inp("Nombre comercial", "cliente.nombreComercial", p.cliente.nombreComercial, "full")}
+        ${inp("Contacto", "cliente.contacto", p.cliente.contacto)}
+        ${inp("Localidad", "cliente.localidad", p.cliente.localidad)}
+        ${inp("Provincia", "cliente.provincia", p.cliente.provincia)}
+      </div>
+      <div style="margin-top:14px">
+        <label style="font-weight:700;font-size:13px">Razones sociales <span class="hint">— marcá la que factura.</span></label>
+        <div class="rs-list" id="preRazones">${p.cliente.razonesSociales.map(rsRow).join("")}</div>
+        <button type="button" class="btn sm" onclick="document.getElementById('preRazones').insertAdjacentHTML('beforeend', rsRow({}))">+ Razón social</button>
+      </div></fieldset>
+
+      <div id="itemsSection">${renderPresuItemsSection()}</div>
+
+      <fieldset><legend>Condiciones económicas</legend><div class="form-grid">
+        ${sel("Moneda", "economico.moneda", eco.moneda, [["USD", "USD"], ["ARS", "ARS"]])}
+        ${inp("IVA %", "economico.ivaPct", eco.ivaPct, "", "number")}
+        ${inp("Descuento % (única vez)", "economico.descuentoPct", eco.descuentoPct || 0, "", "number")}
+        ${inp("Validez (días)", "economico.validezDias", eco.validezDias, "", "number")}
+        ${inp("Forma de pago", "economico.formaPago", eco.formaPago, "full")}
+      </div>
+      <div class="check-row" style="margin-top:12px">${chk("Los precios ya incluyen IVA", "economico.incluyeIVA", eco.incluyeIVA)}</div>
+      </fieldset>
+
+      <fieldset><legend>Notas</legend><div class="field full"><textarea data-path="notas" rows="3">${esc(p.notas || "")}</textarea></div></fieldset>
+
+      <div class="presu-totales card" id="preTotales"></div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
+        <button type="button" class="btn ghost" onclick="location.hash='${isNew ? "presupuestos" : "presudetalle/" + id}'">Cancelar</button>
+        <button type="submit" class="btn primary">${isNew ? "Crear presupuesto" : "Guardar"}</button>
+      </div>
+    </form>`;
+  const form = document.getElementById("pform");
+  form.onsubmit = (e) => { e.preventDefault(); guardarPresu(isNew, id); };
+  form.querySelector('[data-path="tipo"]').onchange = onTipoPresuChange;
+  form.addEventListener("input", refrescarTotalesPresu);
+  actualizarTipoHint();
+  refrescarTotalesPresu();
+}
+// Sección de ítems (depende del tipo). Se re-renderiza al cambiar el tipo.
+function renderPresuItemsSection() {
+  const p = window._draftPre;
+  const tipo = p.tipo;
+  const itemsLegend = tipo === "partes" ? "Partes a cotizar" : tipo === "equipos" ? "Equipo y conceptos" : tipo === "saas" ? "Ítems adicionales (opcional)" : "Ítems / servicios";
+  return `
+    <fieldset><legend>${itemsLegend}</legend>
+      <div class="items-list" id="preItems" data-tipo="${tipo}">${(p.items || []).map((it) => itemRow(tipo, it)).join("")}</div>
+      <button type="button" class="btn sm" onclick="document.getElementById('preItems').insertAdjacentHTML('beforeend', itemRow(document.getElementById('preItems').dataset.tipo, {}));refrescarTotalesPresu()">+ Ítem</button>
+    </fieldset>
+    <fieldset><legend>Servicios SaaS ${tipo === "saas" ? "" : "(add-on opcional)"}</legend>
+      <p class="hint" style="margin:0 0 8px">Abono mensual de Cryo / Gestión, con setup inicial si aplica. Se puede sumar a cualquier presupuesto.</p>
+      <div class="items-list" id="preSaas">${(p.saas || []).map(saasRow).join("")}</div>
+      <button type="button" class="btn sm" onclick="document.getElementById('preSaas').insertAdjacentHTML('beforeend', saasRow({}));refrescarTotalesPresu()">+ Servicio SaaS</button>
+    </fieldset>`;
+}
+function itemRow(tipo, it = {}) {
+  if (tipo === "partes") return `<div class="it-row it-partes">
+    <input placeholder="Detalle de la parte" data-it="detalle" value="${esc(it.detalle || "")}">
+    <input placeholder="SKU" data-it="sku" value="${esc(it.sku || "")}" style="max-width:110px">
+    <input type="number" placeholder="Cant." data-it="cantidad" value="${it.cantidad ?? 1}" style="max-width:70px">
+    <input type="number" placeholder="P. lista" data-it="unitario" value="${it.unitario ?? ""}" style="max-width:110px">
+    <input type="number" placeholder="P. c/interc." data-it="unitarioIntercambio" value="${it.unitarioIntercambio ?? ""}" style="max-width:110px">
+    <label class="rs-pri" title="Aplica el precio con intercambio"><input type="checkbox" data-it="intercambio" ${it.intercambio ? "checked" : ""}> interc.</label>
+    <button type="button" class="btn sm danger" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
+  </div>`;
+  const catSel = tipo === "equipos"
+    ? `<select data-it="categoria" style="max-width:150px">${CATEGORIAS_EQUIPO.map((c) => `<option ${it.categoria === c ? "selected" : ""}>${c}</option>`).join("")}</select>`
+    : "";
+  return `<div class="it-row">
+    ${catSel}
+    <input placeholder="Detalle" data-it="detalle" value="${esc(it.detalle || "")}">
+    <input type="number" placeholder="Cant." data-it="cantidad" value="${it.cantidad ?? 1}" style="max-width:70px">
+    <input type="number" placeholder="Unitario" data-it="unitario" value="${it.unitario ?? ""}" style="max-width:120px">
+    <button type="button" class="btn sm danger" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
+  </div>`;
+}
+function saasRow(x = {}) {
+  return `<div class="it-row it-saas">
+    <select data-sa="producto" style="max-width:150px"><option value="cryo" ${x.producto === "cryo" ? "selected" : ""}>Cryo</option><option value="gestion" ${x.producto === "gestion" ? "selected" : ""}>Gestión</option></select>
+    <input placeholder="Detalle (opcional)" data-sa="detalle" value="${esc(x.detalle || "")}">
+    <input type="number" placeholder="Abono/mes" data-sa="abonoMensual" value="${x.abonoMensual ?? ""}" style="max-width:110px">
+    <input type="number" placeholder="Meses" data-sa="meses" value="${x.meses ?? ""}" style="max-width:80px">
+    <input type="number" placeholder="Setup" data-sa="setup" value="${x.setup ?? ""}" style="max-width:100px">
+    <button type="button" class="btn sm danger" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
+  </div>`;
+}
+// Lee los ítems/SaaS del DOM al draft (para recomputar o antes de re-render).
+function leerItemsPresu() {
+  const p = window._draftPre;
+  p.items = [...document.querySelectorAll("#preItems .it-row")].map((row) => {
+    const o = {};
+    row.querySelectorAll("[data-it]").forEach((f) => {
+      if (f.type === "checkbox") o[f.dataset.it] = f.checked;
+      else if (f.type === "number") o[f.dataset.it] = f.value === "" ? "" : Number(f.value);
+      else o[f.dataset.it] = f.value;
+    });
+    return o;
+  });
+  p.saas = [...document.querySelectorAll("#preSaas .it-row")].map((row) => {
+    const o = {};
+    row.querySelectorAll("[data-sa]").forEach((f) => (o[f.dataset.sa] = f.type === "number" ? (f.value === "" ? "" : Number(f.value)) : f.value));
+    return o;
+  });
+}
+function onTipoPresuChange(e) {
+  leerItemsPresu();
+  window._draftPre.tipo = e.target.value;
+  document.getElementById("itemsSection").innerHTML = renderPresuItemsSection();
+  actualizarTipoHint();
+  refrescarTotalesPresu();
+}
+function actualizarTipoHint() {
+  const h = document.getElementById("tipoHint");
+  if (!h) return;
+  const t = window._draftPre.tipo;
+  const req = (PRE_TIPOS[t] || {}).requiereTicket;
+  h.innerHTML = req ? "Los presupuestos de servicio nacen de un pedido: vinculá el ticket correspondiente." : "";
+}
+function refrescarTotalesPresu() {
+  if (!window._draftPre) return;
+  leerItemsPresu();
+  const eco = window._draftPre.economico;
+  document.querySelectorAll("#pform [data-path^='economico']").forEach((f) => {
+    const k = f.dataset.path.split(".")[1];
+    eco[k] = f.type === "checkbox" ? f.checked : f.type === "number" ? (f.value === "" ? "" : Number(f.value)) : f.value;
+  });
+  const cc = NEXO_PRESUPUESTO.calcPresupuesto(window._draftPre);
+  const box = document.getElementById("preTotales");
+  if (!box) return;
+  const M = cc.moneda;
+  box.innerHTML = `<h3>Totales (previsualización)</h3><div class="totales-prev">
+    ${cc.hayUnaVez ? `<div><span class="lb">Neto única vez</span><b>${money(cc.netoUnaVez, M)}</b></div>
+      <div><span class="lb">IVA ${cc.ivaPct}%</span>${money(cc.ivaUnaVez, M)}</div>
+      <div><span class="lb">Total única vez</span><b class="accent">${money(cc.totalUnaVez, M)}</b></div>` : ""}
+    ${cc.hayRecurrente ? `<div><span class="lb">Abono mensual neto</span><b>${money(cc.abonoMensualNeto, M)}</b></div>
+      <div><span class="lb">Total mensual c/IVA</span><b class="accent">${money(cc.totalMensual, M)}</b></div>` : ""}
+    ${!cc.hayUnaVez && !cc.hayRecurrente ? '<div class="muted">Cargá ítems para ver los totales.</div>' : ""}
+  </div>`;
+}
+async function guardarPresu(isNew, id) {
+  const p = window._draftPre;
+  const prev = isNew ? null : presuPorId(id)?.estado;
+  document.querySelectorAll("#pform [data-path]").forEach((f) => {
+    let v;
+    if (f.type === "checkbox") v = f.checked;
+    else if (f.type === "number") v = f.value === "" ? "" : Number(f.value);
+    else v = f.value;
+    setPath(p, f.dataset.path, v);
+  });
+  leerItemsPresu();
+  // razones sociales
+  p.cliente.razonesSociales = [...document.querySelectorAll("#preRazones .rs-row")].map((row) => {
+    const o = {};
+    row.querySelectorAll("[data-rs]").forEach((f) => (o[f.dataset.rs] = f.value.trim()));
+    o.principal = !!row.querySelector('input[type="radio"]')?.checked;
+    return o;
+  }).filter((r) => r.razonSocial);
+  if (p.cliente.razonesSociales.length && !p.cliente.razonesSociales.some((r) => r.principal)) p.cliente.razonesSociales[0].principal = true;
+  // denormalizar número de ticket para el documento
+  const tk = p.ticketId ? ticketPorId(p.ticketId) : null;
+  p.ticketNumero = tk?.numero || "";
+  if (!p.cliente.nombreComercial && !p.cliente.razonesSociales.length) { toast("Falta el cliente", true, true); return; }
+  if (!p.cliente.nombreComercial && p.cliente.razonesSociales.length) p.cliente.nombreComercial = p.cliente.razonesSociales[0].razonSocial;
+  if (!isNew && prev !== p.estado) p.historialEstados.push({ estado: p.estado, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
+  if (isNew) state.presupuestos.push(p);
+  else { const i = state.presupuestos.findIndex((x) => x.id === id); state.presupuestos[i] = p; }
+  try {
+    await persist(`${isNew ? "Alta" : "Edición"} ${p.numero} · ${p.cliente.nombreComercial}`, "presupuestos");
+    // Al vincular un ticket, se lo marca presupuestado y se le ata el N°.
+    if (tk && !tk.presupuestoIds.includes(p.id)) {
+      tk.presupuestoIds.push(p.id);
+      if (tk.estado === "abierto") { tk.estado = "presupuestado"; tk.historial.push({ estado: "presupuestado", fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" }); }
+      await persist(`Ticket ${tk.numero}: presupuesto ${p.numero}`, "tickets");
+    }
+    go("presudetalle/" + p.id);
+    if (isNew) { toast("Creado ✓ — generando .docx…"); setTimeout(() => generarPresupuestoDocx(p.id), 400); }
+    else toast("Guardado ✓");
+  } catch (e) { toast("Error: " + e.message, true, true); }
+}
+// Impresión del presupuesto (misma línea que el contrato)
+function generarPresuPDF(id) {
+  const p = presuPorId(id);
+  if (!p) return;
+  const m = NEXO_PRESUPUESTO.construirPresupuesto(p, { plantilla: false });
+  document.getElementById("printRoot").innerHTML = renderPresupuestoHTML(m);
+  window.print();
+}
+function renderPresupuestoHTML(m) {
+  const filaCli = ([l1, v1, l2, v2]) => (l2 === null && v2 === null)
+    ? `<tr><th>${l1}</th><td colspan="3">${v1 ?? "—"}</td></tr>`
+    : `<tr><th>${l1}</th><td>${v1 ?? "—"}</td><th>${l2}</th><td>${v2 ?? "—"}</td></tr>`;
+  const tablaHTML = (t) => `<table class="items"><thead><tr>${t.head.map((h) => `<th${h.num ? ' class="r"' : ""}>${h.t}</th>`).join("")}</tr></thead>
+    <tbody>${t.rows.map((r) => `<tr>${r.map((c, i) => `<td${t.head[i]?.num ? ' class="r"' : ""}>${c.strong ? `<b>${c.t}</b>` : c.t}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${t.head.length}">—</td></tr>`}</tbody></table>`;
+  return `
+    <style>
+      @page { size: A4; margin: 20mm 22mm 27mm 22mm; }
+      #printRoot { font-family: var(--body); color:#211c16; font-size:12.5px; line-height:1.5; }
+      #printRoot .hd { border-bottom:3px solid #ef8f03; padding-bottom:10px; margin-bottom:16px; break-inside:avoid; }
+      #printRoot .hd img { height:30px; width:auto; display:block; margin-bottom:6px; }
+      #printRoot .kick { color:#ef8f03; font-weight:700; font-size:11px; letter-spacing:.12em; }
+      #printRoot h1 { font-family:var(--head); font-weight:800; color:#ef8f03; font-size:26px; margin:6px 0 4px; break-after:avoid; }
+      #printRoot h2 { font-family:var(--head); font-weight:800; color:#645d56; font-size:15px; text-transform:uppercase; letter-spacing:.04em; margin:16px 0 6px; border-bottom:1px solid #e0dacf; padding-bottom:4px; break-after:avoid; break-inside:avoid; }
+      #printRoot table { width:100%; border-collapse:collapse; font-size:12px; margin:6px 0; break-inside:auto; }
+      #printRoot thead { display:table-header-group; }
+      #printRoot tr { break-inside:avoid; }
+      #printRoot td, #printRoot th { border:1px solid #d9d3ca; padding:6px 9px; text-align:left; vertical-align:top; }
+      #printRoot th { background:#f4f1ec; color:#645d56; font-weight:700; }
+      #printRoot table.items thead th { background:#645d56; color:#fff; }
+      #printRoot .r { text-align:right; white-space:nowrap; }
+      #printRoot table.tot { width:auto; min-width:55%; margin-left:auto; }
+      #printRoot table.tot td { border:none; border-bottom:1px solid #eee; padding:5px 9px; }
+      #printRoot table.tot td.r { text-align:right; }
+      #printRoot table.tot tr.big td { font-weight:800; color:#ef8f03; font-size:14px; border-bottom:2px solid #645d56; }
+      #printRoot p.intro { text-align:justify; margin:0 0 10px; }
+      #printRoot .cond { font-size:11.5px; color:#645d56; }
+      #printRoot .sign { margin-top:36px; display:flex; gap:40px; break-inside:avoid; }
+      #printRoot .sign div { flex:1; border-top:1px solid #211c16; padding-top:6px; font-size:11px; }
+      #printRoot .foot { margin-top:22px; color:#8c867d; font-size:10.5px; border-top:1px solid #e0dacf; padding-top:8px; break-inside:avoid; }
+      #printRoot .foot img { height:18px; vertical-align:middle; margin-left:4px; }
+      #printRoot .ph { color:#ef8f03; font-weight:700; }
+    </style>
+    <div class="hd"><img src="${NEXO_BRAND.logo}" alt="Nexolibre" />
+      <div style="color:#8c867d;font-size:12px">Ingeniería médica multimarca · Diagnóstico por imágenes MRI / CT</div></div>
+    <div class="kick">${m.kicker}</div>
+    <h1>${m.titulo}</h1>
+    <p style="color:#8c867d;margin:0 0 10px">${m.subtitulo}</p>
+    ${m.filasCliente.length ? `<table>${m.filasCliente.map(filaCli).join("")}</table>` : ""}
+    <p class="intro">${m.intro}</p>
+    ${m.tabla.rows.length ? `<h2>Detalle</h2>${tablaHTML(m.tabla)}` : ""}
+    ${m.saasTabla ? `<h2>Servicios SaaS</h2>${tablaHTML(m.saasTabla)}` : ""}
+    <h2>Totales</h2>
+    <table class="tot">${m.totales.map(([l, v, big]) => `<tr class="${big ? "big" : ""}"><td>${l}</td><td class="r">${v}</td></tr>`).join("")}</table>
+    ${m.condiciones.length ? `<h2>Condiciones comerciales</h2><table class="eco">${m.condiciones.map(([l, v]) => `<tr><th style="width:28%">${l}</th><td class="cond">${v}</td></tr>`).join("")}</table>` : ""}
+    ${m.notas ? `<p style="font-size:12px;margin-top:10px"><b>Notas:</b> ${m.notas}</p>` : ""}
+    <div class="sign">
+      <div><b>Por Nexolibre</b><br>Aclaración / cargo:</div>
+      <div><b>Conformidad del Cliente · ${m.firmaCliente}</b><br>Aclaración / cargo:</div>
+    </div>
+    <div class="foot">${m.pie}${m.plantilla ? ' Los campos <span class="ph">[entre corchetes]</span> se completan al emitir.' : ""}<br>Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.</div>`;
+}
+function exportarPresuCSV() {
+  const rows = state.presupuestos;
+  const cols = ["numero", "fecha", "tipo", "estado", "cliente", "razon_social", "ticket", "moneda", "neto_una_vez", "iva", "total_una_vez", "abono_mensual_neto", "total_mensual", "valor_anualizado"];
+  const lines = [cols.join(",")];
+  for (const p of rows) {
+    const cc = NEXO_PRESUPUESTO.calcPresupuesto(p);
+    const v = valorPresu(p);
+    const vals = [p.numero, p.fecha, (PRE_TIPOS[p.tipo] || {}).label || p.tipo, PRE_ESTADO_LABEL[p.estado],
+      p.cliente?.nombreComercial, rsPrincipal(p).razonSocial, p.ticketNumero || "", cc.moneda,
+      cc.netoUnaVez, cc.ivaUnaVez, cc.totalUnaVez, cc.abonoMensualNeto, cc.totalMensual, v.anual];
+    lines.push(vals.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(","));
+  }
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `presupuestos-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  toast(`CSV: ${rows.length} presupuestos`);
+}
+
+// ============================================================
+//  DIRECCIÓN  (KPIs para CEO / COO)
+// ============================================================
+// Todos los números del tablero de dirección salen de acá, para que reporte
+// e informe usen exactamente lo mismo.
+function kpisDireccion() {
+  const vig = state.data.filter((c) => ACTIVOS.has(c.estado));
+  const mrr = vig.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+  const equipos = vig.reduce((s, c) => s + (c.equipos || []).length, 0);
+
+  const abiertos = state.presupuestos.filter((p) => PRE_ABIERTOS.has(p.estado));
+  const pipeAnual = abiertos.reduce((s, p) => s + valorPresu(p).anual, 0);
+  const pipePond = abiertos.reduce((s, p) => s + valorPresu(p).anual * (PRE_PROB[p.estado] || 0), 0);
+  const ganados = state.presupuestos.filter((p) => p.estado === "ganado");
+  const perdidos = state.presupuestos.filter((p) => p.estado === "perdido");
+  const winRate = ganados.length + perdidos.length ? ganados.length / (ganados.length + perdidos.length) : null;
+
+  const porTipo = {};
+  for (const p of ganados) { const v = valorPresu(p); porTipo[p.tipo] = (porTipo[p.tipo] || 0) + v.anual; }
+  const ventasTotal = Object.values(porTipo).reduce((a, b) => a + b, 0);
+
+  const pipePorEtapa = {};
+  for (const p of abiertos) pipePorEtapa[p.estado] = (pipePorEtapa[p.estado] || 0) + valorPresu(p).anual;
+
+  const tkAbiertos = state.tickets.filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto");
+  // Antigüedad promedio de los tickets abiertos (días)
+  const hoyN = hoy();
+  const edad = tkAbiertos.map((t) => daysUntil(parseDate(t.fecha)) === null ? null : -daysUntil(parseDate(t.fecha))).filter((x) => x != null);
+  const edadProm = edad.length ? Math.round(edad.reduce((a, b) => a + b, 0) / edad.length) : null;
+  // Tiempo a presupuestar: ticket.fecha → fecha del primer presupuesto vinculado
+  const tiempos = [];
+  for (const t of state.tickets) {
+    const ps = presupuestosDeTicket(t);
+    if (!ps.length) continue;
+    const prim = ps.map((p) => parseDate(p.fecha)).filter(Boolean).sort((a, b) => a - b)[0];
+    const ft = parseDate(t.fecha);
+    if (prim && ft) tiempos.push(Math.max(0, Math.round((prim - ft) / 86400000)));
+  }
+  const tProm = tiempos.length ? Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length) : null;
+
+  return { vig, mrr, equipos, abiertos, pipeAnual, pipePond, ganados, perdidos, winRate, porTipo, ventasTotal, pipePorEtapa, tkAbiertos, edadProm, tProm };
+}
+function barra(label, val, max, sub) {
+  const pct = max > 0 ? Math.round((val / max) * 100) : 0;
+  return `<div class="bar-row"><div class="bar-lb">${label}<span class="bar-sub">${sub || ""}</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, pct)}%"></div></div>
+    <div class="bar-val">${money(val)}</div></div>`;
+}
+function renderDireccion() {
+  const el = document.getElementById("view-direccion");
+  const k = kpisDireccion();
+  const maxTipo = Math.max(1, ...Object.values(k.porTipo));
+  const maxEtapa = Math.max(1, ...Object.values(k.pipePorEtapa));
+  el.innerHTML = `
+    <div class="kicker">Dirección</div>
+    <div class="page-head">
+      <h1>Tablero de <span class="accent">dirección</span></h1>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" onclick="imprimirDireccion()">📄 Informe imprimible</button>
+        <button class="btn sm" onclick="exportarInforme()">Contratos (detalle)</button>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:-6px">Visión combinada de contratos, presupuestos y tickets. Actualizado a ${fmt(new Date())}.</p>
+
+    <h2 class="sect">Recurrente</h2>
+    <div class="grid-kpi">
+      ${kpi("Contratos vigentes", k.vig.length, `${k.equipos} equipos en servicio`)}
+      ${kpi("MRR", money(k.mrr), `${money(k.mrr * 12)} anualizado`)}
+      ${kpi("Pipeline (anualizado)", money(k.pipeAnual), `${k.abiertos.length} presupuestos abiertos`)}
+      ${kpi("Pipeline ponderado", money(Math.round(k.pipePond)), "por probabilidad de cierre")}
+      ${kpi("Win-rate", k.winRate == null ? "—" : Math.round(k.winRate * 100) + "%", `${k.ganados.length} ganados / ${k.perdidos.length} perdidos`, k.winRate != null && k.winRate < 0.4 ? "warn" : "")}
+    </div>
+
+    <div class="dir-2col">
+      <div class="card">
+        <h3>Ventas cerradas por tipo <span class="muted" style="font-weight:400">· anualizado</span></h3>
+        ${k.ventasTotal ? Object.entries(k.porTipo).sort((a, b) => b[1] - a[1]).map(([t, v]) => barra((PRE_TIPOS[t] || {}).label || t, v, maxTipo, `${Math.round(v / k.ventasTotal * 100)}%`)).join("") : `<p class="muted">Todavía sin presupuestos ganados.</p>`}
+        ${k.ventasTotal ? `<div class="bar-total">Total cerrado: <b>${money(k.ventasTotal)}</b></div>` : ""}
+      </div>
+      <div class="card">
+        <h3>Pipeline por etapa <span class="muted" style="font-weight:400">· anualizado</span></h3>
+        ${Object.keys(k.pipePorEtapa).length ? PRE_ESTADOS.filter((e) => k.pipePorEtapa[e.id]).map((e) => barra(e.label, k.pipePorEtapa[e.id], maxEtapa, "")).join("") : `<p class="muted">Sin presupuestos abiertos.</p>`}
+      </div>
+    </div>
+
+    <h2 class="sect">Operación · Tickets</h2>
+    <div class="grid-kpi">
+      ${kpi("Tickets abiertos", k.tkAbiertos.length, "pedidos sin cerrar")}
+      ${kpi("Antigüedad promedio", k.edadProm == null ? "—" : k.edadProm + " d", "de los tickets abiertos", k.edadProm != null && k.edadProm > 14 ? "warn" : "")}
+      ${kpi("Tiempo a presupuestar", k.tProm == null ? "—" : k.tProm + " d", "del pedido a la cotización")}
+      ${kpi("Presupuestos ganados", k.ganados.length, "acumulado histórico")}
+    </div>`;
+}
+// Versión imprimible del tablero de dirección (para pasarle al CEO/COO).
+function imprimirDireccion() {
+  const k = kpisDireccion();
+  const maxTipo = Math.max(1, ...Object.values(k.porTipo));
+  const filaTipo = ([t, v]) => `<tr><td>${(PRE_TIPOS[t] || {}).label || t}</td><td class="num">${money(v)}</td><td>${k.ventasTotal ? Math.round(v / k.ventasTotal * 100) : 0}%</td></tr>`;
+  document.getElementById("printRoot").innerHTML = `
+    <style>
+      @page { margin: 16mm 14mm; }
+      #printRoot { font-family: var(--body); color:#211c16; font-size:12px; line-height:1.5; }
+      #printRoot .hd { border-bottom:3px solid #ef8f03; padding-bottom:10px; margin-bottom:16px; }
+      #printRoot .hd img { height:30px; display:block; margin-bottom:6px; }
+      #printRoot .kick { color:#ef8f03; font-weight:700; font-size:11px; letter-spacing:.12em; }
+      #printRoot h1 { font-family:var(--head); font-weight:800; color:#645d56; font-size:26px; margin:6px 0 2px; }
+      #printRoot h2 { font-family:var(--head); font-weight:800; color:#645d56; font-size:14px; text-transform:uppercase; letter-spacing:.05em; margin:22px 0 6px; border-bottom:1px solid #e0dacf; padding-bottom:4px; }
+      #printRoot .kpis { display:flex; gap:10px; flex-wrap:wrap; margin:14px 0 4px; }
+      #printRoot .k { flex:1; min-width:150px; border:1px solid #d9d3ca; border-radius:14px; padding:12px 14px; background:#f4f1ec; }
+      #printRoot .k .lb { font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#8c867d; font-weight:600; }
+      #printRoot .k .vl { font-family:var(--head); font-weight:800; font-size:22px; color:#ef8f03; padding:3px 0; }
+      #printRoot .k .sb { font-size:10.5px; color:#8c867d; }
+      #printRoot table { width:100%; border-collapse:collapse; font-size:11.5px; margin:4px 0; }
+      #printRoot td, #printRoot th { border:1px solid #d9d3ca; padding:6px 8px; text-align:left; }
+      #printRoot th { background:#645d56; color:#fff; }
+      #printRoot .num { font-weight:700; color:#ef8f03; white-space:nowrap; }
+      #printRoot .foot { margin-top:24px; color:#8c867d; font-size:10.5px; border-top:1px solid #e0dacf; padding-top:8px; }
+      #printRoot .foot img { height:18px; vertical-align:middle; margin-left:4px; }
+    </style>
+    <div class="hd"><img src="${NEXO_BRAND.logo}" alt="Nexolibre" /><div style="color:#8c867d;font-size:11.5px">Ingeniería médica multimarca · Diagnóstico por imágenes MRI / CT</div></div>
+    <div class="kick">TABLERO DE DIRECCIÓN</div>
+    <h1>Indicadores del negocio</h1>
+    <p style="color:#8c867d;margin:0">${fmt(new Date())}</p>
+    <h2>Recurrente y pipeline</h2>
+    <div class="kpis">
+      <div class="k"><div class="lb">Contratos vigentes</div><div class="vl">${k.vig.length}</div><div class="sb">${k.equipos} equipos</div></div>
+      <div class="k"><div class="lb">MRR</div><div class="vl">${money(k.mrr)}</div><div class="sb">${money(k.mrr * 12)} anual</div></div>
+      <div class="k"><div class="lb">Pipeline anualizado</div><div class="vl">${money(k.pipeAnual)}</div><div class="sb">ponderado ${money(Math.round(k.pipePond))}</div></div>
+      <div class="k"><div class="lb">Win-rate</div><div class="vl">${k.winRate == null ? "—" : Math.round(k.winRate * 100) + "%"}</div><div class="sb">${k.ganados.length}✓ / ${k.perdidos.length}✕</div></div>
+    </div>
+    <h2>Ventas cerradas por tipo (anualizado)</h2>
+    ${k.ventasTotal ? `<table><thead><tr><th>Tipo</th><th>Monto</th><th>Participación</th></tr></thead><tbody>${Object.entries(k.porTipo).sort((a, b) => b[1] - a[1]).map(filaTipo).join("")}<tr><td><b>Total</b></td><td class="num">${money(k.ventasTotal)}</td><td>100%</td></tr></tbody></table>` : `<p style="color:#8c867d">Sin ventas cerradas.</p>`}
+    <h2>Operación · Tickets</h2>
+    <div class="kpis">
+      <div class="k"><div class="lb">Tickets abiertos</div><div class="vl">${k.tkAbiertos.length}</div><div class="sb">sin cerrar</div></div>
+      <div class="k"><div class="lb">Antigüedad prom.</div><div class="vl">${k.edadProm == null ? "—" : k.edadProm + " d"}</div><div class="sb">tickets abiertos</div></div>
+      <div class="k"><div class="lb">Tiempo a presupuestar</div><div class="vl">${k.tProm == null ? "—" : k.tProm + " d"}</div><div class="sb">pedido → cotización</div></div>
+    </div>
+    <div class="foot"><b>Documento de circulación interna.</b> Generado desde el sistema de gestión de Nexolibre. Importes netos de IVA. Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.</div>`;
+  window.print();
+}
+
+// ============================================================
+//  REPORTES  (constructor de consultas / simulaciones)
+// ============================================================
+const REP = { desde: "", hasta: "", tipo: "", estado: "", moneda: "", cliente: "", agrupar: "tipo" };
+function reporteFiltrado() {
+  return state.presupuestos.filter((p) => {
+    if (REP.tipo && p.tipo !== REP.tipo) return false;
+    if (REP.estado && p.estado !== REP.estado) return false;
+    if (REP.moneda && (p.economico?.moneda || "USD") !== REP.moneda) return false;
+    if (REP.desde && String(p.fecha) < REP.desde) return false;
+    if (REP.hasta && String(p.fecha) > REP.hasta) return false;
+    if (REP.cliente && !((p.cliente?.nombreComercial || "").toLowerCase().includes(REP.cliente.toLowerCase()))) return false;
+    return true;
+  });
+}
+function reporteGrupos(rows) {
+  const clave = (p) => {
+    if (REP.agrupar === "tipo") return (PRE_TIPOS[p.tipo] || {}).label || p.tipo;
+    if (REP.agrupar === "estado") return PRE_ESTADO_LABEL[p.estado] || p.estado;
+    if (REP.agrupar === "cliente") return p.cliente?.nombreComercial || "—";
+    if (REP.agrupar === "mes") return String(p.fecha || "").slice(0, 7) || "—";
+    return "Total";
+  };
+  const g = {};
+  for (const p of rows) {
+    const key = clave(p);
+    const v = valorPresu(p);
+    g[key] = g[key] || { key, n: 0, unaVez: 0, mensual: 0, anual: 0 };
+    g[key].n++; g[key].unaVez += v.unaVez; g[key].mensual += v.mensual; g[key].anual += v.anual;
+  }
+  return Object.values(g).sort((a, b) => b.anual - a.anual);
+}
+function renderReportes() {
+  const el = document.getElementById("view-reportes");
+  const rows = reporteFiltrado();
+  const grupos = reporteGrupos(rows);
+  const tot = grupos.reduce((a, g) => ({ n: a.n + g.n, unaVez: a.unaVez + g.unaVez, mensual: a.mensual + g.mensual, anual: a.anual + g.anual }), { n: 0, unaVez: 0, mensual: 0, anual: 0 });
+  const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? "selected" : ""}>${l}</option>`;
+  el.innerHTML = `
+    <div class="kicker">Consultas</div>
+    <div class="page-head">
+      <h1>Generador de <span class="accent">reportes</span></h1>
+      <div style="display:flex;gap:8px">
+        <button class="btn sm" onclick="exportarReporteCSV()">⬇ CSV</button>
+        <button class="btn primary sm" onclick="imprimirReporte()">📄 Imprimir</button>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:-6px">Combiná filtros y una agrupación para simular cualquier corte sobre los presupuestos.</p>
+    <div class="card">
+      <div class="rep-filtros">
+        <div class="field"><label>Desde</label><input type="date" id="rDesde" value="${REP.desde}"></div>
+        <div class="field"><label>Hasta</label><input type="date" id="rHasta" value="${REP.hasta}"></div>
+        <div class="field"><label>Tipo</label><select id="rTipo"><option value="">Todos</option>${Object.entries(PRE_TIPOS).map(([k, v]) => opt(k, v.label, REP.tipo)).join("")}</select></div>
+        <div class="field"><label>Estado</label><select id="rEstado"><option value="">Todos</option>${PRE_ESTADOS.map((e) => opt(e.id, e.label, REP.estado)).join("")}</select></div>
+        <div class="field"><label>Moneda</label><select id="rMoneda"><option value="">Todas</option>${opt("USD", "USD", REP.moneda)}${opt("ARS", "ARS", REP.moneda)}</select></div>
+        <div class="field"><label>Cliente</label><input type="search" id="rCliente" value="${esc(REP.cliente)}" placeholder="contiene…"></div>
+        <div class="field"><label>Agrupar por</label><select id="rAgrupar">${opt("tipo", "Tipo", REP.agrupar)}${opt("estado", "Estado", REP.agrupar)}${opt("cliente", "Cliente", REP.agrupar)}${opt("mes", "Mes", REP.agrupar)}${opt("ninguno", "Sin agrupar", REP.agrupar)}</select></div>
+        <button class="btn ghost sm" onclick="limpiarReporte()" style="align-self:flex-end">Limpiar</button>
+      </div>
+    </div>
+    <div class="grid-kpi" style="margin-top:14px">
+      ${kpi("Presupuestos", tot.n, "en el corte")}
+      ${kpi("Única vez (neto)", money(tot.unaVez), "suma del corte")}
+      ${kpi("Mensual (neto)", money(tot.mensual), "recurrente")}
+      ${kpi("Anualizado", money(tot.anual), "única vez + 12× mensual")}
+    </div>
+    <div class="overflow"><table class="data">
+      <thead><tr><th>${REP.agrupar === "ninguno" ? "Presupuesto" : "Grupo"}</th><th>Cant.</th><th>Única vez</th><th>Mensual</th><th>Anualizado</th></tr></thead>
+      <tbody>${REP.agrupar === "ninguno"
+        ? (rows.length ? rows.map((p) => { const v = valorPresu(p); return `<tr onclick="location.hash='presudetalle/${p.id}'"><td><b>${esc(p.numero)}</b> · ${esc(p.cliente?.nombreComercial || "")}</td><td>1</td><td>${money(v.unaVez, v.moneda)}</td><td>${money(v.mensual, v.moneda)}</td><td>${money(v.anual, v.moneda)}</td></tr>`; }).join("") : `<tr><td colspan="5" class="empty">Sin resultados</td></tr>`)
+        : (grupos.length ? grupos.map((g) => `<tr><td><b>${esc(g.key)}</b></td><td>${g.n}</td><td>${money(g.unaVez)}</td><td>${money(g.mensual)}</td><td>${money(g.anual)}</td></tr>`).join("") : `<tr><td colspan="5" class="empty">Sin resultados</td></tr>`)}
+      </tbody>
+      <tfoot><tr><th>Total</th><th>${tot.n}</th><th>${money(tot.unaVez)}</th><th>${money(tot.mensual)}</th><th>${money(tot.anual)}</th></tr></tfoot>
+    </table></div>`;
+  const bind = (id, key) => { const e = document.getElementById(id); e.oninput = e.onchange = () => { REP[key] = e.value; renderReportes(); }; };
+  bind("rDesde", "desde"); bind("rHasta", "hasta"); bind("rTipo", "tipo"); bind("rEstado", "estado");
+  bind("rMoneda", "moneda"); bind("rCliente", "cliente"); bind("rAgrupar", "agrupar");
+}
+function limpiarReporte() { Object.assign(REP, { desde: "", hasta: "", tipo: "", estado: "", moneda: "", cliente: "", agrupar: "tipo" }); renderReportes(); }
+function exportarReporteCSV() {
+  const grupos = reporteGrupos(reporteFiltrado());
+  const lines = ["grupo,cantidad,una_vez_neto,mensual_neto,anualizado"];
+  grupos.forEach((g) => lines.push([`"${g.key}"`, g.n, g.unaVez, g.mensual, g.anual].join(",")));
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `reporte-presupuestos-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  toast("Reporte exportado");
+}
+function imprimirReporte() {
+  const rows = reporteFiltrado();
+  const grupos = reporteGrupos(rows);
+  const tot = grupos.reduce((a, g) => ({ n: a.n + g.n, unaVez: a.unaVez + g.unaVez, mensual: a.mensual + g.mensual, anual: a.anual + g.anual }), { n: 0, unaVez: 0, mensual: 0, anual: 0 });
+  const agLabel = { tipo: "Tipo", estado: "Estado", cliente: "Cliente", mes: "Mes", ninguno: "Sin agrupar" }[REP.agrupar];
+  const filtrosTxt = [REP.desde && `desde ${REP.desde}`, REP.hasta && `hasta ${REP.hasta}`, REP.tipo && `tipo ${(PRE_TIPOS[REP.tipo] || {}).label}`, REP.estado && `estado ${PRE_ESTADO_LABEL[REP.estado]}`, REP.moneda && REP.moneda, REP.cliente && `cliente «${REP.cliente}»`].filter(Boolean).join(" · ") || "sin filtros";
+  document.getElementById("printRoot").innerHTML = `
+    <style>
+      @page { margin: 16mm 14mm; }
+      #printRoot { font-family: var(--body); color:#211c16; font-size:12px; }
+      #printRoot .hd { border-bottom:3px solid #ef8f03; padding-bottom:10px; margin-bottom:14px; }
+      #printRoot .hd img { height:28px; display:block; margin-bottom:6px; }
+      #printRoot .kick { color:#ef8f03; font-weight:700; font-size:11px; letter-spacing:.12em; }
+      #printRoot h1 { font-family:var(--head); font-weight:800; color:#645d56; font-size:24px; margin:6px 0 2px; }
+      #printRoot table { width:100%; border-collapse:collapse; font-size:11.5px; margin:8px 0; }
+      #printRoot td, #printRoot th { border:1px solid #d9d3ca; padding:6px 8px; text-align:left; }
+      #printRoot th { background:#645d56; color:#fff; }
+      #printRoot tfoot th { background:#f4f1ec; color:#211c16; }
+      #printRoot .num { text-align:right; white-space:nowrap; }
+      #printRoot .foot { margin-top:20px; color:#8c867d; font-size:10.5px; border-top:1px solid #e0dacf; padding-top:8px; }
+      #printRoot .foot img { height:18px; vertical-align:middle; margin-left:4px; }
+    </style>
+    <div class="hd"><img src="${NEXO_BRAND.logo}" alt="Nexolibre" /><div style="color:#8c867d;font-size:11.5px">Ingeniería médica multimarca · Diagnóstico por imágenes MRI / CT</div></div>
+    <div class="kick">REPORTE DE PRESUPUESTOS</div>
+    <h1>Reporte por ${agLabel.toLowerCase()}</h1>
+    <p style="color:#8c867d;margin:0">${fmt(new Date())} · Filtros: ${esc(filtrosTxt)}</p>
+    <table><thead><tr><th>${agLabel}</th><th class="num">Cant.</th><th class="num">Única vez</th><th class="num">Mensual</th><th class="num">Anualizado</th></tr></thead>
+    <tbody>${grupos.map((g) => `<tr><td>${esc(g.key)}</td><td class="num">${g.n}</td><td class="num">${money(g.unaVez)}</td><td class="num">${money(g.mensual)}</td><td class="num">${money(g.anual)}</td></tr>`).join("")}</tbody>
+    <tfoot><tr><th>Total</th><th class="num">${tot.n}</th><th class="num">${money(tot.unaVez)}</th><th class="num">${money(tot.mensual)}</th><th class="num">${money(tot.anual)}</th></tr></tfoot></table>
+    <div class="foot"><b>Documento de circulación interna.</b> Importes netos de IVA. Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.</div>`;
   window.print();
 }
 

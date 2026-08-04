@@ -14,9 +14,12 @@
     <img class="brand-logo" src="assets/nexolibre-logo.svg" alt="Nexolibre" />
     <nav class="nav" id="nav">
       <button data-view="dashboard" class="active">Tablero</button>
-      <button data-view="pipeline">Pipeline</button>
+      <button data-view="direccion">Dirección</button>
       <button data-view="listado">Contratos</button>
+      <button data-view="presupuestos">Presupuestos</button>
+      <button data-view="tickets">Tickets</button>
       <button data-view="agenda">Vencimientos</button>
+      <button data-view="reportes">Reportes</button>
     </nav>
     <span class="spacer"></span>
     <span class="who" id="who"></span>
@@ -37,6 +40,17 @@
     <section class="view" id="view-detalle"></section>
     <!-- Formulario -->
     <section class="view" id="view-form"></section>
+    <!-- Presupuestos -->
+    <section class="view" id="view-presupuestos"></section>
+    <section class="view" id="view-presudetalle"></section>
+    <section class="view" id="view-presuform"></section>
+    <!-- Tickets -->
+    <section class="view" id="view-tickets"></section>
+    <section class="view" id="view-tkdetalle"></section>
+    <section class="view" id="view-tkform"></section>
+    <!-- Dirección / Reportes -->
+    <section class="view" id="view-direccion"></section>
+    <section class="view" id="view-reportes"></section>
 
     <div class="footer-legend">
       <span>Nexolibre es miembro de</span>
@@ -82,6 +96,7 @@
   <script src="brand.js"></script>
   <script src="planes.js"></script>
   <script src="contrato.js"></script>
+  <script src="presupuesto.js"></script>
   <script src="docgen.js"></script>
   <script src="app.js"></script>
 </body>

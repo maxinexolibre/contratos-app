@@ -262,4 +262,167 @@ async function armarDocx(D, m, c) {
   return Packer.toBlob(doc);
 }
 
+// ============================================================
+//  Presupuesto en .docx (misma puesta en página y estilo)
+// ============================================================
+async function generarPresupuestoDocx(id) {
+  const p = (state.presupuestos || []).find((x) => x.id === id);
+  if (!p) return;
+  toast("Generando presupuesto…");
+  try {
+    const D = await cargarDocx();
+    const m = NEXO_PRESUPUESTO.construirPresupuesto(p, { plantilla: false });
+    const blob = await armarPresupuestoDocx(D, m);
+    const nombre = `${p.numero || "Presupuesto"} - ${nombreCliente(p)} - Presupuesto ${m.tipoLabel}.docx`.replace(/[\/\\:*?"<>|]/g, "-");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = nombre;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast("Presupuesto descargado ✓");
+  } catch (e) {
+    toast("No se pudo generar el .docx: " + e.message, true, true);
+  }
+}
+async function armarPresupuestoDocx(D, m) {
+  const {
+    Document, Packer, Paragraph, TextRun, AlignmentType, BorderStyle,
+    Table, TableRow, TableCell, WidthType, ImageRun, Footer, ShadingType,
+  } = D;
+
+  const dec = (s) => String(s ?? "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ");
+  const runs = (frag, { size = 19, color = DC.ink } = {}) => {
+    const out = [];
+    let bold = false;
+    for (const part of dec(frag).split(/(<\/?b>)/)) {
+      if (part === "<b>") { bold = true; continue; }
+      if (part === "</b>") { bold = false; continue; }
+      if (!part) continue;
+      const txt = part.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+      for (const seg of txt.split(/(\[[^\]]+\])/)) {
+        if (!seg) continue;
+        const ph = /^\[.+\]$/.test(seg);
+        out.push(new TextRun({ text: seg, bold: bold || ph, color: ph ? DC.orange : color, size, font: FB }));
+      }
+    }
+    return out;
+  };
+  const P = (frag, o = {}) => new Paragraph({ children: runs(frag, o), spacing: { after: o.after ?? 120, line: 280 }, alignment: o.align });
+  const H2 = (t) => new Paragraph({
+    children: [new TextRun({ text: t.toUpperCase(), bold: true, color: DC.taupe, size: 24, font: FH })],
+    spacing: { before: 300, after: 100 }, keepNext: true,
+    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: DC.line, space: 4 } },
+  });
+  const cellTxt = (frag, { w, head = false, bg, num = false, strong = false } = {}) => new TableCell({
+    width: { size: w, type: WidthType.PERCENTAGE },
+    shading: bg ? { type: ShadingType.CLEAR, fill: bg } : undefined,
+    margins: { top: 60, bottom: 60, left: 100, right: 100 },
+    children: [new Paragraph({
+      alignment: num ? AlignmentType.RIGHT : AlignmentType.LEFT,
+      children: head
+        ? [new TextRun({ text: dec(frag), bold: true, color: DC.white, size: 18, font: FB })]
+        : (strong ? [new TextRun({ text: dec(frag).replace(/<[^>]+>/g, ""), bold: true, size: 18, font: FB })] : runs(frag, { size: 18 })),
+    })],
+  });
+  // Tabla genérica a partir de {head:[{t,w,num}], rows:[[{t,num,strong}]]}
+  const tabla = (t, headBg = DC.taupe) => new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: ["top", "bottom", "left", "right", "insideHorizontal", "insideVertical"]
+      .reduce((a, k) => (a[k] = { style: BorderStyle.SINGLE, size: 4, color: DC.line }, a), {}),
+    rows: [
+      new TableRow({ tableHeader: true, children: t.head.map((h) => cellTxt(h.t, { w: h.w, head: true, bg: headBg, num: h.num })) }),
+      ...t.rows.map((r) => new TableRow({ children: r.map((c, i) => cellTxt(c.t, { w: t.head[i].w, num: t.head[i].num, strong: c.strong })) })),
+    ],
+  });
+
+  const kids = [];
+  kids.push(new Paragraph({
+    children: [new ImageRun({ type: "png", data: await imagen("nexolibre-logo.png"), transformation: { width: 190, height: 44 } })],
+    spacing: { after: 60 },
+  }));
+  kids.push(new Paragraph({
+    children: [new TextRun({ text: "Ingeniería médica multimarca · Diagnóstico por imágenes MRI / CT", color: DC.mut, size: 17, font: FB })],
+    spacing: { after: 60 }, border: { bottom: { style: BorderStyle.SINGLE, size: 18, color: DC.orange, space: 6 } },
+  }));
+  kids.push(new Paragraph({ children: runs(m.kicker, { size: 16, color: DC.orange }), spacing: { before: 200, after: 40 } }));
+  kids.push(new Paragraph({ children: [new TextRun({ text: m.titulo, bold: true, color: DC.orange, size: 40, font: FH })], spacing: { after: 20 } }));
+  kids.push(new Paragraph({ children: [new TextRun({ text: m.subtitulo, color: DC.mut, size: 19, font: FB })], spacing: { after: 200 } }));
+
+  if (m.filasCliente.length) {
+    // Datos del cliente: mismo layout de dos pares por fila que el contrato.
+    kids.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: ["top", "bottom", "left", "right", "insideHorizontal", "insideVertical"].reduce((a, k) => (a[k] = { style: BorderStyle.SINGLE, size: 4, color: DC.line }, a), {}),
+      rows: m.filasCliente.map(([l1, v1, l2, v2]) => new TableRow({
+        children: v2 === null && l2 === null
+          ? [cellTxt(l1, { w: 22, head: false, bg: DC.crema, strong: true }), cellTxt(v1 ?? "—", { w: 78 })]
+          : [cellTxt(l1, { w: 22, bg: DC.crema, strong: true }), cellTxt(v1 ?? "—", { w: 28 }), cellTxt(l2, { w: 22, bg: DC.crema, strong: true }), cellTxt(v2 ?? "—", { w: 28 })],
+      })),
+    }));
+  }
+
+  kids.push(P(m.intro, { size: 20, align: AlignmentType.JUSTIFIED, after: 160 }));
+
+  if (m.tabla.rows.length) { kids.push(H2("Detalle")); kids.push(tabla(m.tabla)); }
+  if (m.saasTabla) { kids.push(H2("Servicios SaaS")); kids.push(tabla(m.saasTabla)); }
+
+  // Totales (tabla a la derecha, dos columnas)
+  kids.push(H2("Totales"));
+  kids.push(new Table({
+    width: { size: 60, type: WidthType.PERCENTAGE },
+    alignment: AlignmentType.RIGHT,
+    borders: ["insideHorizontal", "bottom"].reduce((a, k) => (a[k] = { style: BorderStyle.SINGLE, size: 2, color: DC.line }, a), { top: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } }),
+    rows: m.totales.map(([l, v, big]) => new TableRow({
+      children: [
+        new TableCell({ width: { size: 60, type: WidthType.PERCENTAGE }, margins: { top: 50, bottom: 50, left: 100 }, children: [new Paragraph({ children: [new TextRun({ text: l, bold: !!big, color: big ? DC.taupe : DC.ink, size: big ? 20 : 18, font: FB })] })] }),
+        new TableCell({ width: { size: 40, type: WidthType.PERCENTAGE }, margins: { top: 50, bottom: 50, right: 100 }, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: v, bold: true, color: big ? DC.orange : DC.ink, size: big ? 22 : 18, font: FB })] })] }),
+      ],
+    })),
+  }));
+
+  if (m.condiciones.length) {
+    kids.push(H2("Condiciones comerciales"));
+    kids.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: ["top", "bottom", "left", "right", "insideHorizontal", "insideVertical"].reduce((a, k) => (a[k] = { style: BorderStyle.SINGLE, size: 4, color: DC.line }, a), {}),
+      rows: m.condiciones.map(([l, v]) => new TableRow({ children: [cellTxt(l, { w: 28, bg: DC.crema, strong: true }), cellTxt(v, { w: 72 })] })),
+    }));
+  }
+
+  if (m.notas) kids.push(P(`<b>Notas:</b> ${m.notas}`, { size: 18, after: 120 }));
+
+  // Firmas
+  kids.push(new Paragraph({ text: "", spacing: { before: 400 } }));
+  kids.push(new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: ["top", "bottom", "left", "right", "insideHorizontal", "insideVertical"].reduce((a, k) => (a[k] = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" }, a), {}),
+    rows: [new TableRow({
+      children: [
+        new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, margins: { top: 80, right: 200 }, borders: { top: { style: BorderStyle.SINGLE, size: 6, color: DC.ink } }, children: [new Paragraph({ children: [new TextRun({ text: "Por Nexolibre", bold: true, size: 18, font: FB })] }), new Paragraph({ children: [new TextRun({ text: "Aclaración / cargo:", size: 17, color: DC.mut, font: FB })] })] }),
+        new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, margins: { top: 80, left: 200 }, borders: { top: { style: BorderStyle.SINGLE, size: 6, color: DC.ink } }, children: [new Paragraph({ children: [new TextRun({ text: "Conformidad del Cliente · ", bold: true, size: 18, font: FB }), ...runs(m.firmaCliente, { size: 18 })] }), new Paragraph({ children: [new TextRun({ text: "Aclaración / cargo:", size: 17, color: DC.mut, font: FB })] })] }),
+      ],
+    })],
+  }));
+
+  const doc = new Document({
+    creator: "Nexolibre",
+    title: `Presupuesto · ${m.tipoLabel}`,
+    description: "Presupuesto generado desde el sistema de gestión de Nexolibre",
+    sections: [{
+      properties: { page: { size: { width: PAGINA.ancho, height: PAGINA.alto }, margin: PAGINA.margen } },
+      footers: {
+        default: new Footer({
+          children: [
+            new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100 }, border: { top: { style: BorderStyle.SINGLE, size: 4, color: DC.line, space: 6 } }, children: [new TextRun({ text: m.pie, color: DC.mut, size: 15, font: FB })] }),
+            new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 40 }, children: [new TextRun({ text: "Nexolibre es miembro de  ", color: DC.mut, size: 15, font: FB }), new ImageRun({ type: "png", data: await imagen("gruponexo-logo.png"), transformation: { width: 74, height: 23 } })] }),
+          ],
+        }),
+      },
+      children: kids,
+    }],
+  });
+  return Packer.toBlob(doc);
+}
+
 window.generarDocx = generarDocx;
+window.generarPresupuestoDocx = generarPresupuestoDocx;
