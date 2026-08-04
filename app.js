@@ -545,7 +545,11 @@ function router() {
   const view = (location.hash.replace("#", "") || "dashboard").split("/");
   const name = view[0];
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-  document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  document.querySelectorAll("#nav button").forEach((b) => {
+    const on = b.dataset.view === name;
+    b.classList.toggle("active", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
   const target = document.getElementById("view-" + name) || document.getElementById("view-dashboard");
   target.classList.add("active");
   const R = {
@@ -556,7 +560,24 @@ function router() {
     direccion: renderDireccion, reportes: renderReportes,
   };
   (R[name] || renderDashboard)();
+  enhanceA11y();
 }
+// Hace accesibles por teclado las filas clicables generadas en cada render:
+// las convierte en focusables con rol de botón (el keydown global las activa).
+function enhanceA11y() {
+  document.querySelectorAll("tr[onclick]").forEach((tr) => {
+    if (tr.hasAttribute("tabindex")) return;
+    tr.tabIndex = 0;
+    tr.setAttribute("role", "button");
+  });
+}
+// Enter / Espacio sobre una fila enfocada = click.
+document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("tr[onclick]")) {
+    e.preventDefault();
+    e.target.click();
+  }
+});
 window.addEventListener("hashchange", router);
 const go = (h) => (location.hash = h);
 
@@ -1283,7 +1304,7 @@ function eqRow(e = {}) {
     <input placeholder="Modelo" data-eq="modelo" value="${esc(e.modelo || "")}">
     <select data-eq="modalidad"><option ${e.modalidad === "MRI" ? "selected" : ""}>MRI</option><option ${e.modalidad === "CT" ? "selected" : ""}>CT</option></select>
     <input placeholder="Ubicación" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
-    <button type="button" class="btn sm danger" onclick="this.parentElement.remove()">✕</button>
+    <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
   </div>`;
 }
 function addEquipo() { document.getElementById("equipos").insertAdjacentHTML("beforeend", eqRow()); }
@@ -1293,7 +1314,7 @@ function rsRow(r = {}) {
     <input placeholder="CUIT" data-rs="cuit" value="${esc(r.cuit || "")}">
     <input placeholder="Domicilio legal" data-rs="domicilio" value="${esc(r.domicilio || "")}">
     <label class="rs-pri" title="Factura y firma el contrato"><input type="radio" name="rsPrincipal" ${r.principal ? "checked" : ""}> firma</label>
-    <button type="button" class="btn sm danger" onclick="this.parentElement.remove()">✕</button>
+    <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
   </div>`;
 }
 function addRazon() {
@@ -2068,7 +2089,7 @@ function itemRow(tipo, it = {}) {
     <input type="number" placeholder="P. lista" data-it="unitario" value="${it.unitario ?? ""}" style="max-width:110px">
     <input type="number" placeholder="P. c/interc." data-it="unitarioIntercambio" value="${it.unitarioIntercambio ?? ""}" style="max-width:110px">
     <label class="rs-pri" title="Aplica el precio con intercambio"><input type="checkbox" data-it="intercambio" ${it.intercambio ? "checked" : ""}> interc.</label>
-    <button type="button" class="btn sm danger" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
+    <button type="button" class="btn sm danger" aria-label="Quitar ítem" title="Quitar ítem" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
   </div>`;
   const catSel = tipo === "equipos"
     ? `<select data-it="categoria" style="max-width:150px">${CATEGORIAS_EQUIPO.map((c) => `<option ${it.categoria === c ? "selected" : ""}>${c}</option>`).join("")}</select>`
@@ -2078,7 +2099,7 @@ function itemRow(tipo, it = {}) {
     <input placeholder="Detalle" data-it="detalle" value="${esc(it.detalle || "")}">
     <input type="number" placeholder="Cant." data-it="cantidad" value="${it.cantidad ?? 1}" style="max-width:70px">
     <input type="number" placeholder="Unitario" data-it="unitario" value="${it.unitario ?? ""}" style="max-width:120px">
-    <button type="button" class="btn sm danger" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
+    <button type="button" class="btn sm danger" aria-label="Quitar ítem" title="Quitar ítem" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
   </div>`;
 }
 function saasRow(x = {}) {
@@ -2088,7 +2109,7 @@ function saasRow(x = {}) {
     <input type="number" placeholder="Abono/mes" data-sa="abonoMensual" value="${x.abonoMensual ?? ""}" style="max-width:110px">
     <input type="number" placeholder="Meses" data-sa="meses" value="${x.meses ?? ""}" style="max-width:80px">
     <input type="number" placeholder="Setup" data-sa="setup" value="${x.setup ?? ""}" style="max-width:100px">
-    <button type="button" class="btn sm danger" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
+    <button type="button" class="btn sm danger" aria-label="Quitar ítem" title="Quitar ítem" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
   </div>`;
 }
 // Lee los ítems/SaaS del DOM al draft (para recomputar o antes de re-render).

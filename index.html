@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <button class="skip-link" onclick="document.getElementById('contenido').focus()">Saltar al contenido</button>
   <header class="topbar">
     <img class="brand-logo" src="assets/nexolibre-logo.svg" alt="Nexolibre" />
     <nav class="nav" id="nav">
@@ -24,10 +25,10 @@
     <span class="spacer"></span>
     <span class="who" id="who"></span>
     <button class="btn primary sm" id="btnNuevo">+ Nuevo</button>
-    <button class="btn ghost sm" id="btnConfig" title="Configuración de acceso">⚙</button>
+    <button class="btn ghost sm" id="btnConfig" aria-label="Configuración de acceso" title="Configuración de acceso">⚙</button>
   </header>
 
-  <main class="wrap">
+  <main class="wrap" id="contenido" tabindex="-1">
     <!-- Dashboard -->
     <section class="view active" id="view-dashboard"></section>
     <!-- Pipeline -->

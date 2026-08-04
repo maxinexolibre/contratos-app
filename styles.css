@@ -5,7 +5,7 @@
   --surface-2: #f7f5f1;
   --ink: #211c16;
   --taupe: #645d56;
-  --mut: #8c867d;
+  --mut: #6f6960; /* oscurecido para AA: ~4.5:1 sobre crema y blanco (antes #8c867d ~3:1) */
   --line: rgba(20, 16, 10, 0.12);
   --line-strong: rgba(20, 16, 10, 0.18);
   --orange: #ef8f03;
@@ -234,6 +234,39 @@ h2.sect { font-family: var(--head); font-weight: 800; color: var(--taupe); font-
 .rep-filtros { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .rep-filtros .field { min-width: 130px; flex: 1 1 130px; }
 .data tfoot th { background: var(--surface-2); color: var(--ink); font-weight: 800; border-top: 2px solid var(--line-strong); }
+
+/* ---------- Accesibilidad e interacción ---------- */
+/* Foco visible de teclado en todo lo interactivo (no aparece con el mouse). */
+:where(a, button, input, select, textarea, [tabindex], summary):focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.nav button:focus-visible { outline-offset: -2px; }
+/* Filas clicables: cursor, hover y foco por teclado. */
+table.data tr[onclick] { cursor: pointer; }
+table.data tbody tr[onclick]:hover { background: var(--surface-2); }
+table.data tr[onclick]:focus-visible { outline: 2px solid var(--orange); outline-offset: -2px; }
+/* Enlace para saltar al contenido (visible solo al enfocarlo con Tab). */
+.skip-link {
+  position: absolute; left: 12px; top: -60px; z-index: 100;
+  background: var(--ink); color: #fff; padding: 10px 16px; border-radius: var(--radius-sm);
+  font-weight: 700; font-size: 14px; transition: top 0.15s;
+}
+.skip-link:focus { top: 12px; }
+/* En pantallas táctiles, agrandar los blancos de toque a 44px. */
+@media (pointer: coarse) {
+  .btn.sm, .nav button, .it-row .btn.danger, #btnConfig { min-height: 44px; }
+}
+/* Respetar la preferencia de movimiento reducido. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
 
 /* ---------- Print (PDF de marca) ---------- */
 #printRoot { display: none; }
