@@ -1858,6 +1858,30 @@ function valorPresu(p) {
   return { unaVez: cc.netoUnaVez, mensual: cc.abonoMensualNeto, anual: cc.netoUnaVez + cc.abonoMensualNeto * 12, moneda: cc.moneda };
 }
 const CATEGORIAS_EQUIPO = ["Equipo", "Logística e instalación", "Puesta en marcha y garantía", "Capacitación", "Financiación"];
+// Vencimiento de la validez de la oferta: fecha de emisión + validezDias.
+function vencePresu(p) {
+  const base = parseDate(p.fecha);
+  const dias = Number(p?.economico?.validezDias);
+  if (!base || !dias) return null;
+  const d = new Date(base);
+  d.setDate(d.getDate() + dias);
+  return d;
+}
+// Un presupuesto abierto cuya validez ya pasó está "vencido" (hay que rehacerlo).
+function presuVencido(p) {
+  if (!PRE_ABIERTOS.has(p.estado)) return false;
+  const v = vencePresu(p);
+  return v ? v < hoy() : false;
+}
+// Suma de montos de una lista de presupuestos, agrupada por moneda (evita
+// sumar USD y ARS en un mismo total, que sería incorrecto).
+function totalesPorMoneda(lista, campo = "anual") {
+  const out = {};
+  for (const p of lista) { const v = valorPresu(p); out[v.moneda] = (out[v.moneda] || 0) + (v[campo] || 0); }
+  return out; // { USD: n, ARS: m }
+}
+// Texto de un mapa {moneda: monto} para mostrar sin mezclar.
+const textoMonedas = (m) => Object.entries(m).filter(([, v]) => v).map(([mon, v]) => money(v, mon)).join(" · ") || money(0);
 
 function renderPresupuestos() {
   const el = document.getElementById("view-presupuestos");
@@ -1870,7 +1894,7 @@ function renderPresupuestos() {
     return true;
   }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
   const abiertos = state.presupuestos.filter((p) => PRE_ABIERTOS.has(p.estado));
-  const pipe = abiertos.reduce((s, p) => s + valorPresu(p).anual, 0);
+  const pipe = textoMonedas(totalesPorMoneda(abiertos));
   el.innerHTML = `
     <div class="kicker">Cotizaciones</div>
     <div class="page-head">
@@ -1884,7 +1908,7 @@ function renderPresupuestos() {
       <input type="search" id="pq" placeholder="Buscar cliente o N°…" value="${esc(state.filtroPre.q)}" />
       <select id="pfe"><option value="">Todos los estados</option>${PRE_ESTADOS.map((e) => `<option value="${e.id}" ${state.filtroPre.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
       <select id="pft"><option value="">Todo tipo</option>${Object.entries(PRE_TIPOS).map(([k, v]) => `<option value="${k}" ${state.filtroPre.tipo === k ? "selected" : ""}>${v.label}</option>`).join("")}</select>
-      <span class="muted" style="font-size:13px">${abiertos.length} abiertos · ${money(pipe)} anualizado en juego</span>
+      <span class="muted" style="font-size:13px">${abiertos.length} abiertos · ${pipe} anualizado en juego</span>
     </div>
     <div class="overflow"><table class="data">
       <thead><tr><th>N°</th><th>Fecha</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th>Total</th></tr></thead>
@@ -1903,7 +1927,7 @@ function presuRow(p) {
     <td>${fmt(p.fecha)}</td>
     <td><b>${esc(p.cliente?.nombreComercial || "—")}</b></td>
     <td>${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)}</td>
-    <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span></td>
+    <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span>${presuVencido(p) ? ' <span class="badge vencida" title="La validez de la oferta ya venció">validez vencida</span>' : ""}</td>
     <td>${totalTxt}</td></tr>`;
 }
 function renderPresuDetalle(id) {
@@ -1922,6 +1946,7 @@ function renderPresuDetalle(id) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${ro ? "" : `<button class="btn sm" onclick="location.hash='presuform/${p.id}'">✎ Editar</button>`}
+        ${ro ? "" : `<button class="btn sm" onclick="duplicarPresu('${p.id}')" title="Crear una copia editable (revisión de negociación)">⧉ Duplicar</button>`}
         <button class="btn sm" onclick="generarPresuPDF('${p.id}')">🧾 Ver / imprimir</button>
         <button class="btn sm" onclick="generarPresupuestoDocx('${p.id}')" title="Descarga un .docx editable">⬇ Descargar .docx</button>
         ${ro ? "" : estadoPresuBtns(p)}
@@ -1945,7 +1970,7 @@ function renderPresuDetalle(id) {
         <div class="card"><h3>Condiciones</h3>
           <dl class="kv">
             <dt>Forma de pago</dt><dd>${esc(p.economico?.formaPago || "—")}</dd>
-            <dt>Validez</dt><dd>${p.economico?.validezDias || "—"} días</dd>
+            <dt>Validez</dt><dd>${p.economico?.validezDias ? `${p.economico.validezDias} días${vencePresu(p) ? ` · vence ${fmt(vencePresu(p))}` : ""}` : "—"}${presuVencido(p) ? ' <span class="badge vencida">vencida</span>' : ""}</dd>
             <dt>Moneda</dt><dd>${p.economico?.moneda || "USD"}</dd>
           </dl>
         </div>
@@ -1990,6 +2015,29 @@ async function cambiarEstadoPresu(id, nuevo) {
   } catch (e) { toast("Error: " + e.message, true, true); }
 }
 
+// Duplica un presupuesto como borrador nuevo: sirve para las revisiones que
+// genera la negociación sin perder la versión anterior.
+async function duplicarPresu(id) {
+  const orig = presuPorId(id);
+  if (!orig) return;
+  const d = new Date().toISOString().slice(0, 10);
+  const copia = structuredClone(orig);
+  copia.id = "pre_" + Date.now();
+  copia.numero = proxNumeroPresu();
+  copia.estado = "borrador";
+  copia.fecha = d;
+  copia.historialEstados = [{ estado: "borrador", fecha: d, usuario: state.user || "—" }];
+  copia.archivos = [];
+  state.presupuestos.push(copia);
+  try {
+    await persist(`Duplicado ${orig.numero} → ${copia.numero}`, "presupuestos");
+    // Si venía de un ticket, se le suma la nueva versión.
+    const tk = copia.ticketId ? ticketPorId(copia.ticketId) : null;
+    if (tk && !tk.presupuestoIds.includes(copia.id)) { tk.presupuestoIds.push(copia.id); await persist(`Ticket ${tk.numero}: revisión ${copia.numero}`, "tickets"); }
+    toast(`Copia creada: ${copia.numero}`);
+    go("presuform/" + copia.id);
+  } catch (e) { toast("Error: " + e.message, true, true); }
+}
 function nuevoPresupuesto(ticketId) {
   const d = new Date().toISOString().slice(0, 10);
   const tk = ticketId ? ticketPorId(ticketId) : null;
@@ -2377,7 +2425,8 @@ function renderDireccion() {
       ${kpi("Antigüedad promedio", k.edadProm == null ? "—" : k.edadProm + " d", "de los tickets abiertos", k.edadProm != null && k.edadProm > 14 ? "warn" : "")}
       ${kpi("Tiempo a presupuestar", k.tProm == null ? "—" : k.tProm + " d", "del pedido a la cotización")}
       ${kpi("Presupuestos ganados", k.ganados.length, "acumulado histórico")}
-    </div>`;
+    </div>
+    ${state.presupuestos.some((p) => (p.economico?.moneda || "USD") !== "USD") ? `<p class="muted" style="font-size:12.5px;margin-top:14px">Nota: hay presupuestos cargados en ARS. Los montos de este tablero se expresan en USD; para cortes por moneda usá <a href="#reportes">Reportes</a>.</p>` : ""}`;
 }
 // Versión imprimible del tablero de dirección (para pasarle al CEO/COO).
 function imprimirDireccion() {
@@ -2455,16 +2504,25 @@ function reporteGrupos(rows) {
   for (const p of rows) {
     const key = clave(p);
     const v = valorPresu(p);
-    g[key] = g[key] || { key, n: 0, unaVez: 0, mensual: 0, anual: 0 };
-    g[key].n++; g[key].unaVez += v.unaVez; g[key].mensual += v.mensual; g[key].anual += v.anual;
+    const e = g[key] || (g[key] = { key, n: 0, cur: {} });
+    e.n++;
+    const c = e.cur[v.moneda] || (e.cur[v.moneda] = { n: 0, unaVez: 0, mensual: 0, anual: 0 });
+    c.n++; c.unaVez += v.unaVez; c.mensual += v.mensual; c.anual += v.anual;
   }
-  return Object.values(g).sort((a, b) => b.anual - a.anual);
+  // Cada grupo puede tener varias monedas: se muestran sin sumarlas entre sí.
+  return Object.values(g).map((e) => {
+    const curs = Object.keys(e.cur);
+    const txt = (f) => curs.length === 1 ? money(e.cur[curs[0]][f], curs[0]) : textoMonedas(Object.fromEntries(curs.map((k) => [k, e.cur[k][f]])));
+    return { key: e.key, n: e.n, cur: e.cur, curs, unaVezTxt: txt("unaVez"), mensualTxt: txt("mensual"), anualTxt: txt("anual"), _ord: (e.cur.USD?.anual || 0) + curs.reduce((s, k) => s + e.cur[k].anual, 0) };
+  }).sort((a, b) => b._ord - a._ord);
 }
 function renderReportes() {
   const el = document.getElementById("view-reportes");
   const rows = reporteFiltrado();
   const grupos = reporteGrupos(rows);
-  const tot = grupos.reduce((a, g) => ({ n: a.n + g.n, unaVez: a.unaVez + g.unaVez, mensual: a.mensual + g.mensual, anual: a.anual + g.anual }), { n: 0, unaVez: 0, mensual: 0, anual: 0 });
+  const totN = rows.length;
+  const totUna = totalesPorMoneda(rows, "unaVez"), totMen = totalesPorMoneda(rows, "mensual"), totAnu = totalesPorMoneda(rows, "anual");
+  const monedas = [...new Set(rows.map((p) => valorPresu(p).moneda))];
   const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? "selected" : ""}>${l}</option>`;
   el.innerHTML = `
     <div class="kicker">Consultas</div>
@@ -2489,18 +2547,19 @@ function renderReportes() {
       </div>
     </div>
     <div class="grid-kpi" style="margin-top:14px">
-      ${kpi("Presupuestos", tot.n, "en el corte")}
-      ${kpi("Única vez (neto)", money(tot.unaVez), "suma del corte")}
-      ${kpi("Mensual (neto)", money(tot.mensual), "recurrente")}
-      ${kpi("Anualizado", money(tot.anual), "única vez + 12× mensual")}
+      ${kpi("Presupuestos", totN, "en el corte")}
+      ${kpi("Única vez (neto)", textoMonedas(totUna), "suma del corte")}
+      ${kpi("Mensual (neto)", textoMonedas(totMen), "recurrente")}
+      ${kpi("Anualizado", textoMonedas(totAnu), "única vez + 12× mensual")}
     </div>
+    ${monedas.length > 1 ? `<p class="muted" style="font-size:12.5px;margin:8px 0 0">⚠ El corte mezcla ${monedas.join(" y ")}: los totales se muestran separados por moneda (no se suman entre sí). Filtrá por moneda para un único total.</p>` : ""}
     <div class="overflow"><table class="data">
       <thead><tr><th>${REP.agrupar === "ninguno" ? "Presupuesto" : "Grupo"}</th><th>Cant.</th><th>Única vez</th><th>Mensual</th><th>Anualizado</th></tr></thead>
       <tbody>${REP.agrupar === "ninguno"
         ? (rows.length ? rows.map((p) => { const v = valorPresu(p); return `<tr onclick="location.hash='presudetalle/${p.id}'"><td><b>${esc(p.numero)}</b> · ${esc(p.cliente?.nombreComercial || "")}</td><td>1</td><td>${money(v.unaVez, v.moneda)}</td><td>${money(v.mensual, v.moneda)}</td><td>${money(v.anual, v.moneda)}</td></tr>`; }).join("") : `<tr><td colspan="5" class="empty">Sin resultados</td></tr>`)
-        : (grupos.length ? grupos.map((g) => `<tr><td><b>${esc(g.key)}</b></td><td>${g.n}</td><td>${money(g.unaVez)}</td><td>${money(g.mensual)}</td><td>${money(g.anual)}</td></tr>`).join("") : `<tr><td colspan="5" class="empty">Sin resultados</td></tr>`)}
+        : (grupos.length ? grupos.map((g) => `<tr><td><b>${esc(g.key)}</b></td><td>${g.n}</td><td>${g.unaVezTxt}</td><td>${g.mensualTxt}</td><td>${g.anualTxt}</td></tr>`).join("") : `<tr><td colspan="5" class="empty">Sin resultados</td></tr>`)}
       </tbody>
-      <tfoot><tr><th>Total</th><th>${tot.n}</th><th>${money(tot.unaVez)}</th><th>${money(tot.mensual)}</th><th>${money(tot.anual)}</th></tr></tfoot>
+      <tfoot><tr><th>Total</th><th>${totN}</th><th>${textoMonedas(totUna)}</th><th>${textoMonedas(totMen)}</th><th>${textoMonedas(totAnu)}</th></tr></tfoot>
     </table></div>`;
   const bind = (id, key) => { const e = document.getElementById(id); e.oninput = e.onchange = () => { REP[key] = e.value; renderReportes(); }; };
   bind("rDesde", "desde"); bind("rHasta", "hasta"); bind("rTipo", "tipo"); bind("rEstado", "estado");
@@ -2509,8 +2568,8 @@ function renderReportes() {
 function limpiarReporte() { Object.assign(REP, { desde: "", hasta: "", tipo: "", estado: "", moneda: "", cliente: "", agrupar: "tipo" }); renderReportes(); }
 function exportarReporteCSV() {
   const grupos = reporteGrupos(reporteFiltrado());
-  const lines = ["grupo,cantidad,una_vez_neto,mensual_neto,anualizado"];
-  grupos.forEach((g) => lines.push([`"${g.key}"`, g.n, g.unaVez, g.mensual, g.anual].join(",")));
+  const lines = ["grupo,moneda,cantidad,una_vez_neto,mensual_neto,anualizado"];
+  grupos.forEach((g) => g.curs.forEach((cur) => { const c = g.cur[cur]; lines.push([`"${g.key}"`, cur, c.n, c.unaVez, c.mensual, c.anual].join(",")); }));
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -2521,7 +2580,8 @@ function exportarReporteCSV() {
 function imprimirReporte() {
   const rows = reporteFiltrado();
   const grupos = reporteGrupos(rows);
-  const tot = grupos.reduce((a, g) => ({ n: a.n + g.n, unaVez: a.unaVez + g.unaVez, mensual: a.mensual + g.mensual, anual: a.anual + g.anual }), { n: 0, unaVez: 0, mensual: 0, anual: 0 });
+  const totN = rows.length;
+  const totUna = totalesPorMoneda(rows, "unaVez"), totMen = totalesPorMoneda(rows, "mensual"), totAnu = totalesPorMoneda(rows, "anual");
   const agLabel = { tipo: "Tipo", estado: "Estado", cliente: "Cliente", mes: "Mes", ninguno: "Sin agrupar" }[REP.agrupar];
   const filtrosTxt = [REP.desde && `desde ${REP.desde}`, REP.hasta && `hasta ${REP.hasta}`, REP.tipo && `tipo ${(PRE_TIPOS[REP.tipo] || {}).label}`, REP.estado && `estado ${PRE_ESTADO_LABEL[REP.estado]}`, REP.moneda && REP.moneda, REP.cliente && `cliente «${REP.cliente}»`].filter(Boolean).join(" · ") || "sin filtros";
   document.getElementById("printRoot").innerHTML = `
@@ -2545,8 +2605,8 @@ function imprimirReporte() {
     <h1>Reporte por ${agLabel.toLowerCase()}</h1>
     <p style="color:#8c867d;margin:0">${fmt(new Date())} · Filtros: ${esc(filtrosTxt)}</p>
     <table><thead><tr><th>${agLabel}</th><th class="num">Cant.</th><th class="num">Única vez</th><th class="num">Mensual</th><th class="num">Anualizado</th></tr></thead>
-    <tbody>${grupos.map((g) => `<tr><td>${esc(g.key)}</td><td class="num">${g.n}</td><td class="num">${money(g.unaVez)}</td><td class="num">${money(g.mensual)}</td><td class="num">${money(g.anual)}</td></tr>`).join("")}</tbody>
-    <tfoot><tr><th>Total</th><th class="num">${tot.n}</th><th class="num">${money(tot.unaVez)}</th><th class="num">${money(tot.mensual)}</th><th class="num">${money(tot.anual)}</th></tr></tfoot></table>
+    <tbody>${grupos.map((g) => `<tr><td>${esc(g.key)}</td><td class="num">${g.n}</td><td class="num">${g.unaVezTxt}</td><td class="num">${g.mensualTxt}</td><td class="num">${g.anualTxt}</td></tr>`).join("")}</tbody>
+    <tfoot><tr><th>Total</th><th class="num">${totN}</th><th class="num">${textoMonedas(totUna)}</th><th class="num">${textoMonedas(totMen)}</th><th class="num">${textoMonedas(totAnu)}</th></tr></tfoot></table>
     <div class="foot"><b>Documento de circulación interna.</b> Importes netos de IVA. Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.</div>`;
   window.print();
 }
