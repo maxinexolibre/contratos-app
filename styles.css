@@ -235,6 +235,35 @@ h2.sect { font-family: var(--head); font-weight: 800; color: var(--taupe); font-
 .rep-filtros .field { min-width: 130px; flex: 1 1 130px; }
 .data tfoot th { background: var(--surface-2); color: var(--ink); font-weight: 800; border-top: 2px solid var(--line-strong); }
 
+/* ---------- Topbar en dos filas + switch de área ---------- */
+.topbar { flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
+.topbar-main { display: flex; align-items: center; gap: 20px; padding: 11px 24px; }
+.ws-switch { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
+.ws-switch button { border: 0; background: transparent; color: var(--taupe); font-weight: 700; font-size: 14px; padding: 7px 20px; border-radius: 999px; cursor: pointer; }
+.ws-switch button.active { background: var(--orange); color: #fff; box-shadow: var(--shadow); }
+.nav { padding: 0 20px 8px; margin-left: 0; }
+
+/* ---------- Gráficos ---------- */
+.chart-donut-row { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.donut { flex: 0 0 auto; }
+.legend { display: flex; flex-direction: column; gap: 6px; font-size: 13px; min-width: 150px; flex: 1; }
+.legend span { display: flex; align-items: center; gap: 8px; color: var(--taupe); }
+.legend i { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
+.legend b { color: var(--ink); margin-left: auto; }
+.chart-empty { color: var(--mut); font-size: 13px; padding: 20px 0; text-align: center; }
+.cols { display: flex; align-items: flex-end; gap: 10px; height: var(--ch, 130px); }
+.col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; height: 100%; }
+.col-bar-wrap { flex: 1; width: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+.col-bar { width: 68%; max-width: 46px; border-radius: 6px 6px 0 0; min-height: 3px; }
+.col-val { font-size: 11px; font-weight: 700; color: var(--taupe); margin-bottom: 3px; }
+.col-lb { font-size: 11px; color: var(--mut); text-align: center; white-space: nowrap; text-transform: capitalize; }
+.funnel { display: flex; flex-direction: column; gap: 9px; }
+.fn-row { display: grid; grid-template-columns: 100px 1fr auto; align-items: center; gap: 10px; font-size: 13px; }
+.fn-lb { color: var(--taupe); font-weight: 600; }
+.fn-track { background: var(--surface-2); border-radius: 8px; height: 22px; border: 1px solid var(--line); overflow: hidden; }
+.fn-bar { height: 100%; border-radius: 8px 8px 8px 8px; min-width: 6px; }
+.fn-val { font-weight: 700; color: var(--taupe); white-space: nowrap; font-size: 12.5px; }
+
 /* ---------- Accesibilidad e interacción ---------- */
 /* Foco visible de teclado en todo lo interactivo (no aparece con el mouse). */
 :where(a, button, input, select, textarea, [tabindex], summary):focus-visible {
@@ -270,13 +299,14 @@ table.data tr[onclick]:focus-visible { outline: 2px solid var(--orange); outline
 
 /* ---------- Responsive (topbar y vistas angostas) ---------- */
 @media (max-width: 760px) {
-  .topbar { flex-wrap: wrap; gap: 10px 14px; padding: 10px 16px; }
-  .nav { order: 3; width: 100%; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-left: 0; padding-bottom: 2px; }
+  .topbar-main { flex-wrap: wrap; gap: 8px 12px; padding: 10px 16px; }
+  .nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0 16px 8px; }
   .nav button { white-space: nowrap; flex: 0 0 auto; }
-  .topbar .spacer { display: none; }
-  .who { font-size: 12px; }
+  .who { display: none; }
+  .ws-switch button { padding: 7px 15px; }
   .wrap { padding: 18px 16px 70px; }
   .page-head h1 { font-size: 24px; }
+  .fn-row { grid-template-columns: 82px 1fr auto; }
 }
 
 /* ---------- Print (PDF de marca) ---------- */

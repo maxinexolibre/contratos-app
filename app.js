@@ -24,6 +24,7 @@ const state = {
   tickets: [],       // tickets de pedido de cliente
   ticketsSha: null,
   user: localStorage.getItem(LS.user) || "",
+  ws: "contratos", // área de trabajo activa: 'contratos' | 'presupuestos'
   selected: new Set(),
   filtro: { q: "", estado: "", modalidad: "" },
   filtroPre: { q: "", estado: "", tipo: "" },
@@ -541,26 +542,48 @@ function refreshWho() {
 // ============================================================
 //  Router / navegación
 // ============================================================
+// La app se divide en dos áreas de trabajo, cada una con su tablero y secciones.
+const SUBNAV = {
+  contratos: [["dashboard", "Tablero"], ["listado", "Registros"], ["agenda", "Vencimientos"]],
+  presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["reportes", "Reportes"]],
+};
+// A qué área pertenece cada vista/ruta.
+const VIEW_WS = {
+  dashboard: "contratos", listado: "contratos", agenda: "contratos", detalle: "contratos", form: "contratos", pipeline: "contratos",
+  ptablero: "presupuestos", presupuestos: "presupuestos", presudetalle: "presupuestos", presuform: "presupuestos",
+  tickets: "presupuestos", tkdetalle: "presupuestos", tkform: "presupuestos", reportes: "presupuestos", direccion: "presupuestos",
+};
+const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero" };
+
 function router() {
   const view = (location.hash.replace("#", "") || "dashboard").split("/");
   const name = view[0];
+  state.ws = VIEW_WS[name] || state.ws;
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-  document.querySelectorAll("#nav button").forEach((b) => {
-    const on = b.dataset.view === name;
-    b.classList.toggle("active", on);
-    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
-  });
-  const target = document.getElementById("view-" + name) || document.getElementById("view-dashboard");
+  const target = document.getElementById("view-" + name) || document.getElementById("view-" + WS_HOME[state.ws]);
   target.classList.add("active");
+  renderSubnav(name);
   const R = {
-    dashboard: renderDashboard, pipeline: renderPipeline, listado: renderListado, agenda: renderAgenda,
+    dashboard: renderDashboard, ptablero: renderPTablero, pipeline: renderPipeline, listado: renderListado, agenda: renderAgenda,
     detalle: () => renderDetalle(view[1]), form: () => renderForm(view[1]),
     presupuestos: renderPresupuestos, presudetalle: () => renderPresuDetalle(view[1]), presuform: () => renderPresuForm(view[1], view[2]),
     tickets: renderTickets, tkdetalle: () => renderTicketDetalle(view[1]), tkform: () => renderTicketForm(view[1]),
-    direccion: renderDireccion, reportes: renderReportes,
+    reportes: renderReportes, direccion: renderPTablero,
   };
-  (R[name] || renderDashboard)();
+  (R[name] || (() => go(WS_HOME[state.ws])))();
   enhanceA11y();
+}
+// Sub-nav contextual del área activa + estado del switch de área.
+function renderSubnav(name) {
+  const nav = document.getElementById("nav");
+  nav.innerHTML = (SUBNAV[state.ws] || []).map(([v, l]) =>
+    `<button type="button" data-view="${v}" class="${v === name ? "active" : ""}"${v === name ? ' aria-current="page"' : ""}>${l}</button>`).join("");
+  nav.querySelectorAll("button").forEach((b) => (b.onclick = () => go(b.dataset.view)));
+  document.querySelectorAll("#wsSwitch button").forEach((b) => {
+    const on = b.dataset.ws === state.ws;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
 }
 // Hace accesibles por teclado las filas clicables generadas en cada render:
 // las convierte en focusables con rol de botón (el keydown global las activa).
@@ -581,16 +604,13 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("hashchange", router);
 const go = (h) => (location.hash = h);
 
-// El botón "+ Nuevo" del topbar crea la entidad de la sección donde estás.
+// El botón "+ Nuevo" crea la entidad del área activa.
 function nuevoDesdeContexto() {
-  const name = (location.hash.replace("#", "") || "dashboard").split("/")[0];
-  if (name.startsWith("presu")) return go("presuform/new");
-  if (name.startsWith("tk") || name === "tickets") return go("tkform/new");
-  return go("form/new");
+  return go(state.ws === "presupuestos" ? "presuform/new" : "form/new");
 }
 
 function bindChrome() {
-  document.querySelectorAll("#nav button").forEach((b) => (b.onclick = () => go(b.dataset.view)));
+  document.querySelectorAll("#wsSwitch button").forEach((b) => (b.onclick = () => { state.ws = b.dataset.ws; go(WS_HOME[state.ws]); }));
   document.getElementById("btnNuevo").onclick = nuevoDesdeContexto;
   document.getElementById("btnConfig").onclick = openSetup;
   document.getElementById("setupCancel").onclick = closeSetup;
@@ -628,6 +648,22 @@ function renderDashboard() {
   const pipeline = state.data.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado));
   const mrr = vigentes.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
   const { venc, aum, pend } = calcAlertas();
+  // MRR por nivel NexoCare (dona)
+  const nivelItems = CAT.PLAN_ORDEN.map((id) => {
+    const v = vigentes.filter((c) => c.plan?.id === id).reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+    return { label: CAT.PLANES[id].label, value: v, text: moneyK(v) };
+  }).filter((i) => i.value > 0);
+  const sinNivel = vigentes.filter((c) => !c.plan?.id).reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+  if (sinNivel) nivelItems.push({ label: "Sin nivel", value: sinNivel, text: moneyK(sinNivel) });
+  // Vencimientos por mes (próximos 6)
+  const vmeses = [];
+  const now = new Date();
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const n = vigentes.filter((c) => { const f = computeFin(c); return f && `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}` === key; }).length;
+    vmeses.push({ label: d.toLocaleDateString("es-AR", { month: "short" }), value: n, text: String(n) });
+  }
 
   el.innerHTML = `
     <div class="kicker">Panel general</div>
@@ -641,9 +677,15 @@ function renderDashboard() {
     <div class="grid-kpi">
       ${kpi("Contratos vigentes", vigentes.length, "en servicio activo")}
       ${kpi("En pipeline", pipeline.length, "propuestas abiertas")}
-      ${kpi("Ingreso mensual", money(mrr), "USD/mes recurrente")}
+      ${kpi("Ingreso mensual (MRR)", money(mrr), `${money(mrr * 12)} anualizado`)}
       ${kpi("Por vencer", venc.length, "≤ 30 días", venc.length ? "warn" : "")}
       ${kpi("Ajustes sin registrar", pend.length, pend.length ? "revisar si se aplicaron" : "todo al día", pend.length ? "danger" : "")}
+    </div>
+    <div class="dir-2col">
+      <div class="card"><h3>MRR por nivel NexoCare</h3>
+        ${nivelItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(nivelItems, { centro: moneyK(mrr) })}${chartLegend(nivelItems)}</div>` : `<p class="muted">Sin contratos vigentes con nivel asignado.</p>`}</div>
+      <div class="card"><h3>Vencimientos por mes <span class="muted" style="font-weight:400">· próximos 6</span></h3>
+        ${vmeses.some((m) => m.value) ? chartColumns(vmeses) : `<p class="muted">Sin vencimientos en los próximos 6 meses.</p>`}</div>
     </div>
     ${pend.length ? `<div class="card alert-panel danger">
       <h3>⚠ Ajustes de canon sin registrar</h3>
@@ -2382,6 +2424,112 @@ function barra(label, val, max, sub) {
     <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, pct)}%"></div></div>
     <div class="bar-val">${money(val)}</div></div>`;
 }
+
+// ---- Gráficos (SVG vanilla, paleta de marca, sin dependencias) ----
+const CHART_PALETTE = ["#ef8f03", "#645d56", "#ffa62e", "#b26a00", "#8c867d", "#2e7d5b", "#c9c0b4"];
+// Monto compacto para etiquetas de gráfico: US$ 36k / US$ 1,2M.
+function moneyK(n, m = "USD") {
+  const s = m === "USD" ? "US$" : "$";
+  const a = Math.abs(Number(n) || 0);
+  if (a >= 1e6) return `${s} ${(n / 1e6).toFixed(1).replace(".", ",")}M`;
+  if (a >= 1e3) return `${s} ${Math.round(n / 1e3)}k`;
+  return money(n, m);
+}
+// Dona: items = [{label, value, color?, text?}]. `centro` = texto central.
+function chartDonut(items, { size = 148, thick = 24, centro = "" } = {}) {
+  const data = items.filter((i) => i.value > 0);
+  const total = data.reduce((s, i) => s + i.value, 0);
+  const r = (size - thick) / 2, cx = size / 2, cy = size / 2, C = 2 * Math.PI * r;
+  if (!total) return `<div class="chart-empty">Sin datos</div>`;
+  let off = 0;
+  const segs = data.map((i, k) => {
+    const len = C * (i.value / total);
+    const s = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${i.color || CHART_PALETTE[k % CHART_PALETTE.length]}" stroke-width="${thick}" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"><title>${esc(i.label)}: ${i.text || i.value}</title></circle>`;
+    off += len; return s;
+  }).join("");
+  return `<svg class="donut" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="Gráfico de dona">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="${thick}"/>${segs}
+    ${centro ? `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-family="Exo" font-weight="800" font-size="${Math.round(size * 0.19)}" fill="var(--ink)">${esc(centro)}</text>` : ""}
+  </svg>`;
+}
+// Leyenda para dona/series.
+function chartLegend(items) {
+  return `<div class="legend">${items.filter((i) => i.value > 0).map((i, k) =>
+    `<span><i style="background:${i.color || CHART_PALETTE[k % CHART_PALETTE.length]}"></i>${esc(i.label)} <b>${i.text != null ? i.text : i.value}</b></span>`).join("")}</div>`;
+}
+// Columnas verticales: items = [{label, value, color?, text?}].
+function chartColumns(items, { h = 130 } = {}) {
+  const max = Math.max(1, ...items.map((i) => i.value));
+  return `<div class="cols" style="--ch:${h}px">${items.map((i, k) => `
+    <div class="col" title="${esc(i.label)}: ${i.text != null ? i.text : i.value}">
+      <div class="col-bar-wrap"><span class="col-val">${i.text != null ? i.text : i.value}</span>
+        <div class="col-bar" style="height:${i.value > 0 ? Math.max(3, Math.round(i.value / max * 100)) : 0}%;background:${i.color || "var(--orange)"}"></div></div>
+      <div class="col-lb">${esc(i.label)}</div></div>`).join("")}</div>`;
+}
+// Embudo: stages = [{label, value, text}]. Ancho proporcional al valor.
+function chartFunnel(stages) {
+  const max = Math.max(1, ...stages.map((s) => s.value));
+  return `<div class="funnel">${stages.map((s, k) => `
+    <div class="fn-row"><span class="fn-lb">${esc(s.label)}</span>
+      <div class="fn-track"><div class="fn-bar" style="width:${s.value > 0 ? Math.max(8, Math.round(s.value / max * 100)) : 0}%;background:${CHART_PALETTE[k % CHART_PALETTE.length]}"></div></div>
+      <span class="fn-val">${s.text != null ? s.text : s.value}</span></div>`).join("")}</div>`;
+}
+// ---- Tablero del área de Presupuestos ----
+function renderPTablero() {
+  const el = document.getElementById("view-ptablero");
+  const k = kpisDireccion();
+  const abiertos = state.presupuestos.filter((p) => PRE_ABIERTOS.has(p.estado));
+  const pipeTxt = textoMonedas(totalesPorMoneda(abiertos));
+  const pond = abiertos.reduce((s, p) => s + valorPresu(p).anual * (PRE_PROB[p.estado] || 0), 0);
+  const pondTxt = money(Math.round(pond));
+  const vencidos = state.presupuestos.filter(presuVencido).length;
+  // Funnel del pipeline por etapa (monto anualizado)
+  const etapas = ["borrador", "enviado", "negociacion", "ganado"];
+  const stageAmt = (e) => state.presupuestos.filter((p) => p.estado === e).reduce((s, p) => s + valorPresu(p).anual, 0);
+  const funnelData = etapas.map((e) => { const v = stageAmt(e); return { label: PRE_ESTADO_LABEL[e], value: v, text: moneyK(v) }; });
+  // Ventas cerradas por tipo (dona)
+  const tipoItems = Object.entries(k.porTipo).map(([t, v]) => ({ label: (PRE_TIPOS[t] || {}).label || t, value: v, text: moneyK(v) }));
+  // Presupuestos por mes (últimos 6)
+  const meses = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const n = state.presupuestos.filter((p) => String(p.fecha || "").slice(0, 7) === key).length;
+    meses.push({ label: d.toLocaleDateString("es-AR", { month: "short" }), value: n, text: String(n) });
+  }
+  // Tickets por estado
+  const tkItems = TK_ESTADOS.map((e) => ({ label: e.label, value: state.tickets.filter((t) => t.estado === e.id).length, text: String(state.tickets.filter((t) => t.estado === e.id).length) }));
+  el.innerHTML = `
+    <div class="kicker">Presupuestos</div>
+    <div class="page-head">
+      <h1>Tablero de <span class="accent">presupuestos</span></h1>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" onclick="imprimirDireccion()">📄 Informe imprimible</button>
+        <button class="btn sm" onclick="location.hash='presuform/new'">+ Nuevo presupuesto</button>
+      </div>
+    </div>
+    <div class="grid-kpi">
+      ${kpi("Presupuestos abiertos", abiertos.length, `${state.presupuestos.length} en total`)}
+      ${kpi("Pipeline (anualizado)", pipeTxt, "en juego")}
+      ${kpi("Pipeline ponderado", pondTxt || money(0), "por probabilidad")}
+      ${kpi("Win-rate", k.winRate == null ? "—" : Math.round(k.winRate * 100) + "%", `${k.ganados.length}✓ / ${k.perdidos.length}✕`, k.winRate != null && k.winRate < 0.4 ? "warn" : "")}
+      ${kpi("Validez vencida", vencidos, vencidos ? "rehacer oferta" : "todo vigente", vencidos ? "warn" : "")}
+    </div>
+    <div class="dir-2col">
+      <div class="card"><h3>Pipeline por etapa <span class="muted" style="font-weight:400">· anualizado</span></h3>
+        ${funnelData.some((s) => s.value) ? chartFunnel(funnelData) : `<p class="muted">Sin presupuestos cargados.</p>`}</div>
+      <div class="card"><h3>Ventas cerradas por tipo <span class="muted" style="font-weight:400">· anualizado</span></h3>
+        ${tipoItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(tipoItems, { centro: moneyK(k.ventasTotal) })}${chartLegend(tipoItems)}</div>` : `<p class="muted">Todavía sin presupuestos ganados.</p>`}</div>
+    </div>
+    <div class="dir-2col">
+      <div class="card"><h3>Presupuestos por mes <span class="muted" style="font-weight:400">· últimos 6</span></h3>
+        ${chartColumns(meses)}</div>
+      <div class="card"><h3>Tickets por estado</h3>
+        ${state.tickets.length ? chartColumns(tkItems) : `<p class="muted">Sin tickets todavía.</p>`}</div>
+    </div>`;
+}
+
 function renderDireccion() {
   const el = document.getElementById("view-direccion");
   const k = kpisDireccion();

@@ -12,25 +12,25 @@
 <body>
   <button class="skip-link" onclick="document.getElementById('contenido').focus()">Saltar al contenido</button>
   <header class="topbar">
-    <img class="brand-logo" src="assets/nexolibre-logo.svg" alt="Nexolibre" />
-    <nav class="nav" id="nav">
-      <button data-view="dashboard" class="active">Tablero</button>
-      <button data-view="direccion">Dirección</button>
-      <button data-view="listado">Contratos</button>
-      <button data-view="presupuestos">Presupuestos</button>
-      <button data-view="tickets">Tickets</button>
-      <button data-view="agenda">Vencimientos</button>
-      <button data-view="reportes">Reportes</button>
-    </nav>
-    <span class="spacer"></span>
-    <span class="who" id="who"></span>
-    <button class="btn primary sm" id="btnNuevo">+ Nuevo</button>
-    <button class="btn ghost sm" id="btnConfig" aria-label="Configuración de acceso" title="Configuración de acceso">⚙</button>
+    <div class="topbar-main">
+      <img class="brand-logo" src="assets/nexolibre-logo.svg" alt="Nexolibre" />
+      <div class="ws-switch" id="wsSwitch" role="tablist" aria-label="Área de trabajo">
+        <button type="button" data-ws="contratos" role="tab">Contratos</button>
+        <button type="button" data-ws="presupuestos" role="tab">Presupuestos</button>
+      </div>
+      <span class="spacer"></span>
+      <span class="who" id="who"></span>
+      <button class="btn primary sm" id="btnNuevo">+ Nuevo</button>
+      <button class="btn ghost sm" id="btnConfig" aria-label="Configuración de acceso" title="Configuración de acceso">⚙</button>
+    </div>
+    <nav class="nav" id="nav" aria-label="Secciones"></nav>
   </header>
 
   <main class="wrap" id="contenido" tabindex="-1">
-    <!-- Dashboard -->
+    <!-- Tablero Contratos -->
     <section class="view active" id="view-dashboard"></section>
+    <!-- Tablero Presupuestos -->
+    <section class="view" id="view-ptablero"></section>
     <!-- Pipeline -->
     <section class="view" id="view-pipeline"></section>
     <!-- Listado -->
