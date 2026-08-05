@@ -615,9 +615,11 @@ prueba("los KPIs se calculan sobre el estado viejo sin tocar los datos", () => {
 // ===========================================================================
 
 const serieBase = [
-  { unidad: "ARS", fecha: E.hoy(), tasa: 1412.5, fuente: "BNA billete vendedor" },
-  { unidad: "CLP", fecha: E.hoy(), tasa: 940, fuente: "BCCh" },
-  { unidad: "UF", fecha: E.hoy(), tasa: 39500, fuente: "SII" },
+  { unidad: "ARS", fecha: E.hoy(), tasa: 1520, fuente: "BNA vendedor" },
+  { unidad: "CLP", fecha: E.hoy(), tasa: 907.3, fuente: "USD/CLP vendedor" },
+  { unidad: "COP", fecha: E.hoy(), tasa: 3900, fuente: "exchangerate-api" },
+  { unidad: "UYU", fecha: E.hoy(), tasa: 41.3, fuente: "USD/UYU vendedor" },
+  { unidad: "UF", fecha: E.hoy(), tasa: 40844.79, fuente: "mindicador.cl" },
 ].map((x) => E.ENTIDADES.tiposCambio.normalizar(x));
 
 prueba("toma la última cotización no posterior a la fecha", () => {
@@ -630,18 +632,29 @@ prueba("toma la última cotización no posterior a la fecha", () => {
   igual(C.cotizacion(serie, "ARS", "2026-07-30"), null, "no inventa hacia atrás");
 });
 
-prueba("USD no se convierte: ya es la moneda de referencia", () => {
-  igual(C.aUSD(18500, "USD", E.hoy(), []), 18500, "sin necesitar la serie");
+prueba("Estados Unidos no convierte: ya está en la moneda de destino", () => {
+  const r = C.convertir(18500, "US", E.hoy(), []);
+  igual(r.monto, 18500);
+  igual(r.moneda, "USD");
+  igual(r.tasa, 1, "sin necesitar la serie");
 });
 
-prueba("UF pasa por CLP para llegar a USD", () => {
-  // 1.480 UF × 39.500 CLP/UF = 58.460.000 CLP ÷ 940 CLP/USD
-  igual(C.aUSD(1480, "UF", E.hoy(), serieBase), 62191.49);
+prueba("cada país convierte con su propia cotización", () => {
+  igual(C.convertir(1000, "AR", E.hoy(), serieBase).monto, 1520000);
+  igual(C.convertir(1000, "CL", E.hoy(), serieBase).monto, 907300);
+  igual(C.convertir(1000, "CO", E.hoy(), serieBase).monto, 3900000);
+  igual(C.convertir(1000, "UY", E.hoy(), serieBase).monto, 41300);
 });
 
-prueba("UF sin CLP cargado falla con NX-030, no con un número inventado", () => {
-  const parcial = serieBase.filter((x) => x.unidad === "UF");
-  rechaza("NX-030", () => C.aUSD(1000, "UF", E.hoy(), parcial));
+prueba("sin cotización del país no se inventa un número", () => {
+  rechaza("NX-030", () => C.convertir(1000, "AR", E.hoy(), []));
+  rechaza("NX-032", () => C.convertir(1000, "XX", E.hoy(), serieBase));
+});
+
+prueba("el equivalente en UF es informativo y sale de CLP", () => {
+  // 1.000 USD × 907,3 CLP = 907.300 CLP ÷ 40.844,79 CLP/UF
+  igual(C.equivalenteUF(1000, E.hoy(), serieBase), 22.21);
+  igual(C.equivalenteUF(1000, E.hoy(), []), null, "sin serie, no adivina");
 });
 
 prueba("factura congelando el tipo de cambio, la fecha y la fuente", () => {
@@ -649,20 +662,24 @@ prueba("factura congelando el tipo de cambio, la fecha y la fuente", () => {
   const f = C.prepararFacturacion(p, { serie: serieBase, numeroComprobante: "A-0001" });
   igual(f.monedaCotizacion, "USD");
   igual(f.montoCotizado, 18500);
-  igual(f.tcValor, 1412.5);
-  igual(f.tcFuente, "BNA billete vendedor");
+  igual(f.tcValor, 1520);
+  cierto(f.tcFuente.includes("BNA"));
   igual(f.monedaLiquidacion, "ARS");
-  igual(f.montoLiquidado, 26131250, "18.500 × 1.412,50");
+  igual(f.montoLiquidado, 28120000, "18.500 × 1.520");
 });
 
-prueba("un presupuesto en UF se factura en CLP", () => {
-  const p = presuBase({ estado: "Aprobado",
-    items: [{ detalle: "abono", cantidad: 1, unitario: 1480 }],
-    economico: { moneda: "UF", recurrencia: "mensual", descuentoPct: 0, validezDias: 15 } });
+prueba("un presupuesto de Chile se factura en CLP con referencia en UF", () => {
+  const p = presuBase({ estado: "Aprobado", pais: "CL" });
   const f = C.prepararFacturacion(p, { serie: serieBase });
-  igual(f.tcUnidad, "UF");
   igual(f.monedaLiquidacion, "CLP");
-  igual(f.montoLiquidado, 58460000, "1.480 UF × 39.500");
+  igual(f.montoLiquidado, 16785050, "18.500 USD × 907,30");
+  cierto(f.referenciaUF > 0, "Chile lleva el equivalente en UF");
+});
+
+prueba("un presupuesto de Estados Unidos no necesita cotización", () => {
+  const f = C.prepararFacturacion(presuBase({ estado: "Aprobado", pais: "US" }), { serie: [] });
+  igual(f.monedaLiquidacion, "USD");
+  igual(f.montoLiquidado, 18500);
 });
 
 prueba("no se factura con cotización vieja", () => {
@@ -803,7 +820,7 @@ const contratoFirmado = (over = {}) => E.ENTIDADES.contratos.normalizar({
 });
 
 prueba("devenga la comisión de un contrato firmado", () => {
-  const com = CM.devengarPorContrato(contratoFirmado(), {
+  const [com] = CM.devengarPorContrato(contratoFirmado(), {
     vendedores: [VND], acuerdos: [acuerdoPct()], comisiones: [],
     tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })],
   });
@@ -844,7 +861,7 @@ prueba("no se cruzan monedas entre contrato y acuerdo", () => {
 });
 
 prueba("un abono mensual comisiona sobre los meses pactados", () => {
-  const com = CM.devengarPorContrato(
+  const [com] = CM.devengarPorContrato(
     contratoFirmado({ recurrencia: "mensual", economico: { canonMensual: 4000, moneda: "USD" },
       vigencia: { meses: 12 } }), {
       vendedores: [VND], acuerdos: [acuerdoPct({ mesesRecurrente: 6 })], comisiones: [],
@@ -953,6 +970,104 @@ prueba("un contrato de venta única no se valúa como abono anual", () => {
     "sin campo, se asume abono: es lo que son todos los históricos");
   igual(AD.contratoANuevo({ ...base, recurrencia: "unica" }, { indiceClientes: idx }).recurrencia,
     "unica", "con el campo explícito se respeta");
+});
+
+// ---------------------------------------------------------------------------
+// Reparto interno por área
+// ---------------------------------------------------------------------------
+
+prueba("el reparto interno suma 4,5% y cubre los cinco países", () => {
+  const total = CM.REPARTO_INTERNO.reduce((s, r) => s + r.porcentaje, 0);
+  igual(total, 4.5, "3 + 0,5 + 0,5 + 0,5");
+  igual(CM.PAISES_REPARTO, ["AR", "CL", "CO", "UY", "US"]);
+  const acus = CM.acuerdosReparto("2026-01-01");
+  igual(acus.length, 4);
+  cierto(acus.every((a) => a.alcance === "Area" && a.base === "Neto"));
+  cierto(acus.every((a) => !a.pagoTrasCobro), "el reparto no espera al cobro");
+});
+
+prueba("el reparto alcanza solo a los países listados", () => {
+  const [ger] = CM.acuerdosReparto("2026-01-01");
+  cierto(CM.alcanzaPais(ger, "AR"));
+  cierto(CM.alcanzaPais(ger, "US"));
+  cierto(!CM.alcanzaPais(ger, "BR"), "Brasil no está en el reparto");
+});
+
+prueba("devenga la comisión del vendedor MÁS las cuatro de área", () => {
+  const coms = CM.devengarPorContrato(contratoFirmado(), {
+    vendedores: [VND],
+    acuerdos: [acuerdoPct(), ...CM.acuerdosReparto("2026-01-01")],
+    comisiones: [], tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })],
+    presupuestos: [presuBase({ id: "pre_1", estado: "Aprobado" })],
+  });
+  igual(coms.length, 5, "1 del vendedor + 4 áreas");
+  const porArea = Object.fromEntries(
+    coms.filter((c) => c.alcance === "Area").map((c) => [c.area, c.monto]));
+  // Base 40.000 sin IVA incluido -> el neto es el total
+  igual(porArea["Gerencia comercial"], 1200, "3% de 40.000");
+  igual(porArea["Marketing"], 200, "0,5%");
+  igual(porArea["Diseño"], 200);
+  igual(porArea["Ventas"], 200);
+  const vendedorCom = coms.find((c) => c.alcance === "Vendedor");
+  igual(vendedorCom.monto, 2000, "5% pactado");
+});
+
+prueba("el reparto corre aunque no haya vendedor asignado", () => {
+  const coms = CM.devengarPorContrato(contratoFirmado(), {
+    vendedores: [], acuerdos: CM.acuerdosReparto("2026-01-01"),
+    comisiones: [], tickets: [], permitirSinVendedor: true,
+  });
+  igual(coms.length, 4, "solo las de área");
+  cierto(coms.every((c) => c.alcance === "Area"));
+});
+
+prueba("un país fuera del alcance del acuerdo no devenga esa área", () => {
+  // Acuerdo de área acotado a Argentina: una venta chilena no lo activa.
+  const soloAR = E.ENTIDADES.acuerdosComision.normalizar({
+    id: "acu_ar", alcance: "Area", area: "Gerencia comercial", paises: ["AR"],
+    modalidad: "Porcentaje", porcentaje: 3, base: "Neto",
+    moneda: "USD", vigenciaDesde: "2026-01-01" });
+
+  igual(CM.acuerdosDeArea([soloAR], "AR", "2026-03-10").length, 1);
+  igual(CM.acuerdosDeArea([soloAR], "CL", "2026-03-10").length, 0);
+
+  rechaza("NX-061", () => CM.devengarPorContrato(
+    contratoFirmado({ pais: "CL" }), {
+      vendedores: [], acuerdos: [soloAR],
+      comisiones: [], tickets: [], permitirSinVendedor: true }));
+});
+
+prueba("la base Neto descuenta el IVA cuando el precio lo incluye", () => {
+  const conIVA = presuBase({ id: "pre_1", estado: "Aprobado",
+    economico: { moneda: "USD", validezDias: 15, descuentoPct: 0,
+      recurrencia: "unica", ivaPct: 21, incluyeIVA: true } });
+  // total 18.500 con IVA incluido -> neto 15.289,26
+  igual(conIVA.neto, 15289.26);
+
+  const [com] = CM.devengarPorContrato(
+    contratoFirmado({ economico: { canonMensual: 18500, moneda: "USD" } }), {
+      vendedores: [VND], acuerdos: [acuerdoPct({ base: "Neto" })], comisiones: [],
+      tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })],
+      presupuestos: [conIVA] });
+  igual(com.baseCalculo, 15289.26, "comisiona sobre el neto, no sobre el IVA");
+  igual(com.monto, 764.46, "5% del neto");
+  cierto(com.detalleCalculo.includes("neto sin IVA"));
+});
+
+prueba("sin IVA incluido, el neto es el total", () => {
+  igual(presuBase().neto, 18500);
+});
+
+prueba("dos acuerdos de la misma área con países cruzados se solapan", () => {
+  const [ger] = CM.acuerdosReparto("2026-01-01");
+  const otro = E.ENTIDADES.acuerdosComision.normalizar({
+    id: "acu_x", alcance: "Area", area: "Gerencia comercial", paises: ["AR"],
+    modalidad: "Porcentaje", porcentaje: 4, vigenciaDesde: "2026-06-01" });
+  cierto(CM.seSolapa(otro, ger));
+
+  // Distinta área: no se pisan
+  const marketing = CM.acuerdosReparto("2026-01-01")[1];
+  cierto(!CM.seSolapa(otro, marketing));
 });
 
 // ===========================================================================

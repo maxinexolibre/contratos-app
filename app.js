@@ -2,6 +2,10 @@
    Nexolibre · Plataforma de contratos — lógica de la SPA
    ============================================================ */
 const CFG = window.NEXO_CONFIG;
+// Núcleo v3. Las métricas y el redondeo monetario viven ahí: tener dos
+// implementaciones de la misma cuenta garantiza que diverjan.
+const NKPI = window.NEXO_KPI;
+const NEXO_ESQUEMA = window.NEXO_ESQUEMA;
 const CAT = window.NEXO_CATALOGO;
 const LS = {
   pat: "nexo_pat",
@@ -314,7 +318,11 @@ const nombreCliente = (c) => c.cliente?.nombreComercial || rsPrincipal(c).razonS
 const NUM_LETRA = ["cero", "una", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce"];
 const numLetra = (n) => NUM_LETRA[n] || String(n);
 
-const money = (n, m = "USD") => (n || n === 0 ? `${m === "USD" ? "US$" : "$"} ${Number(n).toLocaleString("es-AR")}` : "—");
+// El símbolo sale del núcleo. La versión anterior mostraba TODO lo que no era
+// USD como "$": con cinco países operando, ARS, CLP, COP y UYU se verían
+// idénticos y no habría forma de saber qué moneda se está mirando.
+const money = (n, m = "USD") => (n || n === 0
+  ? `${NKPI.SIMBOLO[m] || m} ${Number(n).toLocaleString("es-AR")}` : "—");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // -------- base64 utf-8 --------
@@ -404,11 +412,49 @@ async function ghUploadFile(path, base64, msg) {
   if (!r.ok) throw new Error(`Upload ${r.status}`);
 }
 
+/**
+ * Guarda un store, reintentando si otro usuario escribió el mismo archivo.
+ *
+ * Sin esto, dos personas guardando a la vez terminaban con la segunda
+ * recibiendo un error de GitHub y perdiendo su edición. Ahora se recarga la
+ * versión ajena, se vuelven a aplicar los cambios propios encima y se
+ * reintenta: nadie pisa a nadie y nadie pierde trabajo.
+ *
+ * La lógica es la misma que implementa NEXO_ALMACEN; vive acá mientras la
+ * capa de datos siga siendo de archivo plano.
+ */
+async function ghSaveConReintento(store, msg) {
+  const def = STORE_DEF[store];
+  const REINTENTOS = 3;
+
+  for (let intento = 1; intento <= REINTENTOS; intento++) {
+    try {
+      return await ghSaveFile(def.path(), state[def.key], state[def.shaKey], msg);
+    } catch (e) {
+      const conflicto = /\b(409|422)\b/.test(String(e.message));
+      if (!conflicto || intento === REINTENTOS) throw e;
+
+      // Se recarga lo que hay en el repo y se reaplican los registros propios
+      // por id. Los ajenos que no tocamos quedan intactos.
+      const { arr, sha } = await ghLoadFile(def.path());
+      const ajenos = def.migrate(arr);
+      const mios = new Map((state[def.key] || []).map((r) => [r.id, r]));
+      const fusionado = ajenos.map((r) => mios.get(r.id) || r);
+      for (const [id, r] of mios) {
+        if (!ajenos.some((x) => x.id === id)) fusionado.push(r);
+      }
+      state[def.key] = fusionado;
+      state[def.shaKey] = sha;
+      console.warn(`Conflicto en ${store}: se fusionó con la versión del repo y se reintenta.`);
+    }
+  }
+}
+
 async function persist(msg, store = "contratos") {
   if (state.soloLectura) throw new Error("Tu acceso es de solo lectura: podés consultar y descargar, no modificar.");
   const def = STORE_DEF[store];
   if (state.mode === "connected") {
-    state[def.shaKey] = await ghSaveFile(def.path(), state[def.key], state[def.shaKey], msg);
+    state[def.shaKey] = await ghSaveConReintento(store, msg);
   } else {
     localStorage.setItem(def.ls, JSON.stringify(state[def.key]));
     localStorage.setItem(LS.demoVer, DEMO_VERSION);
@@ -2062,7 +2108,10 @@ function presuVencido(p) {
 // sumar USD y ARS en un mismo total, que sería incorrecto).
 function totalesPorMoneda(lista, campo = "anual") {
   const out = {};
-  for (const p of lista) { const v = valorPresu(p); out[v.moneda] = (out[v.moneda] || 0) + (v[campo] || 0); }
+  for (const p of lista) {
+    const v = valorPresu(p);
+    out[v.moneda] = NEXO_ESQUEMA.money((out[v.moneda] || 0) + (v[campo] || 0));
+  }
   return out; // { USD: n, ARS: m }
 }
 // Texto de un mapa {moneda: monto} para mostrar sin mezclar.
@@ -2552,7 +2601,10 @@ function kpisDireccion() {
   const pipePond = abiertos.reduce((s, p) => s + valorPresu(p).anual * (PRE_PROB[p.estado] || 0), 0);
   const ganados = state.presupuestos.filter((p) => p.estado === "ganado");
   const perdidos = state.presupuestos.filter((p) => p.estado === "perdido");
-  const winRate = ganados.length + perdidos.length ? ganados.length / (ganados.length + perdidos.length) : null;
+  // El win rate lo calcula el núcleo: la división segura, el denominador sobre
+  // resueltos y el null cuando no hay muestra están definidos en un solo lugar.
+  const winRatePct = NKPI.pct(ganados.length, ganados.length + perdidos.length);
+  const winRate = winRatePct === null ? null : winRatePct / 100;
 
   // Los montos se agrupan por moneda: sumar USD con ARS daría un número falso.
   // Los tableros muestran la moneda principal (USD) y listan el resto aparte.
@@ -2560,7 +2612,7 @@ function kpisDireccion() {
   for (const p of ganados) {
     const v = valorPresu(p);
     const e = porTipoMon[p.tipo] || (porTipoMon[p.tipo] = {});
-    e[v.moneda] = (e[v.moneda] || 0) + v.anual;
+    e[v.moneda] = NEXO_ESQUEMA.money((e[v.moneda] || 0) + v.anual);
   }
   const porTipo = Object.fromEntries(Object.entries(porTipoMon).map(([t, m]) => [t, m.USD || 0]).filter(([, v]) => v));
   const ventasTotal = Object.values(porTipo).reduce((a, b) => a + b, 0);

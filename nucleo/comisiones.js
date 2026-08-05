@@ -39,6 +39,11 @@
     return true;
   }
 
+  /** ¿El acuerdo alcanza a ese país? Sin países listados, alcanza a todos. */
+  function alcanzaPais(acuerdo, pais) {
+    return !acuerdo.paises?.length || acuerdo.paises.includes(pais);
+  }
+
   /**
    * Acuerdo aplicable a un vendedor en una fecha. Si hubiera más de uno
    * vigente —que las reglas impiden— toma el más reciente y no falla en
@@ -46,7 +51,7 @@
    */
   function acuerdoVigente(acuerdos, vendedorId, f) {
     const candidatos = (acuerdos || [])
-      .filter((a) => a.vendedorId === vendedorId && rigeEn(a, f))
+      .filter((a) => a.alcance === "Vendedor" && a.vendedorId === vendedorId && rigeEn(a, f))
       .sort((a, b) => b.vigenciaDesde.localeCompare(a.vigenciaDesde));
     if (candidatos.length > 1) {
       console.warn(
@@ -56,12 +61,76 @@
     return candidatos[0] || null;
   }
 
-  /** Dos acuerdos del mismo vendedor no pueden pisarse en el tiempo. */
+  /**
+   * Acuerdos de área vigentes para un país y una fecha.
+   * Son las asignaciones fijas de la empresa: corren sobre toda venta
+   * concretada, en paralelo a lo pactado con el vendedor.
+   */
+  function acuerdosDeArea(acuerdos, pais, f) {
+    return (acuerdos || [])
+      .filter((a) => a.alcance === "Area" && rigeEn(a, f) && alcanzaPais(a, pais))
+      .sort((a, b) => a.area.localeCompare(b.area));
+  }
+
+  /**
+   * Dos acuerdos no pueden pisarse en el tiempo si aplican a lo mismo:
+   * el mismo vendedor, o la misma área sobre países que se cruzan.
+   */
   function seSolapa(a, b) {
-    if (a.vendedorId !== b.vendedorId || a.id === b.id) return false;
+    if (a.id === b.id || a.alcance !== b.alcance) return false;
+    if (a.alcance === "Vendedor") {
+      if (a.vendedorId !== b.vendedorId) return false;
+    } else {
+      if (a.area !== b.area) return false;
+      // Sin países listados, alcanza a todos: siempre se cruza.
+      const pa = a.paises?.length ? a.paises : null;
+      const pb = b.paises?.length ? b.paises : null;
+      if (pa && pb && !pa.some((p) => pb.includes(p))) return false;
+    }
     const finA = a.vigenciaHasta || "9999-12-31";
     const finB = b.vigenciaHasta || "9999-12-31";
     return a.vigenciaDesde <= finB && b.vigenciaDesde <= finA;
+  }
+
+  /**
+   * Reparto interno fijo de Nexolibre (definido por Maxi, 2026-08-05).
+   *
+   * Corre sobre toda venta concretada en los cinco países donde opera, en
+   * paralelo a lo pactado con el vendedor. Suma 4,5% del neto.
+   *
+   * Se generan como acuerdos de alcance "Area" para que sigan las mismas
+   * reglas que el resto: vigencia versionada, base explícita y trazabilidad
+   * del cálculo. Cambiar un porcentaje cierra el acuerdo y abre otro, con lo
+   * que las comisiones viejas se siguen explicando con sus propias reglas.
+   */
+  const REPARTO_INTERNO = [
+    { area: "Gerencia comercial", porcentaje: 3 },
+    { area: "Marketing", porcentaje: 0.5 },
+    { area: "Diseño", porcentaje: 0.5 },
+    { area: "Ventas", porcentaje: 0.5 },
+  ];
+
+  const PAISES_REPARTO = ["AR", "CL", "CO", "UY", "US"];
+
+  /** Genera los acuerdos del reparto interno, listos para guardar. */
+  function acuerdosReparto(vigenciaDesde) {
+    const desde = vigenciaDesde || E.hoy();
+    return REPARTO_INTERNO.map((r) => E.ENTIDADES.acuerdosComision.normalizar({
+      id: `acu_area_${r.area.toLowerCase().replace(/[^a-z]+/g, "-")}`,
+      alcance: "Area",
+      area: r.area,
+      paises: PAISES_REPARTO,
+      nombre: `${r.area} · ${r.porcentaje}% del neto`,
+      modalidad: "Porcentaje",
+      porcentaje: r.porcentaje,
+      base: "Neto",
+      moneda: "USD",
+      // El reparto interno no espera al cobro: es asignación de resultado,
+      // no un pago a un tercero.
+      pagoTrasCobro: false,
+      vigenciaDesde: desde,
+      notas: "Reparto interno automático. Aplica a toda venta concretada.",
+    }));
   }
 
   // --------------------------------------------------------------------------
@@ -196,10 +265,40 @@
   // --------------------------------------------------------------------------
 
   /**
-   * Genera la comisión que corresponde a un contrato firmado.
-   * No escribe nada: devuelve el registro para que pase por las reglas.
+   * Base de cálculo según lo que diga el acuerdo.
    *
-   * @param {object} ctx { contrato, ticket, vendedores, acuerdos, comisiones }
+   * "Neto" es el criterio habitual: el valor de la venta sin IVA. Comisionar
+   * sobre el bruto pagaría comisión sobre un impuesto que la empresa apenas
+   * recauda para el fisco.
+   */
+  function baseSegunAcuerdo(acuerdo, { montoContrato, presupuesto, meses }) {
+    let bruto = montoContrato;
+    let nota = "";
+    if (meses > 1) {
+      bruto = E.money(bruto * meses);
+      nota = ` (${meses} meses de abono)`;
+    }
+
+    if (acuerdo.base === "Neto") {
+      // El neto sale del presupuesto, que es donde vive el IVA. Sin
+      // presupuesto asociado no se puede saber si el importe lo incluye:
+      // se toma tal cual y se deja dicho.
+      if (!presupuesto) {
+        return { base: bruto, nota: nota + " · sin presupuesto: se asume neto" };
+      }
+      const factor = presupuesto.total > 0 ? presupuesto.neto / presupuesto.total : 1;
+      return { base: E.money(bruto * factor), nota: nota + (factor < 1 ? " · neto sin IVA" : "") };
+    }
+    return { base: bruto, nota };
+  }
+
+  /**
+   * Genera TODAS las comisiones que corresponden a un contrato firmado:
+   * la del vendedor según lo pactado, más el reparto interno por área.
+   *
+   * No escribe nada: devuelve los registros para que pasen por las reglas.
+   *
+   * @returns {Array} una comisión por acuerdo aplicable
    */
   function devengarPorContrato(contrato, ctx) {
     const vigente = ["Firmado", "Activo", "Finalizado"].includes(contrato.estado);
@@ -219,62 +318,85 @@
     }
 
     const ticket = (ctx.tickets || []).find((t) => t.id === contrato.ticketId);
-    const vendedorId = ctx.vendedorId || ticket?.vendedor;
-    if (!vendedorId) {
-      err("NX-064",
-        `No se puede saber a qué vendedor corresponde ${contrato.numero}`,
-        "El contrato no tiene ticket de origen o el ticket no tiene vendedor asignado");
-    }
-
-    const vendedor = (ctx.vendedores || []).find(
-      (v) => v.id === vendedorId || v.usuarioId === vendedorId || v.nombre === vendedorId);
-    if (!vendedor) err("NX-064", `El vendedor "${vendedorId}" no está dado de alta`);
-
+    const presupuesto = (ctx.presupuestos || []).find((p) => p.id === contrato.presupuestoId);
     const fechaDevengo = contrato.fechaFirma || E.hoy();
-    const acuerdo = acuerdoVigente(ctx.acuerdos, vendedor.id, fechaDevengo);
-    if (!acuerdo) {
-      err("NX-061",
-        `${vendedor.nombre} no tiene acuerdo de comisión vigente al ${fechaDevengo}`,
-        "Cargá el acuerdo antes de devengar");
-    }
+    // El país sale del presupuesto de origen: es donde se cotizó.
+    const pais = contrato.pais || presupuesto?.pais || ticket?.pais || "AR";
 
-    // Base: un abono mensual se comisiona sobre lo que efectivamente se
-    // comisiona según el acuerdo (N meses o el año), no sobre "el contrato"
-    // como si fuera una venta única.
-    let base = contrato.economico.canonMensual;
-    let notaBase = "";
-    if (contrato.recurrencia === "mensual") {
-      const meses = acuerdo.mesesRecurrente > 0
-        ? acuerdo.mesesRecurrente
-        : (contrato.vigencia?.meses || 12);
-      base = E.money(base * meses);
-      notaBase = ` (${meses} meses de abono)`;
-    }
+    // Un abono mensual se comisiona sobre los meses pactados, no sobre el
+    // canon como si fuera una venta única.
+    const mesesDe = (acuerdo) => contrato.recurrencia === "mensual"
+      ? (acuerdo.mesesRecurrente > 0 ? acuerdo.mesesRecurrente : (contrato.vigencia?.meses || 12))
+      : 1;
 
-    if (contrato.economico.moneda !== acuerdo.moneda) {
-      err("NX-065",
-        `El contrato está en ${contrato.economico.moneda} y el acuerdo en ${acuerdo.moneda}`,
-        "Convertir monedas acá inventaría un tipo de cambio: alineá el acuerdo o registrala a mano");
-    }
-
-    const r = calcular(acuerdo, base);
-
-    return E.ENTIDADES.comisiones.normalizar({
-      vendedorId: vendedor.id,
-      acuerdoId: acuerdo.id,
+    const comun = {
       origenTipo: "Contrato",
       origenId: contrato.id,
       origenNumero: contrato.numero,
       clienteId: contrato.clienteId || ticket?.clienteId || "",
       periodo: fechaDevengo.slice(0, 7),
-      baseCalculo: base,
-      porcentajeAplicado: r.porcentaje,
-      monto: r.monto,
-      moneda: acuerdo.moneda,
       estado: "Devengada",
       fechaDevengo,
-      detalleCalculo: r.detalle + notaBase,
-    });
+      pais,
+    };
+
+    const generadas = [];
+
+    /** Arma una comisión a partir de un acuerdo aplicable. */
+    const aplicar = (acuerdo, extra) => {
+      if (contrato.economico.moneda !== acuerdo.moneda) {
+        err("NX-065",
+          `El contrato está en ${contrato.economico.moneda} y el acuerdo en ${acuerdo.moneda}`,
+          "Convertir monedas acá inventaría un tipo de cambio: alineá el acuerdo");
+      }
+      const { base, nota } = baseSegunAcuerdo(acuerdo, {
+        montoContrato: contrato.economico.canonMensual,
+        presupuesto, meses: mesesDe(acuerdo),
+      });
+      const r = calcular(acuerdo, base);
+      generadas.push(E.ENTIDADES.comisiones.normalizar({
+        ...comun, ...extra,
+        acuerdoId: acuerdo.id,
+        baseCalculo: base,
+        porcentajeAplicado: r.porcentaje,
+        monto: r.monto,
+        moneda: acuerdo.moneda,
+        detalleCalculo: r.detalle + nota,
+      }));
+    };
+
+    // --- Comisión del vendedor -------------------------------------------
+    const vendedorId = ctx.vendedorId || ticket?.vendedor;
+    const vendedor = vendedorId && (ctx.vendedores || []).find(
+      (v) => v.id === vendedorId || v.usuarioId === vendedorId || v.nombre === vendedorId);
+
+    if (vendedor) {
+      const acuerdo = acuerdoVigente(ctx.acuerdos, vendedor.id, fechaDevengo);
+      if (acuerdo) {
+        aplicar(acuerdo, { alcance: "Vendedor", vendedorId: vendedor.id });
+      } else if (!ctx.permitirSinAcuerdo) {
+        err("NX-061",
+          `${vendedor.nombre} no tiene acuerdo de comisión vigente al ${fechaDevengo}`,
+          "Cargá el acuerdo, o devengá solo el reparto interno");
+      }
+    } else if (!ctx.permitirSinVendedor) {
+      err("NX-064",
+        `No se puede saber a qué vendedor corresponde ${contrato.numero}`,
+        "El contrato no tiene ticket de origen, el ticket no tiene vendedor asignado, " +
+        "o esa persona no está dada de alta como vendedor");
+    }
+
+    // --- Reparto interno por área ----------------------------------------
+    // Corre siempre, con o sin vendedor: es asignación de resultado de la
+    // empresa, no un pago a un tercero.
+    for (const a of acuerdosDeArea(ctx.acuerdos, pais, fechaDevengo)) {
+      aplicar(a, { alcance: "Area", area: a.area });
+    }
+
+    if (!generadas.length) {
+      err("NX-061", `No hay ningún acuerdo aplicable a ${contrato.numero} al ${fechaDevengo}`);
+    }
+    return generadas;
   }
 
   // --------------------------------------------------------------------------
@@ -361,10 +483,22 @@
     }).sort((a, b) => (b.ganados || 0) - (a.ganados || 0));
   }
 
+  /** Totales del reparto interno por área, sin mezclar monedas. */
+  function resumenPorArea(comisiones) {
+    const out = {};
+    for (const c of comisiones || []) {
+      if (c.alcance !== "Area" || c.estado === "Anulada") continue;
+      out[c.area] = out[c.area] || {};
+      out[c.area][c.moneda] = E.money((out[c.area][c.moneda] || 0) + c.monto);
+    }
+    return out;
+  }
+
   global.NEXO_COMISIONES = {
-    rigeEn, acuerdoVigente, seSolapa, validarEscalones,
-    calcular, calcularEscalonada,
+    rigeEn, alcanzaPais, acuerdoVigente, acuerdosDeArea, seSolapa, validarEscalones,
+    calcular, calcularEscalonada, baseSegunAcuerdo,
     devengarPorContrato, puedeLiquidarse,
-    resumen, panelVendedores,
+    resumen, resumenPorArea, panelVendedores,
+    REPARTO_INTERNO, PAISES_REPARTO, acuerdosReparto,
   };
 })(typeof window !== "undefined" ? window : globalThis);

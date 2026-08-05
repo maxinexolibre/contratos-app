@@ -1,27 +1,22 @@
 /**
- * Tipos de cambio y facturación.
+ * Tipos de cambio y facturación multi-país.
  *
- * Criterio comercial de Nexolibre (definido por Maxi, 2026-08-04):
+ * Criterio comercial de Nexolibre (Maxi, 2026-08-05):
  *
- *   Se COTIZA en USD (Argentina y USA) o en UF (Chile).
- *   Se FACTURA en moneda local, convirtiendo al tipo de cambio del día.
+ *   TODO se cotiza en USD.
+ *   Al facturar se convierte a la moneda del país de origen de la cotización.
  *
- * De ahí se desprenden dos cosas que este módulo garantiza:
+ * De ahí se desprende algo que simplifica todo el sistema: los indicadores
+ * comerciales no dependen del tipo de cambio, porque el importe cotizado YA
+ * está en la moneda de referencia. El tipo de cambio aparece una sola vez, en
+ * el momento de emitir el comprobante, y queda CONGELADO ahí con su fecha y su
+ * fuente. Nunca se recalcula: si se reconvirtiera al consultar, el importe de
+ * una factura de marzo cambiaría todos los días.
  *
- * 1. Los KPIs no dependen del tipo de cambio. El importe cotizado YA está en
- *    la moneda de referencia. El tipo de cambio aparece recién al facturar.
- *
- * 2. El tipo de cambio aplicado queda CONGELADO en el comprobante, con su
- *    fecha y su fuente. Nunca se recalcula: si se reconvirtiera al consultar,
- *    el importe de una factura de marzo cambiaría todos los días.
- *
- * Unidades de la serie:
- *   ARS  pesos por 1 USD · BNA billete VENDEDOR
- *   CLP  pesos chilenos por 1 USD
- *   UF   pesos chilenos por 1 UF · SII / Banco Central de Chile
- *
- * La UF no es una moneda: es una unidad indexada. Para llevarla a USD hay que
- * pasar por CLP, así que un importe en UF necesita las dos cotizaciones.
+ * Las cotizaciones se traen de APIs públicas con CORS habilitado, porque no
+ * hay servidor que pueda hacerlo por detrás. Si una fuente no responde, la
+ * serie guardada sigue sirviendo: se avisa que está vieja y, pasado el margen
+ * de tolerancia, la facturación se bloquea sola.
  */
 (function (global) {
   "use strict";
@@ -31,50 +26,100 @@
   /** Días de tolerancia antes de considerar vieja una cotización. */
   const TOLERANCIA_DIAS = 3;
 
-  const FUENTES = {
-    ARS: "BNA billete vendedor",
-    CLP: "Banco Central de Chile",
-    UF: "SII / BCCh",
+  /**
+   * Países donde opera Nexolibre, con su moneda de liquidación.
+   * `sinConversion` marca el país cuya moneda ya es la de cotización.
+   */
+  const PAISES = {
+    AR: { nombre: "Argentina", moneda: "ARS", simbolo: "$" },
+    CL: { nombre: "Chile", moneda: "CLP", simbolo: "CLP$", referenciaUF: true },
+    CO: { nombre: "Colombia", moneda: "COP", simbolo: "COP$" },
+    UY: { nombre: "Uruguay", moneda: "UYU", simbolo: "$U" },
+    US: { nombre: "Estados Unidos", moneda: "USD", simbolo: "US$", sinConversion: true },
   };
 
-  const UNIDADES = ["ARS", "CLP", "UF"];
+  /** Unidades de la serie de cotizaciones. UF es unidad indexada, no moneda. */
+  const UNIDADES = ["ARS", "CLP", "COP", "UYU", "UF"];
 
-  /** Moneda de liquidación según la de cotización. */
-  const LIQUIDACION = { USD: "ARS", UF: "CLP" };
+  /**
+   * Fuentes públicas. Cada una declara cómo extraer el valor de su respuesta.
+   *
+   * Sobre ARS: el BNA no publica una API propia ni habilita CORS. dolarapi.com
+   * expone la cotización oficial, que es la del Banco Nación. Se toma `venta`
+   * —el tipo vendedor— que es el criterio pactado. La fuente queda escrita en
+   * cada comprobante para que el origen del número sea auditable.
+   */
+  const FUENTES = {
+    ARS: {
+      url: "https://dolarapi.com/v1/dolares/oficial",
+      etiqueta: "BNA vendedor (vía dolarapi)",
+      extraer: (j) => ({ tasa: j.venta, fecha: (j.fechaActualizacion || "").slice(0, 10) }),
+    },
+    CLP: {
+      url: "https://cl.dolarapi.com/v1/cotizaciones/usd",
+      etiqueta: "USD/CLP vendedor",
+      extraer: (j) => ({ tasa: j.venta, fecha: (j.fechaActualizacion || "").slice(0, 10) }),
+    },
+    UYU: {
+      url: "https://uy.dolarapi.com/v1/cotizaciones/usd",
+      etiqueta: "USD/UYU vendedor",
+      extraer: (j) => ({ tasa: j.venta, fecha: (j.fechaActualizacion || "").slice(0, 10) }),
+    },
+    UF: {
+      url: "https://mindicador.cl/api/uf",
+      etiqueta: "UF · mindicador.cl (BCCh)",
+      extraer: (j) => {
+        const s = (j.serie || [])[0] || {};
+        return { tasa: s.valor, fecha: (s.fecha || "").slice(0, 10) };
+      },
+    },
+    COP: {
+      url: "https://open.er-api.com/v6/latest/USD",
+      etiqueta: "USD/COP · exchangerate-api",
+      extraer: (j) => ({
+        tasa: j?.rates?.COP,
+        fecha: j?.time_last_update_utc
+          ? new Date(j.time_last_update_utc).toISOString().slice(0, 10) : E.hoy(),
+      }),
+    },
+  };
+
+  const err = (codigo, mensaje, sugerencia) => {
+    throw new global.NEXO_REGLAS.ErrorNexo(codigo, mensaje, sugerencia);
+  };
 
   // --------------------------------------------------------------------------
   // Consulta de la serie
   // --------------------------------------------------------------------------
 
   /**
-   * Última cotización conocida de una unidad en una fecha dada.
-   * Usa la más reciente que no sea posterior: los fines de semana y feriados
-   * el BNA no publica, así que el viernes rige hasta el lunes.
+   * Última cotización conocida de una unidad en una fecha.
+   * Toma la más reciente que no sea posterior: los fines de semana y feriados
+   * no se publica, así que el viernes rige hasta el lunes.
    */
   function cotizacion(serie, unidad, fecha) {
     const f = E.fecha(fecha) || E.hoy();
-    const candidatas = (serie || [])
+    return (serie || [])
       .filter((x) => x.unidad === unidad && x.fecha <= f)
-      .sort((a, b) => b.fecha.localeCompare(a.fecha));
-    return candidatas[0] || null;
+      .sort((a, b) => b.fecha.localeCompare(a.fecha))[0] || null;
   }
 
-  /** ¿Está la serie lo bastante fresca para facturar? */
   function estaVigente(serie, unidad, hoy) {
     const c = cotizacion(serie, unidad, hoy || E.hoy());
-    if (!c) return false;
-    return c.fecha >= E.sumarDias(hoy || E.hoy(), -TOLERANCIA_DIAS);
+    return Boolean(c) && c.fecha >= E.sumarDias(hoy || E.hoy(), -TOLERANCIA_DIAS);
   }
 
-  /** Estado de la serie por unidad, para el panel de configuración. */
+  /** Estado de cada unidad, para el panel. */
   function estadoSerie(serie, hoy) {
     const h = hoy || E.hoy();
     return UNIDADES.map((unidad) => {
       const c = cotizacion(serie, unidad, h);
-      const dias = c ? Math.round((new Date(h) - new Date(c.fecha)) / 86400000) : null;
+      const dias = c
+        ? Math.round((new Date(h + "T00:00:00Z") - new Date(c.fecha + "T00:00:00Z")) / 86400000)
+        : null;
       return {
         unidad,
-        fuente: FUENTES[unidad],
+        fuente: FUENTES[unidad]?.etiqueta || "",
         valor: c?.tasa ?? null,
         fecha: c?.fecha ?? null,
         diasAtraso: dias,
@@ -84,42 +129,94 @@
   }
 
   // --------------------------------------------------------------------------
-  // Conversión
+  // Actualización automática
   // --------------------------------------------------------------------------
 
   /**
-   * Lleva un importe cotizado a USD, la moneda de referencia de los KPIs.
-   * USD devuelve el mismo número: no hay conversión que hacer.
+   * Trae una cotización de su fuente pública.
+   * Devuelve el registro listo para guardar, o un objeto de error: no lanza,
+   * porque una fuente caída no debe interrumpir la actualización de las demás.
    */
-  function aUSD(monto, moneda, fecha, serie) {
-    if (monto === null || monto === undefined) return null;
-    if (moneda === "USD") return E.money(monto);
-
-    if (moneda === "UF") {
-      const uf = cotizacion(serie, "UF", fecha);
-      const clp = cotizacion(serie, "CLP", fecha);
-      if (!uf || !clp) {
-        throw new global.NEXO_REGLAS.ErrorNexo("NX-030",
-          `Falta cotización de UF y/o CLP al ${fecha}`,
-          "Cargá la serie antes de operar en Chile");
-      }
-      return E.money((monto * uf.tasa) / clp.tasa);
+  async function traer(unidad) {
+    const f = FUENTES[unidad];
+    if (!f) return { unidad, ok: false, error: `Sin fuente definida para ${unidad}` };
+    try {
+      const r = await fetch(f.url, { cache: "no-store" });
+      if (!r.ok) return { unidad, ok: false, error: `HTTP ${r.status}` };
+      const { tasa, fecha } = f.extraer(await r.json());
+      if (!(Number(tasa) > 0)) return { unidad, ok: false, error: "La fuente no devolvió un valor válido" };
+      // Una fuente puede devolver una fecha futura por zona horaria: se acota.
+      const fechaOk = E.fecha(fecha) && fecha <= E.hoy() ? fecha : E.hoy();
+      return {
+        unidad, ok: true,
+        cotizacion: E.ENTIDADES.tiposCambio.normalizar({
+          id: `tc_${unidad}_${fechaOk}`, fecha: fechaOk, unidad,
+          tasa: Number(tasa), fuente: f.etiqueta,
+        }),
+      };
+    } catch (e) {
+      // Falla típica: la fuente cortó CORS o no hay conexión.
+      return { unidad, ok: false, error: String(e.message || e).slice(0, 120) };
     }
-
-    // ARS/CLP solo aparecen en registros heredados.
-    const c = cotizacion(serie, moneda, fecha);
-    if (!c) {
-      throw new global.NEXO_REGLAS.ErrorNexo("NX-030",
-        `Sin cotización de ${moneda} al ${fecha}`);
-    }
-    return E.money(monto / c.tasa);
   }
 
-  /** Cuántos pesos chilenos son N UF en una fecha. */
-  function ufACLP(uf, fecha, serie) {
-    const c = cotizacion(serie, "UF", fecha);
-    if (!c) throw new global.NEXO_REGLAS.ErrorNexo("NX-030", `Sin valor de UF al ${fecha}`);
-    return Math.round(uf * c.tasa);
+  /**
+   * Actualiza todas las unidades. Devuelve la serie nueva y el detalle de qué
+   * se pudo traer y qué no, para poder mostrarlo sin adivinar.
+   */
+  async function actualizarTodo(serie) {
+    const resultados = await Promise.all(UNIDADES.map(traer));
+    let nueva = serie || [];
+    for (const r of resultados) {
+      if (r.ok) nueva = upsert(nueva, r.cotizacion);
+    }
+    return {
+      serie: nueva,
+      actualizadas: resultados.filter((r) => r.ok).map((r) => r.unidad),
+      fallidas: resultados.filter((r) => !r.ok).map((r) => ({ unidad: r.unidad, error: r.error })),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Conversión
+  // --------------------------------------------------------------------------
+
+  /** Moneda en la que se factura una cotización de un país dado. */
+  function monedaDe(pais) {
+    return PAISES[pais]?.moneda || "ARS";
+  }
+
+  /**
+   * Convierte un importe cotizado en USD a la moneda del país.
+   * Estados Unidos no convierte: ya está en la moneda de destino.
+   */
+  function convertir(montoUSD, pais, fecha, serie) {
+    const p = PAISES[pais];
+    if (!p) err("NX-032", `País desconocido: ${pais}`);
+    if (p.sinConversion) {
+      return { monto: E.money(montoUSD), moneda: "USD", tasa: 1, fecha: fecha || E.hoy(), fuente: "sin conversión" };
+    }
+    const c = cotizacion(serie, p.moneda, fecha);
+    if (!c) {
+      err("NX-030", `Sin cotización de ${p.moneda} al ${fecha || E.hoy()}`,
+        "Actualizá los tipos de cambio antes de facturar");
+    }
+    return {
+      monto: E.money(montoUSD * c.tasa), moneda: p.moneda,
+      tasa: c.tasa, fecha: c.fecha, fuente: c.fuente,
+    };
+  }
+
+  /**
+   * Equivalente en UF de un importe en USD. Informativo: los contratos
+   * chilenos suelen referenciarse en UF aunque se cotice y facture en otra
+   * unidad, y tenerlo a la vista evita tener que calcularlo aparte.
+   */
+  function equivalenteUF(montoUSD, fecha, serie) {
+    const clp = cotizacion(serie, "CLP", fecha);
+    const uf = cotizacion(serie, "UF", fecha);
+    if (!clp || !uf) return null;
+    return E.money((montoUSD * clp.tasa) / uf.tasa);
   }
 
   // --------------------------------------------------------------------------
@@ -128,94 +225,95 @@
 
   /**
    * Prepara el comprobante de un presupuesto aprobado, congelando el tipo de
-   * cambio del día. No escribe nada: devuelve el registro listo para guardar,
-   * que después pasa por las reglas.
+   * cambio del día. No escribe nada: devuelve el registro para que pase por
+   * las reglas.
    */
   function prepararFacturacion(presupuesto, opciones = {}) {
     const serie = opciones.serie || [];
     const hoy = opciones.hoy || E.hoy();
 
     if (presupuesto.estado !== "Aprobado") {
-      throw new global.NEXO_REGLAS.ErrorNexo("NX-022",
-        `Solo se factura un presupuesto aprobado (está ${presupuesto.estado})`);
+      err("NX-022", `Solo se factura un presupuesto aprobado (está ${presupuesto.estado})`);
     }
 
-    const monedaCotizacion = presupuesto.economico.moneda;
-    const unidad = monedaCotizacion === "UF" ? "UF" : "ARS";
-    const monedaLiquidacion = LIQUIDACION[monedaCotizacion] || "ARS";
+    const pais = opciones.pais || presupuesto.pais || "AR";
+    const p = PAISES[pais];
+    if (!p) err("NX-032", `País desconocido en el presupuesto: ${pais}`);
 
-    const c = cotizacion(serie, unidad, hoy);
+    // Estados Unidos factura en USD: no hay cotización que buscar ni que vencer.
+    if (p.sinConversion) {
+      return E.ENTIDADES.facturaciones.normalizar({
+        presupuestoId: presupuesto.id, contratoId: opciones.contratoId || null,
+        numeroComprobante: opciones.numeroComprobante || "",
+        fechaEmision: hoy, pais,
+        monedaCotizacion: "USD", montoCotizado: presupuesto.total,
+        tcUnidad: "USD", tcValor: 1, tcFecha: hoy, tcFuente: "sin conversión",
+        monedaLiquidacion: "USD", montoLiquidado: presupuesto.total,
+        emitidoPor: opciones.usuario || "",
+      });
+    }
+
+    const c = cotizacion(serie, p.moneda, hoy);
     if (!c) {
-      throw new global.NEXO_REGLAS.ErrorNexo("NX-030",
-        `No hay cotización de ${unidad} cargada`,
-        "Cargala en Configuración → Tipos de cambio");
+      err("NX-030", `No hay cotización de ${p.moneda} cargada`,
+        "Actualizá los tipos de cambio en Configuración");
     }
-    if (!estaVigente(serie, unidad, hoy)) {
-      throw new global.NEXO_REGLAS.ErrorNexo("NX-031",
-        `La cotización de ${unidad} es del ${c.fecha}`,
-        "Actualizá el tipo de cambio antes de facturar: un comprobante emitido " +
-        "con cotización vieja factura mal");
+    if (!estaVigente(serie, p.moneda, hoy)) {
+      err("NX-031", `La cotización de ${p.moneda} es del ${c.fecha}`,
+        "Actualizá antes de facturar: un comprobante con cotización vieja factura mal, " +
+        "y corregirlo después implica nota de crédito");
     }
-
-    const montoCotizado = presupuesto.total;
-    const montoLiquidado = E.money(montoCotizado * c.tasa);
 
     return E.ENTIDADES.facturaciones.normalizar({
       presupuestoId: presupuesto.id,
       contratoId: opciones.contratoId || null,
       numeroComprobante: opciones.numeroComprobante || "",
       fechaEmision: hoy,
-      monedaCotizacion,
-      montoCotizado,
-      tcUnidad: unidad,
+      pais,
+      monedaCotizacion: "USD",
+      montoCotizado: presupuesto.total,
+      tcUnidad: p.moneda,
       tcValor: c.tasa,
       tcFecha: c.fecha,
-      tcFuente: c.fuente || FUENTES[unidad],
-      monedaLiquidacion,
-      montoLiquidado,
+      tcFuente: c.fuente,
+      monedaLiquidacion: p.moneda,
+      montoLiquidado: E.money(presupuesto.total * c.tasa),
+      // Referencia en UF para Chile: no se factura en UF, pero es el número
+      // con el que el cliente chileno piensa el contrato.
+      referenciaUF: p.referenciaUF ? equivalenteUF(presupuesto.total, hoy, serie) : null,
       emitidoPor: opciones.usuario || "",
     });
   }
 
   /** Texto explicativo del cálculo, para mostrar en el comprobante. */
   function explicar(f) {
-    const sim = { USD: "US$", UF: "UF", ARS: "$", CLP: "CLP$" };
-    return `${sim[f.monedaCotizacion]} ${f.montoCotizado.toLocaleString("es-AR")} × ` +
+    const sim = { USD: "US$", ARS: "$", CLP: "CLP$", COP: "COP$", UYU: "$U", UF: "UF" };
+    if (f.tcValor === 1 && f.monedaLiquidacion === "USD") {
+      return `US$ ${f.montoCotizado.toLocaleString("es-AR")} · sin conversión`;
+    }
+    return `US$ ${f.montoCotizado.toLocaleString("es-AR")} × ` +
            `${f.tcValor.toLocaleString("es-AR")} = ` +
            `${sim[f.monedaLiquidacion]} ${Math.round(f.montoLiquidado).toLocaleString("es-AR")}` +
            `  ·  ${f.tcFuente}, ${f.tcFecha}`;
   }
 
   // --------------------------------------------------------------------------
-  // Carga de la serie
+  // Carga manual
   // --------------------------------------------------------------------------
 
-  /**
-   * Registro de cotización listo para guardar.
-   *
-   * La carga es manual: sin servidor no hay proceso que salga a buscar el dato
-   * a las 11 y a las 17. El panel avisa cuando la serie se pone vieja, y sin
-   * cotización fresca la facturación se bloquea sola.
-   */
   function nuevaCotizacion(unidad, tasa, fecha, fuente) {
-    if (!UNIDADES.includes(unidad)) {
-      throw new global.NEXO_REGLAS.ErrorNexo("NX-040", `Unidad desconocida: ${unidad}`);
-    }
+    if (!UNIDADES.includes(unidad)) err("NX-040", `Unidad desconocida: ${unidad}`);
     const t = Number(tasa);
-    if (!Number.isFinite(t) || t <= 0) {
-      throw new global.NEXO_REGLAS.ErrorNexo("NX-040", "La cotización tiene que ser un número positivo");
-    }
+    if (!Number.isFinite(t) || t <= 0) err("NX-040", "La cotización tiene que ser un número positivo");
     const f = E.fecha(fecha) || E.hoy();
-    if (f > E.hoy()) {
-      throw new global.NEXO_REGLAS.ErrorNexo("NX-040", "No se cargan cotizaciones a futuro");
-    }
+    if (f > E.hoy()) err("NX-040", "No se cargan cotizaciones a futuro");
     return E.ENTIDADES.tiposCambio.normalizar({
-      id: `tc_${unidad}_${f}`,   // determinístico: recargar el mismo día pisa, no duplica
-      fecha: f, unidad, tasa: t, fuente: fuente || FUENTES[unidad],
+      id: `tc_${unidad}_${f}`, fecha: f, unidad, tasa: t,
+      fuente: fuente || `${FUENTES[unidad]?.etiqueta || unidad} (carga manual)`,
     });
   }
 
-  /** Inserta o reemplaza una cotización en la serie. */
+  /** Inserta o reemplaza. Misma unidad y fecha pisa, no duplica. */
   function upsert(serie, cot) {
     const otras = (serie || []).filter(
       (x) => !(x.unidad === cot.unidad && x.fecha === cot.fecha));
@@ -224,9 +322,10 @@
   }
 
   global.NEXO_CAMBIO = {
-    TOLERANCIA_DIAS, FUENTES, UNIDADES, LIQUIDACION,
+    TOLERANCIA_DIAS, PAISES, UNIDADES, FUENTES,
     cotizacion, estaVigente, estadoSerie,
-    aUSD, ufACLP,
+    traer, actualizarTodo,
+    monedaDe, convertir, equivalenteUF,
     prepararFacturacion, explicar,
     nuevaCotizacion, upsert,
   };

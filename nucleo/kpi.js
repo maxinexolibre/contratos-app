@@ -95,7 +95,7 @@
   const monedaPresupuesto = (p) => p.economico?.moneda;
 
   /** Texto legible de un mapa de monedas: "US$ 128.400 · $ 6.060.000". */
-  const SIMBOLO = { USD: "US$", ARS: "$", CLP: "CLP$", UF: "UF" };
+  const SIMBOLO = { USD: "US$", ARS: "$", CLP: "CLP$", COP: "COP$", UYU: "$U", UF: "UF" };
   function textoMonedas(mapa) {
     const partes = Object.entries(mapa)
       .filter(([, v]) => v)

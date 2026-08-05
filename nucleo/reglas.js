@@ -393,9 +393,19 @@
 
   function validarAcuerdoComision(nuevo, anterior, ctx) {
     const C = global.NEXO_COMISIONES;
-    if (!nuevo.vendedorId) fallar("NX-040", "El acuerdo tiene que ser de un vendedor");
-    const v = (ctx.vendedores || []).find((x) => x.id === nuevo.vendedorId);
-    if (!v) fallar("NX-041", "El vendedor del acuerdo no existe");
+    if (nuevo.alcance === "Vendedor") {
+      if (!nuevo.vendedorId) fallar("NX-040", "El acuerdo tiene que ser de un vendedor");
+      const v = (ctx.vendedores || []).find((x) => x.id === nuevo.vendedorId);
+      if (!v) fallar("NX-041", "El vendedor del acuerdo no existe");
+    } else {
+      // Acuerdo de área: no cuelga de una persona, pero necesita saber de qué
+      // área es. Sin eso no se puede saber a quién se le imputa el resultado.
+      if (!nuevo.area) fallar("NX-040", "El acuerdo de área necesita indicar el área");
+      const paisesInvalidos = (nuevo.paises || []).filter((p) => !E.PAIS.includes(p));
+      if (paisesInvalidos.length) {
+        fallar("NX-040", `Países desconocidos: ${paisesInvalidos.join(", ")}`);
+      }
+    }
 
     if (nuevo.vigenciaHasta && nuevo.vigenciaHasta < nuevo.vigenciaDesde) {
       fallar("NX-040", "La vigencia no puede terminar antes de empezar");
@@ -439,9 +449,13 @@
   }
 
   function validarComision(nuevo, anterior, ctx) {
-    if (!nuevo.vendedorId) fallar("NX-040", "La comisión necesita vendedor");
-    if (!(ctx.vendedores || []).some((v) => v.id === nuevo.vendedorId)) {
-      fallar("NX-041", "El vendedor de la comisión no existe");
+    if (nuevo.alcance === "Vendedor") {
+      if (!nuevo.vendedorId) fallar("NX-040", "La comisión necesita vendedor");
+      if (!(ctx.vendedores || []).some((v) => v.id === nuevo.vendedorId)) {
+        fallar("NX-041", "El vendedor de la comisión no existe");
+      }
+    } else if (!nuevo.area) {
+      fallar("NX-040", "La comisión de área necesita indicar el área");
     }
     if (nuevo.monto < 0) fallar("NX-040", "Una comisión no puede ser negativa");
 
@@ -462,10 +476,13 @@
         if (!P.capacidad(ctx.rol, "aprobar_comision")) {
           fallar("NX-011", "Aprobar comisiones corresponde a gerencia comercial o administrativa");
         }
-        // Nadie se aprueba la propia comisión.
-        const v = (ctx.vendedores || []).find((x) => x.id === nuevo.vendedorId);
-        if (v && ctx.usuario && (v.usuarioId === ctx.usuario || v.nombre === ctx.usuario)) {
-          fallar("NX-012", "No podés aprobar tu propia comisión");
+        // Nadie se aprueba la propia comisión. Solo aplica a las de vendedor:
+        // las de área son asignación de resultado, no un pago a una persona.
+        if (nuevo.alcance === "Vendedor") {
+          const v = (ctx.vendedores || []).find((x) => x.id === nuevo.vendedorId);
+          if (v && ctx.usuario && (v.usuarioId === ctx.usuario || v.nombre === ctx.usuario)) {
+            fallar("NX-012", "No podés aprobar tu propia comisión");
+          }
         }
       }
 

@@ -166,6 +166,8 @@
         </p>
       </div>
 
+      ${panelReparto()}
+
       ${inactivos.length ? `<h3 style="margin-top:24px">Inactivos</h3>
       <table class="data">
         <thead><tr><th>Vendedor</th><th>Relación</th><th>Alta</th><th>Baja</th></tr></thead>
@@ -175,6 +177,73 @@
         </tr>`).join("")}</tbody>
       </table>` : ""}`}
     `;
+  }
+
+  /**
+   * Reparto interno fijo: 3% gerencia comercial + 0,5% marketing +
+   * 0,5% diseño + 0,5% ventas sobre el neto de toda venta concretada.
+   *
+   * Se muestra siempre, esté activo o no, porque es una regla de la empresa
+   * y su ausencia también es información.
+   */
+  function panelReparto() {
+    const activos = acuerdos().filter(
+      (a) => a.alcance === "Area" && CM.rigeEn(a, E.hoy()));
+    const totalPct = CM.REPARTO_INTERNO.reduce((s, r) => s + r.porcentaje, 0);
+    const resArea = CM.resumenPorArea(comisiones());
+
+    return `<div class="card" style="margin-top:18px">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
+        <h3 style="flex:1; margin:0">Reparto interno</h3>
+        ${activos.length
+          ? `<span class="pill">activo</span>`
+          : (P.puede(rol(), "acuerdosComision", "crear")
+            ? `<button class="btn sm primary" onclick="activarReparto()">Activar reparto</button>` : "")}
+      </div>
+      <p class="muted" style="font-size:13px; margin:8px 0 12px; max-width:72ch">
+        Asignación fija sobre el <b>neto</b> de toda venta concretada en
+        ${CM.PAISES_REPARTO.map((p) => E.PAIS_NOMBRE[p]).join(" · ")}.
+        Corre en paralelo a lo pactado con el vendedor y no espera al cobro:
+        es asignación de resultado, no un pago a un tercero.
+      </p>
+      <table class="data">
+        <thead><tr><th>Área</th><th class="num">%</th><th>Vigencia</th><th class="num">Devengado</th></tr></thead>
+        <tbody>${CM.REPARTO_INTERNO.map((r) => {
+          const a = activos.find((x) => x.area === r.area);
+          return `<tr>
+            <td><b>${esc(r.area)}</b></td>
+            <td class="num">${r.porcentaje}%</td>
+            <td>${a ? esc(a.vigenciaDesde) + " → " + esc(a.vigenciaHasta || "sin fin")
+              : `<span class="muted">sin activar</span>`}</td>
+            <td class="num">${K.textoMonedas(resArea[r.area] || {})}</td>
+          </tr>`;
+        }).join("")}
+        <tr style="font-weight:700">
+          <td>Total</td><td class="num">${totalPct}%</td><td></td>
+          <td class="num">${K.textoMonedas(
+            Object.values(resArea).reduce((acc, m) => {
+              for (const [k, v] of Object.entries(m)) acc[k] = E.money((acc[k] || 0) + v);
+              return acc;
+            }, {}))}</td>
+        </tr></tbody>
+      </table>
+    </div>`;
+  }
+
+  /** Da de alta los cuatro acuerdos de área de una sola vez. */
+  async function activarReparto() {
+    const desde = prompt(
+      "Desde qué fecha rige el reparto interno.\n\n" +
+      "Las ventas anteriores a esta fecha no lo devengan: un acuerdo no se " +
+      "aplica hacia atrás.", E.hoy());
+    if (!desde) return;
+
+    let alta = 0;
+    for (const a of CM.acuerdosReparto(desde)) {
+      if (await guardar("acuerdosComision", a, `Reparto interno · ${a.area} ${a.porcentaje}%`)) alta++;
+    }
+    global.toast(alta ? `Reparto interno activado (${alta} áreas)` : "No se activó ninguna", !alta);
+    global.router();
   }
 
   // ==========================================================================
@@ -533,9 +602,15 @@
       const c = ctx();
       const contrato = (c.contratos || []).find((x) => x.id === contratoId);
       if (!contrato) throw new Error("Contrato no encontrado");
-      const com = CM.devengarPorContrato(contrato, c);
-      if (await guardar("comisiones", com, `Devenga comisión · ${contrato.numero}`)) {
-        global.toast(`Comisión devengada: ${money(com.monto, com.moneda)} · ${com.detalleCalculo}`);
+      // Devuelve varias: la del vendedor más una por cada área del reparto interno.
+      const generadas = CM.devengarPorContrato(contrato, c);
+      let alta = 0;
+      for (const com of generadas) {
+        if (await guardar("comisiones", com, `Devenga comisión · ${contrato.numero} · ${com.area || "vendedor"}`)) alta++;
+      }
+      if (alta) {
+        const total = generadas.reduce((t, x) => t + x.monto, 0);
+        global.toast(`${alta} comisión(es) devengadas · total ${money(E.money(total), generadas[0].moneda)}`);
         global.router();
       }
     } catch (e) {
@@ -587,7 +662,7 @@
   });
 
   Object.assign(global, {
-    guardarVendedor, nuevoAcuerdo, cerrarAcuerdo,
+    guardarVendedor, nuevoAcuerdo, cerrarAcuerdo, activarReparto,
     devengar, aprobarComision, liquidarComision, anularComision,
   });
 })(typeof window !== "undefined" ? window : globalThis);

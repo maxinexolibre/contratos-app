@@ -37,8 +37,25 @@
   const VENDEDOR_ESTADO = ["Activo", "Inactivo"];
   const VENDEDOR_RELACION = ["Interno", "Externo", "Representante"];
   const COMISION_MODALIDAD = ["Porcentaje", "Escalonada", "Fija", "Mixta"];
-  /** Sobre qué se calcula: el valor del contrato o el margen declarado. */
-  const COMISION_BASE = ["Contrato", "Margen", "Cobrado"];
+  /**
+   * Sobre qué se calcula. "Neto" es el criterio habitual de Nexolibre: el
+   * valor de la venta sin IVA. Comisionar sobre el bruto pagaría comisión
+   * sobre un impuesto que la empresa solo recauda para el fisco.
+   */
+  const COMISION_BASE = ["Neto", "Contrato", "Margen", "Cobrado"];
+  /**
+   * Alcance de un acuerdo. "Vendedor" es el trato con una persona;
+   * "Area" es una asignación fija de la empresa (gerencia, marketing,
+   * diseño, ventas) que corre sobre toda venta concretada.
+   */
+  const COMISION_ALCANCE = ["Vendedor", "Area"];
+  const AREAS_COMISION = ["Gerencia comercial", "Marketing", "Diseño", "Ventas"];
+
+  /** Países donde opera Nexolibre. Todo se cotiza en USD. */
+  const PAIS = ["AR", "CL", "CO", "UY", "US"];
+  const PAIS_NOMBRE = {
+    AR: "Argentina", CL: "Chile", CO: "Colombia", UY: "Uruguay", US: "Estados Unidos",
+  };
   const COMISION_ORIGEN = ["Contrato", "Presupuesto", "Facturacion"];
   const COMISION_ESTADO = ["Devengada", "Aprobada", "Liquidada", "Anulada"];
   const ROL = ["vendedor", "gerente_comercial", "gerente_administrativo", "direccion", "marketing", "admin"];
@@ -137,6 +154,7 @@
           numero: esTexto(r.numero),
           fecha: fecha(r.fecha) || hoy(),
           clienteId: esTexto(r.clienteId),
+          pais: enumerado(r.pais, PAIS, "AR"),
           vendedor: esTexto(r.vendedor) || esTexto(r.usuario),
           campanaId: esTexto(r.campanaId) || null,
           leadId: esTexto(r.leadId) || null,
@@ -188,9 +206,14 @@
         const moneda = esTexto(eco.moneda) || "USD";
         const descuentoPct = esNumero(eco.descuentoPct);
         const recurrencia = enumerado(eco.recurrencia, RECURRENCIA, "unica");
+        const ivaPct = esNumero(eco.ivaPct, 21);
+        const incluyeIVA = esBool(eco.incluyeIVA);
 
         const subtotal = money(items.reduce((s, i) => s + i.total, 0));
         const total = money(subtotal * (1 - descuentoPct / 100));
+        // Valor neto: la base habitual de comisiones. Si el precio ya incluye
+        // IVA hay que sacarlo, porque ese impuesto no es ingreso de la empresa.
+        const neto = incluyeIVA ? money(total / (1 + ivaPct / 100)) : total;
         const validezDias = esNumero(eco.validezDias, 15);
         const f = fecha(r.fecha) || hoy();
 
@@ -205,6 +228,9 @@
           subtipo: esTexto(r.subtipo),
           titulo: esTexto(r.titulo),
           clienteId: esTexto(r.clienteId),
+          // País de origen de la cotización. Define en qué moneda se factura:
+          // se cotiza siempre en USD y se convierte recién al emitir.
+          pais: enumerado(r.pais, PAIS, "AR"),
           estado: enumerado(r.estado, PRESUPUESTO_ESTADO, "Borrador"),
           // Se conserva el estado tal como lo llevaba el usuario en su planilla.
           estadoOrigen: esTexto(r.estadoOrigen),
@@ -215,12 +241,13 @@
             recurrencia,
             descuentoPct,
             validezDias,
-            ivaPct: esNumero(eco.ivaPct, 21),
-            incluyeIVA: esBool(eco.incluyeIVA),
+            ivaPct,
+            incluyeIVA,
             formaPago: esTexto(eco.formaPago),
           },
           subtotal,
           total,
+          neto,
           // Los importes se guardan calculados, no se recalculan al leer:
           // un presupuesto aprobado no puede cambiar de monto solo.
           esLegado: !MONEDA_COTIZACION.includes(moneda),
@@ -248,6 +275,9 @@
           numeroLegado: esTexto(r.numeroLegado),
           origen,
           clienteId: esTexto(r.clienteId),
+          // País de la operación. Define la moneda de facturación y qué
+          // acuerdos de área del reparto interno le corresponden.
+          pais: enumerado(r.pais, PAIS, "AR"),
           ticketId: origen === "comercial" ? esTexto(r.ticketId) : null,
           presupuestoId: origen === "comercial" ? esTexto(r.presupuestoId) : null,
           hashPresupuesto: esTexto(r.hashPresupuesto),
@@ -367,6 +397,10 @@
           contratoId: esTexto(r.contratoId) || null,
           numeroComprobante: esTexto(r.numeroComprobante),
           fechaEmision: fecha(r.fechaEmision) || hoy(),
+          pais: enumerado(r.pais, PAIS, "AR"),
+          // Equivalente en UF al emitir. Solo Chile; informativo.
+          referenciaUF: r.referenciaUF === null || r.referenciaUF === undefined
+            ? null : money(r.referenciaUF),
           monedaCotizacion: esTexto(r.monedaCotizacion) || "USD",
           montoCotizado: money(r.montoCotizado),
           // El tipo de cambio queda congelado acá. Sin esto no se puede
@@ -375,7 +409,7 @@
           tcValor: esNumero(r.tcValor),
           tcFecha: fecha(r.tcFecha),
           tcFuente: esTexto(r.tcFuente),
-          monedaLiquidacion: enumerado(r.monedaLiquidacion, MONEDA_LIQUIDACION, "ARS"),
+          monedaLiquidacion: esTexto(r.monedaLiquidacion) || "ARS",
           montoLiquidado: money(r.montoLiquidado),
           emitidoPor: esTexto(r.emitidoPor),
           creado: esTexto(r.creado) || new Date().toISOString(),
@@ -453,12 +487,19 @@
           }))
           .sort((a, b) => a.desde - b.desde);
 
+        const alcance = enumerado(r.alcance, COMISION_ALCANCE, "Vendedor");
         return {
           id: esTexto(r.id) || nuevoId("acu_"),
-          vendedorId: esTexto(r.vendedorId),
+          alcance,
+          // Un acuerdo de área no cuelga de una persona: corre sobre toda venta
+          // concretada en los países que alcanza.
+          vendedorId: alcance === "Vendedor" ? esTexto(r.vendedorId) : null,
+          area: alcance === "Area" ? esTexto(r.area) : "",
+          // Países alcanzados. Vacío = todos.
+          paises: esLista(r.paises).filter((p) => PAIS.includes(p)),
           nombre: esTexto(r.nombre),
           modalidad,
-          base: enumerado(r.base, COMISION_BASE, "Contrato"),
+          base: enumerado(r.base, COMISION_BASE, "Neto"),
           porcentaje: esNumero(r.porcentaje),     // modalidad Porcentaje
           montoFijo: money(r.montoFijo),          // modalidad Fija
           escalones,                              // modalidad Escalonada
@@ -487,9 +528,13 @@
       idPrefijo: "com_",
       normalizar(r) {
         const estado = enumerado(r.estado, COMISION_ESTADO, "Devengada");
+        const alcance = enumerado(r.alcance, COMISION_ALCANCE, "Vendedor");
         return {
           id: esTexto(r.id) || nuevoId("com_"),
-          vendedorId: esTexto(r.vendedorId),
+          alcance,
+          // Las de área no corresponden a una persona sino a un equipo.
+          vendedorId: alcance === "Vendedor" ? esTexto(r.vendedorId) : null,
+          area: alcance === "Area" ? esTexto(r.area) : "",
           acuerdoId: esTexto(r.acuerdoId),
           // De dónde salió: contrato firmado, presupuesto aprobado o factura.
           origenTipo: enumerado(r.origenTipo, COMISION_ORIGEN, "Contrato"),
@@ -589,7 +634,8 @@
     CAMPANA_ESTADO, ESTRATEGIA_ESTADO, ESTRATEGIA_TIPO, CANAL, LEAD_ESTADO,
     RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_LIQUIDACION, PESO_ETAPA,
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
-    COMISION_ORIGEN, COMISION_ESTADO,
+    COMISION_ORIGEN, COMISION_ESTADO, COMISION_ALCANCE, AREAS_COMISION,
+    PAIS, PAIS_NOMBRE,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
   };
