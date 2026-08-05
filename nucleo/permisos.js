@@ -95,6 +95,31 @@
       marketing:              { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
       admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
     },
+    vendedores: {
+      vendedor:               { crear: null, leer: "propios", editar: null, borrar: null },
+      gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: null },
+      gerente_administrativo: { crear: null, leer: "todos", editar: null, borrar: null },
+      direccion:              { crear: null, leer: "todos", editar: null, borrar: null },
+      marketing:              { crear: null, leer: null, editar: null, borrar: null },
+      admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
+    },
+    acuerdosComision: {
+      // Un vendedor ve su propio acuerdo: es el contrato bajo el que trabaja.
+      vendedor:               { crear: null, leer: "propios", editar: null, borrar: null },
+      gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: null },
+      gerente_administrativo: { crear: null, leer: "todos", editar: null, borrar: null },
+      direccion:              { crear: null, leer: "todos", editar: null, borrar: null },
+      marketing:              { crear: null, leer: null, editar: null, borrar: null },
+      admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
+    },
+    comisiones: {
+      vendedor:               { crear: null, leer: "propios", editar: null, borrar: null },
+      gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: null },
+      gerente_administrativo: { crear: null, leer: "todos", editar: "todos", borrar: null },
+      direccion:              { crear: null, leer: "todos", editar: null, borrar: null },
+      marketing:              { crear: null, leer: null, editar: null, borrar: null },
+      admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
+    },
     leads: {
       vendedor:               { crear: null, leer: "propios", editar: null, borrar: null },
       gerente_comercial:      { crear: null, leer: "todos", editar: "todos", borrar: null },
@@ -114,6 +139,10 @@
     // el monto (definición de Maxi, 2026-08-04). No hay umbral activo.
     aprobar_presupuesto: ["gerente_comercial", "gerente_administrativo", "admin"],
     asignar_vendedor: ["gerente_comercial", "admin"],
+    // La comisión la aprueba quien la va a pagar, nunca quien la cobra.
+    aprobar_comision: ["gerente_comercial", "gerente_administrativo", "admin"],
+    liquidar_comision: ["gerente_administrativo", "admin"],
+    ver_comisiones_equipo: ["gerente_comercial", "gerente_administrativo", "direccion", "admin"],
     reabrir_ticket: ["gerente_comercial", "admin"],
     ver_kpi_comercial: ["gerente_comercial", "gerente_administrativo", "direccion", "admin"],
     ver_kpi_marketing: ["gerente_comercial", "direccion", "marketing", "admin"],

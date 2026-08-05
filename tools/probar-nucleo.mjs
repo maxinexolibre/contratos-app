@@ -34,11 +34,14 @@ contexto.window = contexto;
 contexto.globalThis = contexto;
 vm.createContext(contexto);
 
-for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen"]) {
+for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones"]) {
   vm.runInContext(readFileSync(resolve(RAIZ, `nucleo/${f}.js`), "utf8"), contexto, { filename: f });
 }
 
-const { NEXO_ESQUEMA: E, NEXO_PERMISOS: P, NEXO_REGLAS: R, NEXO_KPI: K, NEXO_ALMACEN: A } = contexto;
+const {
+  NEXO_ESQUEMA: E, NEXO_PERMISOS: P, NEXO_REGLAS: R, NEXO_KPI: K,
+  NEXO_ALMACEN: A, NEXO_ADAPTADOR: AD, NEXO_CAMBIO: C, NEXO_COMISIONES: CM,
+} = contexto;
 
 // --- mini framework --------------------------------------------------------
 let pasadas = 0, fallidas = 0;
@@ -507,6 +510,449 @@ prueba("tickets y presupuestos comparten la secuencia mensual", () => {
   alm.indice = alm._indiceVacio();
   const s = alm.proximaSecuenciaMes();
   igual(s.ticket.slice(3), s.presupuesto.slice(1), "mismo sufijo AAAAMMNN");
+});
+
+// ===========================================================================
+// ADAPTADOR · traducción entre la forma vieja y el modelo v3
+// ===========================================================================
+
+const ticketViejo = (over = {}) => ({
+  id: "tk_1", numero: "TK-20260801", fecha: "2026-08-01",
+  cliente: { nombreComercial: "Centro Ejemplo", razonesSociales: [], contacto: "" },
+  tipoPedido: "servicio", descripcion: "Reemplazo de cold head",
+  estado: "presupuestado", presupuestoIds: ["pre_1"], usuario: "test",
+  historial: [{ estado: "abierto", fecha: "2026-08-01", usuario: "test" }], ...over,
+});
+
+const presuViejo = (over = {}) => ({
+  id: "pre_1", numero: "P20260801", tipo: "servicio", subtipo: "",
+  titulo: "Cold head", estado: "borrador", estadoOrigen: "No enviado",
+  fecha: "2026-08-01", ticketId: "tk_1",
+  cliente: { nombreComercial: "Centro Ejemplo", razonesSociales: [] },
+  items: [{ detalle: "Cold head", cantidad: 1, unitario: 18500 }], saas: [],
+  economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15,
+               formaPago: "", descuentoPct: 0, recurrencia: "unica" },
+  notas: "", archivos: [], usuario: "test", historialEstados: [], ...over,
+});
+
+prueba("deriva el padrón de clientes deduplicado desde los registros", () => {
+  const cs = AD.clientesDesde({
+    tickets: [ticketViejo(), ticketViejo({ id: "tk_2", cliente: { nombreComercial: "CENTRO EJEMPLO" } })],
+    presupuestos: [], data: [],
+  });
+  igual(cs.length, 1, "dos grafías del mismo nombre son un solo cliente");
+  cierto(cs[0].alias.length === 2, "conserva las dos grafías como alias");
+});
+
+prueba("traduce estados de ticket en ambas direcciones", () => {
+  const idx = AD.indiceClientes(AD.clientesDesde({ tickets: [ticketViejo()] }));
+  const ctx = { indiceClientes: idx, presupuestos: [presuViejo()] };
+  // "presupuestado" con presupuesto en borrador es EnPresupuesto, no negociación.
+  igual(AD.ticketANuevo(ticketViejo(), ctx).estado, "EnPresupuesto");
+  igual(AD.ticketANuevo(ticketViejo(), { indiceClientes: idx,
+    presupuestos: [presuViejo({ estado: "enviado" })] }).estado, "EnNegociacion");
+  igual(AD.ticketANuevo(ticketViejo({ estado: "ganado" }), ctx).estado, "Cerrado");
+});
+
+prueba("el ida y vuelta no pierde información", () => {
+  const clientes = AD.clientesDesde({ tickets: [ticketViejo()] });
+  const idx = AD.indiceClientes(clientes);
+  const ctx = { indiceClientes: idx, presupuestos: [presuViejo()] };
+
+  const nuevo = AD.ticketANuevo(ticketViejo({ estado: "ganado" }), ctx);
+  const vuelta = AD.ticketAViejo(nuevo, { clientes });
+  const otraVez = AD.ticketANuevo({ ...vuelta, presupuestoIds: nuevo.presupuestoIds }, ctx);
+
+  for (const campo of ["id", "numero", "fecha", "clienteId", "estado", "tipo",
+                       "descripcion", "fechaCierre", "motivoPerdida"]) {
+    igual(otraVez[campo], nuevo[campo], `campo ${campo}`);
+  }
+});
+
+prueba("el monto del ticket sale del presupuesto y anualiza los abonos", () => {
+  const idx = AD.indiceClientes(AD.clientesDesde({ tickets: [ticketViejo()] }));
+  const mensual = presuViejo({
+    items: [{ detalle: "abono", cantidad: 1, unitario: 4000 }],
+    economico: { moneda: "USD", recurrencia: "mensual", descuentoPct: 0, validezDias: 15 },
+  });
+  const t = AD.ticketANuevo(ticketViejo(), { indiceClientes: idx, presupuestos: [mensual] });
+  igual(t.montoEstimado, 48000, "4000/mes × 12");
+  igual(t.recurrencia, "mensual");
+});
+
+prueba("valida sobre la forma vieja: R3 corta el cierre", () => {
+  rechaza("NX-003", () => AD.validarEnFormaVieja("tickets", "editar",
+    ticketViejo({ estado: "ganado" }), ticketViejo(),
+    { tickets: [ticketViejo()], presupuestos: [presuViejo({ estado: "enviado" })],
+      contratos: [], rol: "admin", usuario: "test" }));
+});
+
+prueba("valida sobre la forma vieja: con aprobado, pasa y devuelve efectos", () => {
+  const r = AD.validarEnFormaVieja("presupuestos", "editar",
+    presuViejo({ estado: "enviado" }), presuViejo(),
+    { tickets: [ticketViejo()], presupuestos: [presuViejo()], contratos: [],
+      rol: "admin", usuario: "test" });
+  cierto(r.ok);
+  cierto(r.efectos.some((e) => e.entidad === "tickets" && e.campos.estado === "EnNegociacion"),
+    "el envío empuja el ticket a negociación");
+});
+
+prueba("los KPIs se calculan sobre el estado viejo sin tocar los datos", () => {
+  const estado = {
+    tickets: [ticketViejo({ id: "a", estado: "ganado" }),
+              ticketViejo({ id: "b", estado: "perdido", presupuestoIds: ["pre_2"] })],
+    presupuestos: [presuViejo(), presuViejo({ id: "pre_2", ticketId: "b" })],
+    data: [],
+  };
+  const n = AD.estadoANuevo(estado);
+  const m = K.comercial(n.tickets, { contratos: n.contratos });
+  igual(m.resueltos, 2);
+  igual(m.tasaConversion, 50);
+});
+
+// ===========================================================================
+// CAMBIO · tipos de cambio y facturación
+// ===========================================================================
+
+const serieBase = [
+  { unidad: "ARS", fecha: E.hoy(), tasa: 1412.5, fuente: "BNA billete vendedor" },
+  { unidad: "CLP", fecha: E.hoy(), tasa: 940, fuente: "BCCh" },
+  { unidad: "UF", fecha: E.hoy(), tasa: 39500, fuente: "SII" },
+].map((x) => E.ENTIDADES.tiposCambio.normalizar(x));
+
+prueba("toma la última cotización no posterior a la fecha", () => {
+  const serie = [
+    E.ENTIDADES.tiposCambio.normalizar({ unidad: "ARS", fecha: "2026-08-01", tasa: 1400 }),
+    E.ENTIDADES.tiposCambio.normalizar({ unidad: "ARS", fecha: "2026-08-03", tasa: 1420 }),
+  ];
+  igual(C.cotizacion(serie, "ARS", "2026-08-02").tasa, 1400, "el viernes rige hasta el lunes");
+  igual(C.cotizacion(serie, "ARS", "2026-08-05").tasa, 1420);
+  igual(C.cotizacion(serie, "ARS", "2026-07-30"), null, "no inventa hacia atrás");
+});
+
+prueba("USD no se convierte: ya es la moneda de referencia", () => {
+  igual(C.aUSD(18500, "USD", E.hoy(), []), 18500, "sin necesitar la serie");
+});
+
+prueba("UF pasa por CLP para llegar a USD", () => {
+  // 1.480 UF × 39.500 CLP/UF = 58.460.000 CLP ÷ 940 CLP/USD
+  igual(C.aUSD(1480, "UF", E.hoy(), serieBase), 62191.49);
+});
+
+prueba("UF sin CLP cargado falla con NX-030, no con un número inventado", () => {
+  const parcial = serieBase.filter((x) => x.unidad === "UF");
+  rechaza("NX-030", () => C.aUSD(1000, "UF", E.hoy(), parcial));
+});
+
+prueba("factura congelando el tipo de cambio, la fecha y la fuente", () => {
+  const p = presuBase({ estado: "Aprobado" });
+  const f = C.prepararFacturacion(p, { serie: serieBase, numeroComprobante: "A-0001" });
+  igual(f.monedaCotizacion, "USD");
+  igual(f.montoCotizado, 18500);
+  igual(f.tcValor, 1412.5);
+  igual(f.tcFuente, "BNA billete vendedor");
+  igual(f.monedaLiquidacion, "ARS");
+  igual(f.montoLiquidado, 26131250, "18.500 × 1.412,50");
+});
+
+prueba("un presupuesto en UF se factura en CLP", () => {
+  const p = presuBase({ estado: "Aprobado",
+    items: [{ detalle: "abono", cantidad: 1, unitario: 1480 }],
+    economico: { moneda: "UF", recurrencia: "mensual", descuentoPct: 0, validezDias: 15 } });
+  const f = C.prepararFacturacion(p, { serie: serieBase });
+  igual(f.tcUnidad, "UF");
+  igual(f.monedaLiquidacion, "CLP");
+  igual(f.montoLiquidado, 58460000, "1.480 UF × 39.500");
+});
+
+prueba("no se factura con cotización vieja", () => {
+  const vieja = [E.ENTIDADES.tiposCambio.normalizar({
+    unidad: "ARS", fecha: E.sumarDias(E.hoy(), -10), tasa: 1400 })];
+  rechaza("NX-031", () => C.prepararFacturacion(
+    presuBase({ estado: "Aprobado" }), { serie: vieja }));
+});
+
+prueba("no se factura un presupuesto que no está aprobado", () => {
+  rechaza("NX-022", () => C.prepararFacturacion(
+    presuBase({ estado: "Enviado" }), { serie: serieBase }));
+});
+
+prueba("recargar el mismo día pisa la cotización, no la duplica", () => {
+  let s = C.upsert([], C.nuevaCotizacion("ARS", 1400, "2026-08-05"));
+  s = C.upsert(s, C.nuevaCotizacion("ARS", 1412.5, "2026-08-05"));
+  igual(s.length, 1);
+  igual(s[0].tasa, 1412.5);
+});
+
+prueba("no se cargan cotizaciones a futuro ni negativas", () => {
+  rechaza("NX-040", () => C.nuevaCotizacion("ARS", 1400, E.sumarDias(E.hoy(), 1)));
+  rechaza("NX-040", () => C.nuevaCotizacion("ARS", -5, E.hoy()));
+  rechaza("NX-040", () => C.nuevaCotizacion("EUR", 1, E.hoy()));
+});
+
+prueba("el estado de la serie reporta atraso por unidad", () => {
+  const s = [E.ENTIDADES.tiposCambio.normalizar({
+    unidad: "ARS", fecha: E.sumarDias(E.hoy(), -5), tasa: 1400 })];
+  const est = C.estadoSerie(s);
+  const ars = est.find((x) => x.unidad === "ARS");
+  igual(ars.diasAtraso, 5);
+  cierto(!ars.vigente, "5 días supera la tolerancia de 3");
+  const uf = est.find((x) => x.unidad === "UF");
+  igual(uf.valor, null, "sin cargar");
+  cierto(!uf.vigente);
+});
+
+// ===========================================================================
+// COMISIONES
+// ===========================================================================
+
+const VND = E.ENTIDADES.vendedores.normalizar({
+  id: "vnd_1", nombre: "Vendedor Ejemplo", usuarioId: "vend", relacion: "Interno",
+  fechaAlta: "2026-01-01", metaMensual: 20000, metaMoneda: "USD",
+});
+
+const acuerdoPct = (over = {}) => E.ENTIDADES.acuerdosComision.normalizar({
+  id: "acu_1", vendedorId: "vnd_1", modalidad: "Porcentaje", porcentaje: 5,
+  base: "Contrato", moneda: "USD", vigenciaDesde: "2026-01-01", ...over,
+});
+
+const ESCALONES = [
+  { desde: 0, hasta: 20000, porcentaje: 3 },
+  { desde: 20000, hasta: 50000, porcentaje: 5 },
+  { desde: 50000, hasta: null, porcentaje: 7 },
+];
+
+prueba("comisión por porcentaje simple", () => {
+  const r = CM.calcular(acuerdoPct(), 40000);
+  igual(r.monto, 2000, "5% de 40.000");
+  igual(r.porcentaje, 5);
+});
+
+prueba("el escalonado es marginal, no salta de golpe", () => {
+  // 20.000×3% + 30.000×5% + 30.000×7% = 600 + 1500 + 2100
+  const a = acuerdoPct({ modalidad: "Escalonada", escalones: ESCALONES });
+  igual(CM.calcular(a, 80000).monto, 4200);
+  // Vender 1 más no puede disparar la comisión: ese salto crea el incentivo
+  // a demorar el cierre.
+  const en50k = CM.calcular(a, 50000).monto;
+  const en50k1 = CM.calcular(a, 50001).monto;
+  cierto(en50k1 - en50k < 1, `salto de ${en50k1 - en50k} al pasar el tramo`);
+});
+
+prueba("el tope recorta y lo deja dicho", () => {
+  const r = CM.calcular(acuerdoPct({ porcentaje: 10, tope: 3000 }), 100000);
+  igual(r.monto, 3000);
+  cierto(r.detalle.includes("topeado"), "el recorte tiene que quedar explicado");
+});
+
+prueba("modalidad mixta suma fijo más escalonado", () => {
+  const a = acuerdoPct({ modalidad: "Mixta", montoFijo: 500, escalones: ESCALONES });
+  igual(CM.calcular(a, 20000).monto, 1100, "500 + 3% de 20.000");
+});
+
+prueba("los escalones no pueden dejar huecos", () => {
+  rechaza("NX-060", () => CM.validarEscalones([
+    { desde: 0, hasta: 20000, porcentaje: 3 },
+    { desde: 30000, hasta: null, porcentaje: 5 },   // hueco 20.000–30.000
+  ]));
+});
+
+prueba("los escalones no pueden superponerse", () => {
+  rechaza("NX-060", () => CM.validarEscalones([
+    { desde: 0, hasta: 30000, porcentaje: 3 },
+    { desde: 20000, hasta: null, porcentaje: 5 },
+  ]));
+});
+
+prueba("el último escalón queda abierto y el primero arranca en 0", () => {
+  rechaza("NX-060", () => CM.validarEscalones([{ desde: 0, hasta: 20000, porcentaje: 3 }]));
+  rechaza("NX-060", () => CM.validarEscalones([{ desde: 100, hasta: null, porcentaje: 3 }]));
+  CM.validarEscalones(ESCALONES);   // este sí es válido
+});
+
+prueba("la vigencia elige el acuerdo correcto por fecha", () => {
+  const viejo = acuerdoPct({ id: "a1", porcentaje: 3, vigenciaDesde: "2026-01-01", vigenciaHasta: "2026-06-30" });
+  const nuevo = acuerdoPct({ id: "a2", porcentaje: 6, vigenciaDesde: "2026-07-01" });
+  igual(CM.acuerdoVigente([viejo, nuevo], "vnd_1", "2026-03-15").id, "a1");
+  igual(CM.acuerdoVigente([viejo, nuevo], "vnd_1", "2026-08-15").id, "a2");
+  igual(CM.acuerdoVigente([viejo, nuevo], "vnd_1", "2025-12-01"), null, "antes de todo: ninguno");
+});
+
+prueba("dos acuerdos del mismo vendedor no pueden solaparse", () => {
+  const a = acuerdoPct({ id: "a1", vigenciaDesde: "2026-01-01", vigenciaHasta: "2026-12-31" });
+  const b = acuerdoPct({ id: "a2", vigenciaDesde: "2026-06-01" });
+  cierto(CM.seSolapa(b, a));
+  rechaza("NX-067", () => R.validar("acuerdosComision", "crear", b, null,
+    { ...ADMIN, vendedores: [VND], acuerdosComision: [a], comisiones: [] }));
+});
+
+prueba("un acuerdo ya usado no cambia de condiciones", () => {
+  const a = acuerdoPct();
+  const com = E.ENTIDADES.comisiones.normalizar({
+    id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1", origenId: "ctr_1",
+    monto: 100, moneda: "USD", fechaDevengo: "2026-02-01" });
+  rechaza("NX-068", () => R.validar("acuerdosComision", "editar",
+    acuerdoPct({ porcentaje: 12 }), a,
+    { ...ADMIN, vendedores: [VND], acuerdosComision: [a], comisiones: [com] }));
+});
+
+const contratoFirmado = (over = {}) => E.ENTIDADES.contratos.normalizar({
+  id: "ctr_1", numero: "CT-2026-0001", origen: "comercial", clienteId: "cli_1",
+  ticketId: "tk_1", presupuestoId: "pre_1", estado: "Firmado", fechaFirma: "2026-03-10",
+  recurrencia: "unica", economico: { canonMensual: 40000, moneda: "USD" }, ...over,
+});
+
+prueba("devenga la comisión de un contrato firmado", () => {
+  const com = CM.devengarPorContrato(contratoFirmado(), {
+    vendedores: [VND], acuerdos: [acuerdoPct()], comisiones: [],
+    tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })],
+  });
+  igual(com.monto, 2000);
+  igual(com.estado, "Devengada");
+  igual(com.periodo, "2026-03");
+  igual(com.origenNumero, "CT-2026-0001");
+});
+
+prueba("no devenga sobre un contrato sin firmar", () => {
+  rechaza("NX-062", () => CM.devengarPorContrato(contratoFirmado({ estado: "Borrador", fechaFirma: null }), {
+    vendedores: [VND], acuerdos: [acuerdoPct()], comisiones: [],
+    tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })] }));
+});
+
+prueba("no devenga dos veces la misma operación", () => {
+  const ctxb = {
+    vendedores: [VND], acuerdos: [acuerdoPct()],
+    tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })],
+    comisiones: [E.ENTIDADES.comisiones.normalizar({
+      id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1",
+      origenTipo: "Contrato", origenId: "ctr_1", monto: 2000, moneda: "USD" })],
+  };
+  rechaza("NX-063", () => CM.devengarPorContrato(contratoFirmado(), ctxb));
+});
+
+prueba("sin acuerdo vigente no se devenga", () => {
+  rechaza("NX-061", () => CM.devengarPorContrato(contratoFirmado(), {
+    vendedores: [VND], acuerdos: [acuerdoPct({ vigenciaHasta: "2026-01-31" })],
+    comisiones: [], tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })] }));
+});
+
+prueba("no se cruzan monedas entre contrato y acuerdo", () => {
+  rechaza("NX-065", () => CM.devengarPorContrato(
+    contratoFirmado({ economico: { canonMensual: 40000, moneda: "UF" } }), {
+      vendedores: [VND], acuerdos: [acuerdoPct()], comisiones: [],
+      tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })] }));
+});
+
+prueba("un abono mensual comisiona sobre los meses pactados", () => {
+  const com = CM.devengarPorContrato(
+    contratoFirmado({ recurrencia: "mensual", economico: { canonMensual: 4000, moneda: "USD" },
+      vigencia: { meses: 12 } }), {
+      vendedores: [VND], acuerdos: [acuerdoPct({ mesesRecurrente: 6 })], comisiones: [],
+      tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })] });
+  igual(com.baseCalculo, 24000, "4.000/mes × 6 meses pactados");
+  igual(com.monto, 1200);
+});
+
+prueba("el circuito de estados no se saltea", () => {
+  const base = E.ENTIDADES.comisiones.normalizar({
+    id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1", monto: 2000,
+    moneda: "USD", fechaDevengo: "2026-03-10", origenId: "ctr_1" });
+  const c = { ...ADMIN, vendedores: [VND], acuerdosComision: [acuerdoPct()],
+    acuerdos: [acuerdoPct()], comisiones: [base], facturaciones: [] };
+  // Devengada no salta directo a Liquidada
+  rechaza("NX-020", () => R.validar("comisiones", "editar",
+    { ...base, estado: "Liquidada" }, base, c));
+  // Liquidada es terminal
+  rechaza("NX-020", () => R.validar("comisiones", "editar",
+    { ...base, estado: "Aprobada" }, { ...base, estado: "Liquidada" }, c));
+});
+
+prueba("nadie aprueba su propia comisión", () => {
+  const base = E.ENTIDADES.comisiones.normalizar({
+    id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1", monto: 2000, moneda: "USD" });
+  rechaza("NX-012", () => R.validar("comisiones", "editar",
+    { ...base, estado: "Aprobada" }, base,
+    { rol: "gerente_comercial", usuario: "vend", vendedores: [VND],
+      acuerdosComision: [acuerdoPct()], comisiones: [base] }));
+});
+
+prueba("con pago tras cobro no se liquida sin factura", () => {
+  const aprobada = E.ENTIDADES.comisiones.normalizar({
+    id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1", origenId: "ctr_1",
+    monto: 2000, moneda: "USD", estado: "Aprobada" });
+  const sinFactura = CM.puedeLiquidarse(aprobada, { acuerdos: [acuerdoPct()], facturaciones: [] });
+  cierto(!sinFactura.puede);
+  cierto(sinFactura.motivo.includes("cobro"));
+
+  const conFactura = CM.puedeLiquidarse(aprobada, {
+    acuerdos: [acuerdoPct()],
+    facturaciones: [{ contratoId: "ctr_1", presupuestoId: "pre_1" }] });
+  cierto(conFactura.puede);
+});
+
+prueba("sin pago tras cobro se liquida directo", () => {
+  const aprobada = E.ENTIDADES.comisiones.normalizar({
+    id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1", origenId: "ctr_1",
+    monto: 2000, moneda: "USD", estado: "Aprobada" });
+  cierto(CM.puedeLiquidarse(aprobada,
+    { acuerdos: [acuerdoPct({ pagoTrasCobro: false })], facturaciones: [] }).puede);
+});
+
+prueba("no se da de baja a un vendedor con comisiones sin liquidar", () => {
+  const com = E.ENTIDADES.comisiones.normalizar({
+    id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1", monto: 2000,
+    moneda: "USD", estado: "Aprobada" });
+  rechaza("NX-066", () => R.validar("vendedores", "editar",
+    { ...VND, estado: "Inactivo", fechaBaja: E.hoy() }, VND,
+    { ...ADMIN, vendedores: [VND], comisiones: [com] }));
+});
+
+prueba("no se duplica un vendedor por documento", () => {
+  const v1 = E.ENTIDADES.vendedores.normalizar({ id: "vnd_1", nombre: "Uno", documento: "20-1-9" });
+  const v2 = E.ENTIDADES.vendedores.normalizar({ id: "vnd_2", nombre: "Otro", documento: "20-1-9" });
+  rechaza("NX-040", () => R.validar("vendedores", "crear", v2, null,
+    { ...ADMIN, vendedores: [v1], comisiones: [] }));
+});
+
+prueba("el resumen de comisiones no mezcla monedas", () => {
+  const mk = (id, est, monto, mon) => E.ENTIDADES.comisiones.normalizar({
+    id, vendedorId: "vnd_1", acuerdoId: "acu_1", estado: est, monto, moneda: mon });
+  const r = CM.resumen([mk("c1", "Devengada", 2000, "USD"), mk("c2", "Devengada", 500, "UF"),
+                        mk("c3", "Liquidada", 1000, "USD")]);
+  igual(r.Devengada, { USD: 2000, UF: 500 });
+  igual(r.Liquidada, { USD: 1000 });
+});
+
+prueba("el panel del equipo cruza ventas con comisiones", () => {
+  const tks = [
+    ticketBase({ id: "t1", vendedor: "vend", estado: "Cerrado", fechaCierre: "2026-03-20", montoEstimado: 40000 }),
+    ticketBase({ id: "t2", vendedor: "vend", estado: "Perdido", fechaCierre: "2026-03-05", montoEstimado: 5000, motivoPerdida: "precio" }),
+  ];
+  const com = E.ENTIDADES.comisiones.normalizar({
+    id: "com_1", vendedorId: "vnd_1", acuerdoId: "acu_1", monto: 2000,
+    moneda: "USD", estado: "Devengada" });
+  const [p] = CM.panelVendedores([VND], { tickets: tks, contratos: [], comisiones: [com] });
+  igual(p.ganados, 1);
+  igual(p.tasaConversion, 50);
+  igual(p.pendienteDePago, 2000);
+  igual(p.cumplimiento, 200, "40.000 sobre una cuota de 20.000");
+  igual(p.costoComercial, 5, "2.000 de comisión sobre 40.000 vendidos");
+});
+
+prueba("un contrato de venta única no se valúa como abono anual", () => {
+  // Regresión: el adaptador fijaba recurrencia "mensual" para todo contrato en
+  // forma vieja, así que una venta única de 80.000 se comisionaba sobre 960.000.
+  const idx = AD.indiceClientes(AD.clientesDesde({ tickets: [ticketViejo()] }));
+  const base = { id: "ctr_x", numero: "CT-1", estado: "firmado", ticketId: "tk_1",
+    presupuestoId: "pre_1", origen: "comercial",
+    cliente: { nombreComercial: "Centro Ejemplo", razonesSociales: [] },
+    economico: { canonMensual: 80000, moneda: "USD" }, vigencia: { meses: 12 },
+    fechas: { creado: "2026-03-10", firmado: "2026-03-10" } };
+
+  igual(AD.contratoANuevo(base, { indiceClientes: idx }).recurrencia, "mensual",
+    "sin campo, se asume abono: es lo que son todos los históricos");
+  igual(AD.contratoANuevo({ ...base, recurrencia: "unica" }, { indiceClientes: idx }).recurrencia,
+    "unica", "con el campo explícito se respeta");
 });
 
 // ===========================================================================

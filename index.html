@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Exo:wght@300;600;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=5675dab-msfmcbs0" />
   <script>
     // Se aplica antes de pintar para que no haya un parpadeo de tema claro.
     (function () {
@@ -26,6 +26,8 @@
       <div class="ws-switch" id="wsSwitch" role="tablist" aria-label="Área de trabajo">
         <button type="button" data-ws="contratos" role="tab">Contratos</button>
         <button type="button" data-ws="presupuestos" role="tab">Presupuestos</button>
+        <button type="button" data-ws="marketing" role="tab">Marketing</button>
+        <button type="button" data-ws="equipo" role="tab">Equipo</button>
       </div>
       <span class="spacer"></span>
       <span class="who" id="who"></span>
@@ -103,20 +105,32 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="config.js"></script>
+  <script src="config.js?v=5675dab-msfmcbs0"></script>
   <!-- Núcleo v3: esquema, permisos, reglas, KPIs y almacén particionado.
        Se carga antes que todo lo demás y no altera el comportamiento actual:
        app.js sigue con su capa de datos hasta completar el pasaje. -->
-  <script src="nucleo/esquema.js"></script>
-  <script src="nucleo/permisos.js"></script>
-  <script src="nucleo/reglas.js"></script>
-  <script src="nucleo/kpi.js"></script>
-  <script src="nucleo/almacen.js"></script>
-  <script src="brand.js"></script>
-  <script src="planes.js"></script>
-  <script src="contrato.js"></script>
-  <script src="presupuesto.js"></script>
-  <script src="docgen.js"></script>
-  <script src="app.js"></script>
+  <script src="nucleo/esquema.js?v=5675dab-msfmcbs0"></script>
+  <script src="nucleo/permisos.js?v=5675dab-msfmcbs0"></script>
+  <script src="nucleo/reglas.js?v=5675dab-msfmcbs0"></script>
+  <script src="nucleo/kpi.js?v=5675dab-msfmcbs0"></script>
+  <script src="nucleo/almacen.js?v=5675dab-msfmcbs0"></script>
+  <script src="nucleo/adaptador.js?v=5675dab-msfmcbs0"></script>
+  <script src="nucleo/cambio.js?v=5675dab-msfmcbs0"></script>
+  <script src="nucleo/comisiones.js?v=5675dab-msfmcbs0"></script>
+  <script src="brand.js?v=5675dab-msfmcbs0"></script>
+  <script src="planes.js?v=5675dab-msfmcbs0"></script>
+  <script src="contrato.js?v=5675dab-msfmcbs0"></script>
+  <script src="presupuesto.js?v=5675dab-msfmcbs0"></script>
+  <script src="docgen.js?v=5675dab-msfmcbs0"></script>
+  <!-- Vistas del modelo v3. Se registran en NEXO_VISTAS y el router de app.js
+       las toma de ahí, creando su sección al vuelo.
+       Van ANTES de app.js: este arranca el router apenas carga, y si el
+       registro todavía no existe la vista queda en blanco. Solo registran
+       funciones al cargar; a persist(), toast() y go() las llaman después,
+       cuando ya están declaradas. -->
+  <script src="vistas/facturacion.js?v=5675dab-msfmcbs0"></script>
+  <script src="vistas/marketing.js?v=5675dab-msfmcbs0"></script>
+  <script src="vistas/vendedores.js?v=5675dab-msfmcbs0"></script>
+  <script src="app.js?v=5675dab-msfmcbs0"></script>
 </body>
 </html>

@@ -48,6 +48,17 @@
     "NX-031": "La cotización está desactualizada",
     "NX-040": "Faltan datos obligatorios",
     "NX-041": "Referencia inexistente",
+    // Comisiones
+    "NX-060": "Acuerdo de comisión mal definido",
+    "NX-061": "No hay acuerdo de comisión vigente",
+    "NX-062": "La comisión se devenga con la firma del contrato",
+    "NX-063": "Esa operación ya tiene comisión devengada",
+    "NX-064": "No se puede determinar el vendedor",
+    "NX-065": "La moneda del acuerdo no coincide con la de la operación",
+    "NX-066": "El vendedor tiene comisiones sin liquidar",
+    "NX-067": "El acuerdo se superpone con otro del mismo vendedor",
+    "NX-068": "El acuerdo ya tiene comisiones calculadas",
+    "NX-069": "La comisión todavía no puede liquidarse",
   };
 
   const fallar = (codigo, detalle, sugerencia) => {
@@ -347,7 +358,133 @@
     return true;
   }
 
+  function validarVendedor(nuevo, anterior, ctx) {
+    if (!nuevo.nombre) fallar("NX-040", "El vendedor necesita nombre");
+
+    // Dos vendedores con el mismo nombre hacen imposible saber a quién se le
+    // paga. El documento, cuando está, es la clave real.
+    const dup = (ctx.vendedores || []).find((v) => v.id !== nuevo.id && (
+      (nuevo.documento && v.documento === nuevo.documento) ||
+      v.nombre.toLowerCase() === nuevo.nombre.toLowerCase()));
+    if (dup) {
+      fallar("NX-040", `Ya existe un vendedor "${dup.nombre}"`,
+        dup.documento ? `Documento ${dup.documento}` : "Usá un nombre distinto o cargá el documento");
+    }
+
+    if (nuevo.estado === "Inactivo" && !nuevo.fechaBaja) {
+      fallar("NX-040", "Un vendedor inactivo necesita fecha de baja");
+    }
+    if (nuevo.fechaBaja && nuevo.fechaBaja < nuevo.fechaAlta) {
+      fallar("NX-040", "La baja no puede ser anterior al alta");
+    }
+
+    // Dar de baja con comisiones sin pagar es un problema, no un detalle.
+    if (anterior?.estado === "Activo" && nuevo.estado === "Inactivo") {
+      const pendientes = (ctx.comisiones || []).filter(
+        (c) => c.vendedorId === nuevo.id && ["Devengada", "Aprobada"].includes(c.estado));
+      if (pendientes.length) {
+        fallar("NX-066",
+          `${nuevo.nombre} tiene ${pendientes.length} comisión(es) sin liquidar`,
+          "Liquidalas o anulalas antes de dar de baja");
+      }
+    }
+    return true;
+  }
+
+  function validarAcuerdoComision(nuevo, anterior, ctx) {
+    const C = global.NEXO_COMISIONES;
+    if (!nuevo.vendedorId) fallar("NX-040", "El acuerdo tiene que ser de un vendedor");
+    const v = (ctx.vendedores || []).find((x) => x.id === nuevo.vendedorId);
+    if (!v) fallar("NX-041", "El vendedor del acuerdo no existe");
+
+    if (nuevo.vigenciaHasta && nuevo.vigenciaHasta < nuevo.vigenciaDesde) {
+      fallar("NX-040", "La vigencia no puede terminar antes de empezar");
+    }
+
+    // Dos acuerdos vigentes a la vez hacen ambiguo cuánto se le paga.
+    const solapado = (ctx.acuerdosComision || []).find((a) => C.seSolapa(nuevo, a));
+    if (solapado) {
+      fallar("NX-067",
+        `Se superpone con el acuerdo "${solapado.nombre || solapado.id}" ` +
+        `(${solapado.vigenciaDesde} → ${solapado.vigenciaHasta || "sin fin"})`,
+        "Cerrá la vigencia del anterior antes de abrir el nuevo");
+    }
+
+    if (nuevo.modalidad === "Porcentaje") {
+      if (!(nuevo.porcentaje > 0)) fallar("NX-060", "El porcentaje tiene que ser mayor que 0");
+      if (nuevo.porcentaje > 100) fallar("NX-060", "El porcentaje no puede superar 100");
+    }
+    if (nuevo.modalidad === "Fija" && !(nuevo.montoFijo > 0)) {
+      fallar("NX-060", "El monto fijo tiene que ser mayor que 0");
+    }
+    if (["Escalonada", "Mixta"].includes(nuevo.modalidad)) {
+      C.validarEscalones(nuevo.escalones);
+    }
+
+    // Un acuerdo ya usado no se edita: se cierra y se abre otro. Si no, una
+    // comisión vieja deja de poder explicarse con sus propias reglas.
+    if (anterior) {
+      const usado = (ctx.comisiones || []).some(
+        (c) => c.acuerdoId === nuevo.id && c.estado !== "Anulada");
+      const cambioCondiciones = ["modalidad", "base", "porcentaje", "montoFijo",
+        "tope", "moneda", "mesesRecurrente"].some((k) => anterior[k] !== nuevo[k]) ||
+        JSON.stringify(anterior.escalones) !== JSON.stringify(nuevo.escalones);
+      if (usado && cambioCondiciones) {
+        fallar("NX-068",
+          "Este acuerdo ya tiene comisiones calculadas y no se pueden cambiar sus condiciones",
+          "Cerrale la vigencia y creá uno nuevo desde la fecha del cambio");
+      }
+    }
+    return true;
+  }
+
+  function validarComision(nuevo, anterior, ctx) {
+    if (!nuevo.vendedorId) fallar("NX-040", "La comisión necesita vendedor");
+    if (!(ctx.vendedores || []).some((v) => v.id === nuevo.vendedorId)) {
+      fallar("NX-041", "El vendedor de la comisión no existe");
+    }
+    if (nuevo.monto < 0) fallar("NX-040", "Una comisión no puede ser negativa");
+
+    if (anterior && nuevo.estado !== anterior.estado) {
+      const permitidas = {
+        Devengada: ["Devengada", "Aprobada", "Anulada"],
+        Aprobada: ["Aprobada", "Liquidada", "Anulada"],
+        Liquidada: ["Liquidada"],       // pagada es terminal
+        Anulada: ["Anulada"],
+      }[anterior.estado] || [];
+      if (!permitidas.includes(nuevo.estado)) {
+        fallar("NX-020",
+          `Una comisión ${anterior.estado} no puede pasar a ${nuevo.estado}`,
+          anterior.estado === "Liquidada" ? "Ya se pagó: para corregir, anulá y devengá de nuevo" : "");
+      }
+
+      if (nuevo.estado === "Aprobada") {
+        if (!P.capacidad(ctx.rol, "aprobar_comision")) {
+          fallar("NX-011", "Aprobar comisiones corresponde a gerencia comercial o administrativa");
+        }
+        // Nadie se aprueba la propia comisión.
+        const v = (ctx.vendedores || []).find((x) => x.id === nuevo.vendedorId);
+        if (v && ctx.usuario && (v.usuarioId === ctx.usuario || v.nombre === ctx.usuario)) {
+          fallar("NX-012", "No podés aprobar tu propia comisión");
+        }
+      }
+
+      if (nuevo.estado === "Liquidada") {
+        const r = global.NEXO_COMISIONES.puedeLiquidarse({ ...nuevo, estado: "Aprobada" }, ctx);
+        if (!r.puede) fallar("NX-069", r.motivo);
+      }
+    }
+
+    if (nuevo.estado === "Anulada" && !nuevo.motivoAnulacion) {
+      fallar("NX-040", "Anular una comisión requiere motivo");
+    }
+    return true;
+  }
+
   const VALIDADORES = {
+    vendedores: validarVendedor,
+    acuerdosComision: validarAcuerdoComision,
+    comisiones: validarComision,
     tickets: validarTicket,
     presupuestos: validarPresupuesto,
     contratos: validarContrato,

@@ -24,6 +24,16 @@ const state = {
   presuSha: null,
   tickets: [],       // tickets de pedido de cliente
   ticketsSha: null,
+  // Modelo v3
+  campanas: [], campanasSha: null,
+  estrategias: [], estrategiasSha: null,
+  leads: [], leadsSha: null,
+  facturaciones: [], facturacionesSha: null,
+  tiposCambio: [], tiposCambioSha: null,
+  vendedores: [], vendedoresSha: null,
+  acuerdosComision: [], acuerdosSha: null,
+  comisiones: [], comisionesSha: null,
+  rol: "admin",      // sin servidor el rol es preferencia de interfaz, no permiso real
   user: localStorage.getItem(LS.user) || "",
   ws: "contratos", // área de trabajo activa: 'contratos' | 'presupuestos'
   selected: new Set(),
@@ -33,6 +43,10 @@ const state = {
   editId: null,
   soloLectura: false, // se activa solo si el token no tiene permiso de escritura
 };
+// `const` no crea propiedad en window, y los módulos de vistas/ leen y
+// escriben el estado. Se expone explícitamente para que la dependencia quede
+// a la vista, en vez de depender de un accidente del ámbito global.
+window.state = state;
 
 // -------- constantes de dominio --------
 const ESTADOS = [
@@ -335,7 +349,25 @@ const STORE_DEF = {
   contratos: { path: () => CFG.dataPath, key: "data", shaKey: "sha", ls: LS.demo, seed: () => DEMO_SEED, migrate: (a) => migrarTodos(a) },
   presupuestos: { path: () => CFG.presupuestosPath, key: "presupuestos", shaKey: "presuSha", ls: LS.demoPresu, seed: () => DEMO_PRESU, migrate: (a) => migrarPresupuestos(a) },
   tickets: { path: () => CFG.ticketsPath, key: "tickets", shaKey: "ticketsSha", ls: LS.demoTickets, seed: () => DEMO_TICKETS, migrate: (a) => migrarTickets(a) },
+  // Entidades del modelo v3. Se normalizan con el esquema del núcleo, que es
+  // el único lugar donde está definida su forma. Arrancan vacías.
+  campanas: { path: () => CFG.campanasPath, key: "campanas", shaKey: "campanasSha", ls: "nexo_demo_campanas", seed: () => [], migrate: (a) => normalizar("campanas", a) },
+  estrategias: { path: () => CFG.estrategiasPath, key: "estrategias", shaKey: "estrategiasSha", ls: "nexo_demo_estrategias", seed: () => [], migrate: (a) => normalizar("estrategias", a) },
+  leads: { path: () => CFG.leadsPath, key: "leads", shaKey: "leadsSha", ls: "nexo_demo_leads", seed: () => [], migrate: (a) => normalizar("leads", a) },
+  facturaciones: { path: () => CFG.facturacionesPath, key: "facturaciones", shaKey: "facturacionesSha", ls: "nexo_demo_facturaciones", seed: () => [], migrate: (a) => normalizar("facturaciones", a) },
+  tiposCambio: { path: () => CFG.tiposCambioPath, key: "tiposCambio", shaKey: "tiposCambioSha", ls: "nexo_demo_tc", seed: () => [], migrate: (a) => normalizar("tiposCambio", a) },
+  vendedores: { path: () => CFG.vendedoresPath, key: "vendedores", shaKey: "vendedoresSha", ls: "nexo_demo_vnd", seed: () => [], migrate: (a) => normalizar("vendedores", a) },
+  acuerdosComision: { path: () => CFG.acuerdosComisionPath, key: "acuerdosComision", shaKey: "acuerdosSha", ls: "nexo_demo_acu", seed: () => [], migrate: (a) => normalizar("acuerdosComision", a) },
+  comisiones: { path: () => CFG.comisionesPath, key: "comisiones", shaKey: "comisionesSha", ls: "nexo_demo_com", seed: () => [], migrate: (a) => normalizar("comisiones", a) },
 };
+
+// Normaliza una colección con el esquema del núcleo. Los registros ilegibles
+// se avisan por consola en vez de desaparecer en silencio.
+function normalizar(entidad, arr) {
+  const { registros, fallidos } = window.NEXO_ESQUEMA.normalizarColeccion(entidad, arr);
+  if (fallidos.length) console.warn(`${fallidos.length} registro(s) ilegibles en ${entidad}`, fallidos);
+  return registros;
+}
 async function ghLoadFile(path) {
   const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${path}?ref=${CFG.branch}`;
   const r = await fetch(url, { headers: ghHeaders() });
@@ -482,15 +514,6 @@ const DEMO_PRESU = [
 
 // ---- numeración ----
 // TK-AAAA-NNN / PRE-AAAA-NNN, correlativo por año sobre lo ya existente.
-function proxNumero(arr, prefijo) {
-  const anio = new Date().getFullYear();
-  const rx = new RegExp(`^${prefijo}-${anio}-(\\d+)$`);
-  const max = (arr || []).reduce((m, x) => {
-    const g = (x.numero || "").match(rx);
-    return g ? Math.max(m, Number(g[1])) : m;
-  }, 0);
-  return `${prefijo}-${anio}-${String(max + 1).padStart(3, "0")}`;
-}
 // Numeración real del área comercial: P + AAAA + MM + correlativo del mes
 // (P20260413 = cuarto mes de 2026, presupuesto 13). El ticket la espeja.
 function proxSecuenciaMes() {
@@ -569,22 +592,46 @@ function refreshWho() {
 // La app se divide en dos áreas de trabajo, cada una con su tablero y secciones.
 const SUBNAV = {
   contratos: [["dashboard", "Tablero"], ["listado", "Registros"], ["agenda", "Vencimientos"]],
-  presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["reportes", "Reportes"]],
+  presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["facturacion", "Facturación"], ["reportes", "Reportes"]],
+  marketing: [["mktablero", "Tablero"], ["campanas", "Campañas"], ["leads", "Leads"], ["canales", "Canales"]],
+  equipo: [["vendedores", "Vendedores"], ["comisiones", "Comisiones"]],
 };
 // A qué área pertenece cada vista/ruta.
 const VIEW_WS = {
   dashboard: "contratos", listado: "contratos", agenda: "contratos", detalle: "contratos", form: "contratos", pipeline: "contratos",
   ptablero: "presupuestos", presupuestos: "presupuestos", presudetalle: "presupuestos", presuform: "presupuestos",
   tickets: "presupuestos", tkdetalle: "presupuestos", tkform: "presupuestos", reportes: "presupuestos", direccion: "presupuestos",
+  facturacion: "presupuestos", cambio: "presupuestos",
+  mktablero: "marketing", campanas: "marketing", campdetalle: "marketing", campform: "marketing",
+  leads: "marketing", leadform: "marketing", canales: "marketing",
+  vendedores: "equipo", vnddetalle: "equipo", vndform: "equipo", comisiones: "equipo",
 };
-const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero" };
+const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero", marketing: "mktablero", equipo: "vendedores" };
 
 function router() {
   const view = (location.hash.replace("#", "") || "dashboard").split("/");
   const name = view[0];
   state.ws = VIEW_WS[name] || state.ws;
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-  const target = document.getElementById("view-" + name) || document.getElementById("view-" + WS_HOME[state.ws]);
+  // Las vistas nuevas (marketing, facturación) viven en módulos aparte y
+  // crean su propia sección: así no hay que tocar index.html ni engordar más
+  // este archivo cada vez que se suma una pantalla.
+  const seccion = (id) => {
+    let el = document.getElementById("view-" + id);
+    if (!el && window.NEXO_VISTAS && window.NEXO_VISTAS[id]) {
+      el = document.createElement("section");
+      el.className = "view";
+      el.id = "view-" + id;
+      document.getElementById("contenido").insertBefore(
+        el, document.querySelector(".footer-legend"));
+    }
+    return el;
+  };
+  // El home del área también puede ser una vista de módulo, así que pasa por
+  // el mismo camino. Y si nada existe se cae al tablero de contratos, que
+  // siempre está en el HTML: sin esto una ruta desconocida rompe la app.
+  const target = seccion(name) || seccion(WS_HOME[state.ws]) ||
+    document.getElementById("view-dashboard");
   target.classList.add("active");
   renderSubnav(name);
   const R = {
@@ -593,6 +640,8 @@ function router() {
     presupuestos: renderPresupuestos, presudetalle: () => renderPresuDetalle(view[1]), presuform: () => renderPresuForm(view[1], view[2]),
     tickets: renderTickets, tkdetalle: () => renderTicketDetalle(view[1]), tkform: () => renderTicketForm(view[1]),
     reportes: renderReportes, direccion: renderPTablero,
+    // Vistas registradas por los módulos de nucleo/vistas.
+    ...(window.NEXO_VISTAS || {}),
   };
   (R[name] || (() => go(WS_HOME[state.ws])))();
   enhanceA11y();
@@ -1749,7 +1798,7 @@ function exportarInforme() {
     <h1>Estado de la cartera de contratos</h1>
     <p style="color:#8c867d;margin:0">${fmt(new Date())}${rows.length !== state.data.length ? ` · selección de ${rows.length} de ${state.data.length} registros` : ""}</p>
 
-    <div class="kpis">
+    <div class="grid-kpi">
       <div class="k"><div class="lb">Contratos vigentes</div><div class="vl">${vig.length}</div><div class="sb">${equipos} equipos en servicio</div></div>
       <div class="k"><div class="lb">Ingreso mensual</div><div class="vl">${money(mrr)}</div><div class="sb">${money(mrr * 12)} anualizado</div></div>
       <div class="k"><div class="lb">Propuestas abiertas</div><div class="vl">${pipe.length}</div><div class="sb">${money(potencial)}/mes potencial</div></div>
@@ -1888,9 +1937,48 @@ function estadoTicketBtns(t) {
   if (t.estado !== "cerrado" && t.estado !== "abierto") b.push(`<button class="btn sm" onclick="cambiarEstadoTicket('${t.id}','cerrado')">Cerrar</button>`);
   return b.join("");
 }
+/**
+ * Comprueba una escritura contra las reglas del núcleo antes de aplicarla.
+ *
+ * Traduce el registro a la forma v3, valida y devuelve los efectos derivados
+ * (lo que en una base de datos harían los triggers). Si la regla no se cumple
+ * lanza ErrorNexo con su código NX y la escritura no ocurre.
+ *
+ * Sin servidor esto no es una barrera de seguridad —quien tenga el token puede
+ * editar el JSON a mano— pero garantiza que todo lo que pasa por la aplicación
+ * quede consistente.
+ */
+function validarEscritura(entidad, accion, nuevoViejo, anteriorViejo) {
+  return window.NEXO_ADAPTADOR.validarEnFormaVieja(entidad, accion, nuevoViejo, anteriorViejo, {
+    tickets: state.tickets, presupuestos: state.presupuestos, contratos: state.data,
+    campanas: state.campanas, estrategias: state.estrategias, leads: state.leads,
+    tiposCambio: state.tiposCambio,
+    rol: state.rol, usuario: state.user,
+  });
+}
+
+/** Muestra el rechazo de una regla con su código y la sugerencia. */
+function avisarRegla(e) {
+  if (e && e.codigo) {
+    toast(e.sugerencia ? `${e.message} — ${e.sugerencia}` : e.message, true, true);
+    return true;
+  }
+  return false;
+}
+
 async function cambiarEstadoTicket(id, nuevo) {
   const t = ticketPorId(id);
   if (!t) return;
+  const antes = structuredClone(t);
+  const propuesto = { ...structuredClone(t), estado: nuevo };
+
+  try {
+    validarEscritura("tickets", "editar", propuesto, antes);
+  } catch (e) {
+    if (avisarRegla(e)) return;   // la regla rechazó: no se toca nada
+    throw e;
+  }
+
   t.estado = nuevo;
   t.historial = t.historial || [];
   t.historial.push({ estado: nuevo, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
@@ -2101,6 +2189,18 @@ function estadoPresuBtns(p) {
 async function cambiarEstadoPresu(id, nuevo) {
   const p = presuPorId(id);
   if (!p) return;
+  const antes = structuredClone(p);
+  const propuesto = { ...structuredClone(p), estado: nuevo };
+
+  // Las transiciones ilegales, el aprobar dos presupuestos del mismo ticket y
+  // el aprobar uno vencido se cortan acá, antes de escribir nada.
+  try {
+    validarEscritura("presupuestos", "editar", propuesto, antes);
+  } catch (e) {
+    if (avisarRegla(e)) return;
+    throw e;
+  }
+
   p.estado = nuevo;
   p.historialEstados = p.historialEstados || [];
   p.historialEstados.push({ estado: nuevo, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
@@ -2608,52 +2708,6 @@ function renderPTablero() {
     </div>`;
 }
 
-function renderDireccion() {
-  const el = document.getElementById("view-direccion");
-  const k = kpisDireccion();
-  const maxTipo = Math.max(1, ...Object.values(k.porTipo));
-  const maxEtapa = Math.max(1, ...Object.values(k.pipePorEtapa));
-  el.innerHTML = `
-    <div class="kicker">Dirección</div>
-    <div class="page-head">
-      <h1>Tablero de <span class="accent">dirección</span></h1>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn primary" onclick="imprimirDireccion()">📄 Informe imprimible</button>
-        <button class="btn sm" onclick="exportarInforme()">Contratos (detalle)</button>
-      </div>
-    </div>
-    <p class="muted" style="margin-top:-6px">Visión combinada de contratos, presupuestos y tickets. Actualizado a ${fmt(new Date())}.</p>
-
-    <h2 class="sect">Recurrente</h2>
-    <div class="grid-kpi">
-      ${kpi("Contratos vigentes", k.vig.length, `${k.equipos} equipos en servicio`)}
-      ${kpi("MRR", money(k.mrr), `${money(k.mrr * 12)} anualizado`)}
-      ${kpi("Pipeline (anualizado)", money(k.pipeAnual), `${k.abiertos.length} presupuestos abiertos`)}
-      ${kpi("Pipeline ponderado", money(Math.round(k.pipePond)), "por probabilidad de cierre")}
-      ${kpi("Win-rate", k.winRate == null ? "—" : Math.round(k.winRate * 100) + "%", `${k.ganados.length} ganados / ${k.perdidos.length} perdidos`, k.winRate != null && k.winRate < 0.4 ? "warn" : "")}
-    </div>
-
-    <div class="dir-2col">
-      <div class="card">
-        <h3>Ventas cerradas por tipo <span class="muted" style="font-weight:400">· anualizado</span></h3>
-        ${k.ventasTotal ? Object.entries(k.porTipo).sort((a, b) => b[1] - a[1]).map(([t, v]) => barra((PRE_TIPOS[t] || {}).label || t, v, maxTipo, `${Math.round(v / k.ventasTotal * 100)}%`)).join("") : `<p class="muted">Todavía sin presupuestos ganados.</p>`}
-        ${k.ventasTotal ? `<div class="bar-total">Total cerrado: <b>${money(k.ventasTotal)}</b></div>` : ""}
-      </div>
-      <div class="card">
-        <h3>Pipeline por etapa <span class="muted" style="font-weight:400">· anualizado</span></h3>
-        ${Object.keys(k.pipePorEtapa).length ? PRE_ESTADOS.filter((e) => k.pipePorEtapa[e.id]).map((e) => barra(e.label, k.pipePorEtapa[e.id], maxEtapa, "")).join("") : `<p class="muted">Sin presupuestos abiertos.</p>`}
-      </div>
-    </div>
-
-    <h2 class="sect">Operación · Tickets</h2>
-    <div class="grid-kpi">
-      ${kpi("Tickets abiertos", k.tkAbiertos.length, "pedidos sin cerrar")}
-      ${kpi("Antigüedad promedio", k.edadProm == null ? "—" : k.edadProm + " d", "de los tickets abiertos", k.edadProm != null && k.edadProm > 14 ? "warn" : "")}
-      ${kpi("Tiempo a presupuestar", k.tProm == null ? "—" : k.tProm + " d", "del pedido a la cotización")}
-      ${kpi("Presupuestos ganados", k.ganados.length, "acumulado histórico")}
-    </div>
-    ${state.presupuestos.some((p) => (p.economico?.moneda || "USD") !== "USD") ? `<p class="muted" style="font-size:12.5px;margin-top:14px">Nota: hay presupuestos cargados en ARS. Los montos de este tablero se expresan en USD; para cortes por moneda usá <a href="#reportes">Reportes</a>.</p>` : ""}`;
-}
 // Versión imprimible del tablero de dirección (para pasarle al CEO/COO).
 function imprimirDireccion() {
   const k = kpisDireccion();
@@ -2685,7 +2739,7 @@ function imprimirDireccion() {
     <h1>Indicadores del negocio</h1>
     <p style="color:#8c867d;margin:0">${fmt(new Date())}</p>
     <h2>Recurrente y pipeline</h2>
-    <div class="kpis">
+    <div class="grid-kpi">
       <div class="k"><div class="lb">Contratos vigentes</div><div class="vl">${k.vig.length}</div><div class="sb">${k.equipos} equipos</div></div>
       <div class="k"><div class="lb">MRR</div><div class="vl">${money(k.mrr)}</div><div class="sb">${money(k.mrr * 12)} anual</div></div>
       <div class="k"><div class="lb">Pipeline anualizado</div><div class="vl">${money(k.pipeAnual)}</div><div class="sb">ponderado ${money(Math.round(k.pipePond))}</div></div>
@@ -2694,7 +2748,7 @@ function imprimirDireccion() {
     <h2>Ventas cerradas por tipo (anualizado)</h2>
     ${k.ventasTotal ? `<table><thead><tr><th>Tipo</th><th>Monto</th><th>Participación</th></tr></thead><tbody>${Object.entries(k.porTipo).sort((a, b) => b[1] - a[1]).map(filaTipo).join("")}<tr><td><b>Total</b></td><td class="num">${money(k.ventasTotal)}</td><td>100%</td></tr></tbody></table>` : `<p style="color:#8c867d">Sin ventas cerradas.</p>`}
     <h2>Operación · Tickets</h2>
-    <div class="kpis">
+    <div class="grid-kpi">
       <div class="k"><div class="lb">Tickets abiertos</div><div class="vl">${k.tkAbiertos.length}</div><div class="sb">sin cerrar</div></div>
       <div class="k"><div class="lb">Antigüedad prom.</div><div class="vl">${k.edadProm == null ? "—" : k.edadProm + " d"}</div><div class="sb">tickets abiertos</div></div>
       <div class="k"><div class="lb">Tiempo a presupuestar</div><div class="vl">${k.tProm == null ? "—" : k.tProm + " d"}</div><div class="sb">pedido → cotización</div></div>
@@ -2876,4 +2930,13 @@ Object.assign(window, {
   registrarAjuste, regularizarAjustes, calcAjuste, calcAjustePct,
 });
 
-init();
+// Si el arranque falla, el error tiene que verse completo y la aplicación
+// tiene que quedar usable. Una promesa rechazada sin capturar deja la pantalla
+// a medio dibujar y un mensaje truncado en la consola.
+init().catch((e) => {
+  console.error("Fallo en el arranque:", e);
+  try {
+    document.getElementById("view-dashboard")?.classList.add("active");
+    toast("Error al iniciar: " + e.message, true, true);
+  } catch (_) { /* si ni esto anda, ya quedó en la consola */ }
+});

@@ -33,6 +33,14 @@
   const CANAL = ["Email", "Redes", "SEA", "Offline"];
   const LEAD_ESTADO = ["Nuevo", "Contactado", "Calificado", "Descartado", "Convertido"];
   const RECURRENCIA = ["unica", "mensual"];
+
+  const VENDEDOR_ESTADO = ["Activo", "Inactivo"];
+  const VENDEDOR_RELACION = ["Interno", "Externo", "Representante"];
+  const COMISION_MODALIDAD = ["Porcentaje", "Escalonada", "Fija", "Mixta"];
+  /** Sobre qué se calcula: el valor del contrato o el margen declarado. */
+  const COMISION_BASE = ["Contrato", "Margen", "Cobrado"];
+  const COMISION_ORIGEN = ["Contrato", "Presupuesto", "Facturacion"];
+  const COMISION_ESTADO = ["Devengada", "Aprobada", "Liquidada", "Anulada"];
   const ROL = ["vendedor", "gerente_comercial", "gerente_administrativo", "direccion", "marketing", "admin"];
 
   /** Monedas de cotización. ARS/CLP solo se toleran en registros heredados. */
@@ -391,6 +399,121 @@
       },
     },
 
+    /**
+     * Vendedores. Distinto de `usuarios`: un usuario es alguien que entra a la
+     * aplicación; un vendedor es alguien que cobra comisión. Un representante
+     * externo comisiona sin tener acceso, y un gerente puede tener acceso sin
+     * comisionar. Se relacionan por `usuarioId` cuando la persona es ambas cosas.
+     */
+    vendedores: {
+      archivo: "vendedores",
+      particionado: false,
+      idPrefijo: "vnd_",
+      normalizar(r) {
+        const estado = enumerado(r.estado, VENDEDOR_ESTADO, "Activo");
+        return {
+          id: esTexto(r.id) || nuevoId("vnd_"),
+          nombre: esTexto(r.nombre),
+          usuarioId: esTexto(r.usuarioId) || null,
+          relacion: enumerado(r.relacion, VENDEDOR_RELACION, "Interno"),
+          email: esTexto(r.email),
+          telefono: esTexto(r.telefono),
+          documento: esTexto(r.documento),        // CUIT o DNI
+          zona: esTexto(r.zona),                  // territorio asignado
+          pais: esTexto(r.pais) || "AR",
+          estado,
+          fechaAlta: fecha(r.fechaAlta) || hoy(),
+          fechaBaja: estado === "Inactivo" ? fecha(r.fechaBaja) : null,
+          // Cuota comercial. Sirve para medir cumplimiento; 0 = sin cuota.
+          metaMensual: money(r.metaMensual),
+          metaMoneda: enumerado(r.metaMoneda, MONEDA_COTIZACION, "USD"),
+          notas: esTexto(r.notas),
+        };
+      },
+    },
+
+    /**
+     * Acuerdo de comisiones. Versionado por vigencia: cambiar las condiciones
+     * NO edita el acuerdo anterior, crea uno nuevo. Así una comisión vieja
+     * siempre se puede reconstruir con las reglas que regían ese día.
+     */
+    acuerdosComision: {
+      archivo: "acuerdos-comision",
+      particionado: false,
+      idPrefijo: "acu_",
+      normalizar(r) {
+        const modalidad = enumerado(r.modalidad, COMISION_MODALIDAD, "Porcentaje");
+        const escalones = esLista(r.escalones)
+          .map((e) => ({
+            desde: money(e.desde),
+            // null = sin tope superior (último tramo)
+            hasta: e.hasta === null || e.hasta === undefined || e.hasta === ""
+              ? null : money(e.hasta),
+            porcentaje: esNumero(e.porcentaje),
+          }))
+          .sort((a, b) => a.desde - b.desde);
+
+        return {
+          id: esTexto(r.id) || nuevoId("acu_"),
+          vendedorId: esTexto(r.vendedorId),
+          nombre: esTexto(r.nombre),
+          modalidad,
+          base: enumerado(r.base, COMISION_BASE, "Contrato"),
+          porcentaje: esNumero(r.porcentaje),     // modalidad Porcentaje
+          montoFijo: money(r.montoFijo),          // modalidad Fija
+          escalones,                              // modalidad Escalonada
+          moneda: enumerado(r.moneda, MONEDA_COTIZACION, "USD"),
+          // Tope por operación. 0 = sin tope.
+          tope: money(r.tope),
+          // Regla comercial clave: si es true, la comisión se devenga con la
+          // venta pero solo se liquida cuando el cliente pagó. Es lo que
+          // evita pagar comisión por una venta que después no se cobra.
+          pagoTrasCobro: esBool(r.pagoTrasCobro, true),
+          // Para abonos mensuales: cuántos meses se comisiona. 0 = todos.
+          mesesRecurrente: esNumero(r.mesesRecurrente),
+          vigenciaDesde: fecha(r.vigenciaDesde) || hoy(),
+          vigenciaHasta: fecha(r.vigenciaHasta),  // null = vigente sin fin
+          notas: esTexto(r.notas),
+          creado: fecha(r.creado) || hoy(),
+        };
+      },
+    },
+
+    /** Comisión devengada sobre una operación concreta. */
+    comisiones: {
+      archivo: "comisiones",
+      particionado: true,
+      campoPeriodo: "fechaDevengo",
+      idPrefijo: "com_",
+      normalizar(r) {
+        const estado = enumerado(r.estado, COMISION_ESTADO, "Devengada");
+        return {
+          id: esTexto(r.id) || nuevoId("com_"),
+          vendedorId: esTexto(r.vendedorId),
+          acuerdoId: esTexto(r.acuerdoId),
+          // De dónde salió: contrato firmado, presupuesto aprobado o factura.
+          origenTipo: enumerado(r.origenTipo, COMISION_ORIGEN, "Contrato"),
+          origenId: esTexto(r.origenId),
+          origenNumero: esTexto(r.origenNumero),
+          clienteId: esTexto(r.clienteId),
+          periodo: esTexto(r.periodo) || (fecha(r.fechaDevengo) || hoy()).slice(0, 7),
+          baseCalculo: money(r.baseCalculo),
+          porcentajeAplicado: esNumero(r.porcentajeAplicado),
+          monto: money(r.monto),
+          moneda: enumerado(r.moneda, MONEDA_COTIZACION, "USD"),
+          estado,
+          fechaDevengo: fecha(r.fechaDevengo) || hoy(),
+          fechaAprobacion: fecha(r.fechaAprobacion),
+          fechaLiquidacion: estado === "Liquidada" ? (fecha(r.fechaLiquidacion) || hoy()) : null,
+          // Trazabilidad del cálculo: qué escalón se aplicó, si hubo tope.
+          detalleCalculo: esTexto(r.detalleCalculo),
+          aprobadaPor: esTexto(r.aprobadaPor),
+          motivoAnulacion: estado === "Anulada" ? esTexto(r.motivoAnulacion) : "",
+          observaciones: esTexto(r.observaciones),
+        };
+      },
+    },
+
     usuarios: {
       archivo: "usuarios",
       particionado: false,
@@ -465,6 +588,8 @@
     TICKET_ESTADO, TICKET_TIPO, PRIORIDAD, PRESUPUESTO_ESTADO, CONTRATO_ESTADO,
     CAMPANA_ESTADO, ESTRATEGIA_ESTADO, ESTRATEGIA_TIPO, CANAL, LEAD_ESTADO,
     RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_LIQUIDACION, PESO_ETAPA,
+    VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
+    COMISION_ORIGEN, COMISION_ESTADO,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
   };
