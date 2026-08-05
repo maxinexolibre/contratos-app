@@ -1,1 +1,9 @@
 .DS_Store
+
+# Salida de graphify: se regenera con `graphify update .` sin costo de API.
+# Son ~1,7 MB de HTML y JSON derivados del código; versionarlos genera
+# conflictos en cada commit sin aportar nada que no esté ya en el código.
+graphify-out/
+
+# Configuración local del servidor de vista previa
+.claude/

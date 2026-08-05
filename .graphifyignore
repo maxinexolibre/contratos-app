@@ -1,0 +1,16 @@
+# Librerías de terceros empaquetadas.
+# docx.iife.js son ~150.000 palabras minificadas: sin excluirlo, sus funciones
+# internas (Buffer, push, emit, write, toHex32) copan los "god nodes" y el
+# grafo describe la librería en vez de describir esta aplicación.
+vendor/
+
+# Salida del propio grafo
+graphify-out/
+
+# Assets binarios y de marca: no aportan estructura de código
+assets/
+*.svg
+*.png
+
+# Datos de ejemplo generados
+*.docx
