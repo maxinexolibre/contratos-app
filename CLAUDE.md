@@ -1,0 +1,119 @@
+# Plataforma comercial Nexolibre
+
+App estática sin build. Se sirve desde GitHub Pages (repo público) y guarda los
+datos en el repo **privado** `maxinexolibre/contratos-data`, vía la API de
+contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
+
+> **Regla que no se negocia:** este repo es público. Nunca poner acá datos
+> reales de clientes —nombres, CUIT, cánones, importes—. Los ejemplos y las
+> pruebas usan datos ficticios. Antes de commitear, escanear el diff.
+
+---
+
+## Dónde está cada cosa
+
+| Necesitás tocar… | Archivo | ~tokens |
+|---|---|---|
+| Forma de un registro, campos, validación de tipos | `nucleo/esquema.js` | 8k |
+| Reglas de negocio, códigos NX, transiciones de estado | `nucleo/reglas.js` | 7k |
+| Cálculo de KPIs, monedas, denominadores | `nucleo/kpi.js` | 5k |
+| Matriz de permisos por rol | `nucleo/permisos.js` | 2k |
+| Lectura/escritura particionada, índice, conflictos | `nucleo/almacen.js` | 4k |
+| Traducción forma vieja ↔ modelo v3 | `nucleo/adaptador.js` | 4k |
+| Tipos de cambio, conversión, facturación | `nucleo/cambio.js` | 3k |
+| Comisiones, acuerdos, reparto interno | `nucleo/comisiones.js` | 5k |
+| Capa de datos de la app sobre el almacén | `nucleo/repositorio.js` | 3k |
+| Filtros, paginación, CSV, selector de país | `nucleo/tabla.js` | 2k |
+| Estado global, constantes, fechas, migraciones | `app/base.js` | 4k |
+| API de GitHub, stores, persistencia, demo | `app/datos.js` | 4k |
+| Arranque, router, navegación, tema | `app/chrome.js` | 2k |
+| Pantallas de contratos | `app/contratos.js` | 17k |
+| Pantallas de tickets | `app/tickets.js` | 3k |
+| Pantallas de presupuestos | `app/presupuestos.js` | 9k |
+| Tableros, gráficos, reportes | `app/tableros.js` | 7k |
+| Propuestas, facturación, marketing, vendedores | `vistas/*.js` | 6–8k c/u |
+
+**Empezá por la tabla, no por una búsqueda.** El repo entero son ~176 mil
+tokens; leer el archivo correcto cuesta entre 2k y 17k.
+
+---
+
+## Arquitectura
+
+```
+nucleo/    lógica pura, sin DOM ni fetch. Testeable headless.
+app/       la aplicación: estado global + pantallas. Ámbito compartido.
+vistas/    pantallas nuevas, construidas directo sobre el núcleo.
+tools/     pruebas y utilidades de línea de comandos.
+```
+
+`nucleo/` **no depende de nada** de `app/` ni de `vistas/` — verificado por el
+grafo de código. Si agregás una dependencia hacia afuera, rompés eso.
+
+Los archivos de `app/` comparten el ámbito global: se cargan en orden y las
+constantes declaradas antes se ven después. `app/tableros.js` va último porque
+arranca la aplicación. Ese orden está en `index.html` y hay que respetarlo.
+
+---
+
+## Modelo de datos
+
+Ticket → Presupuesto → Contrato para trabajos puntuales.
+Propuesta comercial → Contrato para acuerdos de mantenimiento (dos etapas).
+
+- **Todo se cotiza en USD** (o UF en Chile). La conversión a moneda local ocurre
+  únicamente al facturar, y el tipo de cambio queda congelado en el comprobante.
+- Los importes **nunca se suman entre monedas**. Los KPIs devuelven mapas por
+  moneda, no un número único.
+- Un abono mensual se cobra **por período**: `periodoCobrado` en cada
+  comprobante. Sin eso, el primer cobro da el contrato por cerrado.
+
+Países: AR · CL · CO · UY · US.
+
+---
+
+## Convenciones
+
+- **Español rioplatense** en código, comentarios, mensajes de commit e interfaz.
+- Los comentarios explican **por qué**, no qué. Si el porqué es un bug que ya
+  pasó, contalo: evita que alguien lo "arregle" de vuelta.
+- Marca Nexolibre: `~/.claude/NEXOLIBRE-BRAND.md`. Naranja `#ef8f03`, oscuro
+  taupe `#645d56`, títulos en Exo.
+- Clases CSS reales: `grid-kpi` (no `kpis`), `table.data` (no `tabla`),
+  `form-grid` (no `grid-2`).
+
+---
+
+## Antes de commitear
+
+```bash
+node tools/probar-nucleo.mjs        # reglas, KPIs, esquema
+node tools/probar-repositorio.mjs   # capa de datos particionada
+node tools/versionar.mjs            # cache-busting de los recursos
+```
+
+`versionar.mjs` es obligatorio: sin él, Pages sirve el JavaScript viejo después
+de desplegar. Ya pasó tres veces.
+
+Y siempre `git fetch` + `pull --ff-only` en `contratos-data` antes de escribir:
+el equipo carga datos por la app mientras se trabaja.
+
+---
+
+## Trampas conocidas
+
+Cosas que ya rompieron y tienen prueba de regresión:
+
+- **Campo anidado sin propagar en el adaptador.** Pasó tres veces: `moneda` del
+  presupuesto, `condicionIVA`, `pais`. Al agregar un campo al esquema, revisá
+  `adaptador.js` en las **dos** direcciones.
+- **KPI que lee de la raíz un campo anidado.** `p.canonMensual` vs
+  `p.economico.canonMensual` — da cero en silencio.
+- **`cierreEstimado` dándose vuelta** en el ida y vuelta: hace que el ciclo de
+  venta cuente cierres de 0 días como reales.
+- **Denominador cero → `null`, nunca `0`.** Un 0% se lee como "pésimo"; un "—"
+  se lee como "todavía no hay datos".
+- **Escalonado marginal**, no por tramo alcanzado: si no, vender un peso más
+  dispara la comisión e incentiva demorar el cierre.
+- **Caché del navegador.** Si un error persiste con números de línea que no
+  coinciden con el archivo, es caché: pestaña nueva.
