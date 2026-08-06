@@ -34,8 +34,85 @@
   };
 
   /** El resto ya nace en modelo v3: no necesita traducción. */
-  const NATIVAS = ["clientes", "campanas", "estrategias", "leads", "facturaciones",
-    "tiposCambio", "vendedores", "acuerdosComision", "comisiones", "usuarios"];
+  const NATIVAS = ["clientes", "propuestas", "campanas", "estrategias", "leads",
+    "facturaciones", "tiposCambio", "vendedores", "acuerdosComision", "comisiones",
+    "usuarios"];
+
+  /** Estado viejo de un registro de contrato → estado de propuesta. */
+  const ESTADO_PROPUESTA = {
+    borrador: "Borrador",
+    enviada: "Enviada",
+    en_revision: "Enviada",
+    firme_vigente: "Aceptada",
+    firmado: "Aceptada",
+    finalizado: "Aceptada",
+    anulado: "Rechazada",
+  };
+
+  /**
+   * Separa el registro único del esquema anterior en las dos etapas.
+   *
+   * Antes, una misma ficha con `tipo: propuesta|contrato` hacía de las dos
+   * cosas. Ahora la propuesta comercial y el contrato son registros distintos
+   * y enlazados.
+   *
+   * Sobre las propuestas que quedaron en `firme_vigente`: fueron aceptadas y
+   * están operando, pero nunca se redactó el contrato. NO se les inventa uno
+   * —sería fabricar un documento que nadie firmó— sino que se marcan con
+   * `esquemaAnterior` para que se vean por lo que son y se decida caso por
+   * caso cuáles formalizar.
+   */
+  function separarEtapas(registrosViejos, indiceClientes) {
+    const propuestas = [];
+    const contratos = [];
+    const seq = {};
+
+    const numerar = (prefijo, fechaRef) => {
+      const anio = String(fechaRef || E.hoy()).slice(0, 4);
+      const clave = `${prefijo}:${anio}`;
+      seq[clave] = (seq[clave] || 0) + 1;
+      return `${prefijo}-${anio}-${String(seq[clave]).padStart(4, "0")}`;
+    };
+
+    const ordenados = [...registrosViejos].sort((a, b) =>
+      String(a.fechas?.creado || "").localeCompare(String(b.fechas?.creado || "")));
+
+    for (const r of ordenados) {
+      const clienteId = indiceClientes.get(E.claveCliente(r.cliente?.nombreComercial)) || "";
+      const alta = r.fechas?.creado || r.vigencia?.inicio || E.hoy();
+
+      if (r.tipo === "contrato") {
+        // Ya era un contrato: se conserva como tal, sin propuesta de origen.
+        contratos.push({ ...r, propuestaId: null, clienteId });
+        continue;
+      }
+
+      const estado = ESTADO_PROPUESTA[r.estado] || "Borrador";
+      propuestas.push(E.ENTIDADES.propuestas.normalizar({
+        id: r.id,
+        numero: numerar("PR", alta),
+        numeroLegado: r.numero,
+        clienteId,
+        pais: r.pais,
+        estado,
+        fechas: {
+          creado: r.fechas?.creado,
+          enviado: r.fechas?.enviado,
+          resuelto: estado === "Aceptada" ? (r.vigencia?.inicio || r.fechas?.firmado) : null,
+        },
+        plan: r.plan, equipos: r.equipos, cobertura: r.cobertura,
+        economico: r.economico,
+        vigenciaPropuesta: { meses: r.vigencia?.meses, inicioEstimado: r.vigencia?.inicio },
+        // Aceptada sin contrato redactado: es exactamente el caso que este
+        // cambio viene a resolver, y queda señalado en vez de disimulado.
+        esquemaAnterior: estado === "Aceptada",
+        archivos: r.archivos, notas: r.notas,
+        historialEstados: r.historialEstados,
+      }));
+    }
+
+    return { propuestas, contratos, secuencias: seq };
+  }
 
   class Repositorio {
     /**
@@ -244,6 +321,15 @@
       const ip = AD.indicePresupuestos(planos.presupuestos || []);
       const ctx = { indiceClientes: idx, presupuestos: planos.presupuestos || [], indicePresupuestos: ip };
 
+      // El esquema anterior metía propuesta y contrato en un mismo registro,
+      // distinguidos por un campo `tipo`. Se separan en las dos etapas.
+      const separado = separarEtapas(planos.contratos || [], idx);
+      planos.contratos = separado.contratos;
+      informe.propuestas = separado.propuestas.length;
+      informe.propuestasHistoricas = separado.propuestas.filter((p) => p.esquemaAnterior).length;
+      await this.almacen.guardarLote("propuestas", separado.propuestas,
+        "Migración · propuestas comerciales");
+
       for (const [entidad, def] of Object.entries(TRADUCIDAS)) {
         const lista = planos[entidad] || [];
         const registros = lista.map((r) => AD[def.aNuevo](r, ctx));
@@ -255,5 +341,5 @@
     }
   }
 
-  global.NEXO_REPOSITORIO = { Repositorio, TRADUCIDAS, NATIVAS };
+  global.NEXO_REPOSITORIO = { Repositorio, TRADUCIDAS, NATIVAS, separarEtapas, ESTADO_PROPUESTA };
 })(typeof window !== "undefined" ? window : globalThis);

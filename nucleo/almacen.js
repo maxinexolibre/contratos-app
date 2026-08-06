@@ -385,15 +385,22 @@
     // ------------------------------------------------------------------------
 
     /**
-     * Próximo número de contrato: CT-AAAA-NNNN, secuencia anual propia,
-     * independiente de la de tickets y presupuestos.
+     * Próximo número de una serie anual propia.
+     *
+     * Propuestas y contratos llevan series separadas —PR- y CT-— porque son
+     * dos etapas distintas: saber de un vistazo qué se está mirando, y cuántas
+     * propuestas hicieron falta por cada contrato, exige que no compartan
+     * correlativo.
      */
-    proximoNumeroContrato(anio) {
+    proximoNumeroSerie(prefijo, anio) {
       anio = anio || String(new Date().getFullYear());
-      const clave = `contratos:${anio}`;
+      const clave = `${prefijo}:${anio}`;
       const n = (this.indice.secuencias[clave] || 0) + 1;
-      return { numero: `CT-${anio}-${String(n).padStart(4, "0")}`, clave, n };
+      return { numero: `${prefijo}-${anio}-${String(n).padStart(4, "0")}`, clave, n };
     }
+
+    proximoNumeroContrato(anio) { return this.proximoNumeroSerie("CT", anio); }
+    proximoNumeroPropuesta(anio) { return this.proximoNumeroSerie("PR", anio); }
 
     /** Confirma el consumo de un número. Se llama después de guardar. */
     confirmarSecuencia(clave, n) {

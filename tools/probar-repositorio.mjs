@@ -132,6 +132,19 @@ for (let i = 0; i < 40; i++) {
     notas: "", archivos: [], usuario: "demo", historialEstados: [],
   });
 }
+// Réplica de la forma real: propuestas en distintos estados + un contrato.
+for (const [i, est] of ["borrador", "enviada", "firme_vigente", "firme_vigente"].entries()) {
+  planos.contratos.push({
+    id: `ctr_prop_${i}`, tipo: "propuesta", numero: `P2026070${i}`, estado: est,
+    cliente: { nombreComercial: `Centro ${i}`, razonesSociales: [] },
+    equipos: [{ modelo: "A", marca: "GE", modalidad: "MRI", serie: "", ubicacion: "" }],
+    cobertura: { soporteRemoto: true }, economico: { canonMensual: 3000 + i * 500, moneda: "USD" },
+    ajuste: {}, vigencia: { inicio: "2026-02-01", meses: 12 },
+    fechas: { creado: `2026-0${i + 1}-10`, enviado: `2026-0${i + 1}-11`, firmado: "" },
+    archivos: [], notas: "", historialEstados: [], plan: { id: "performance" },
+    negociacion: { desviaciones: [] },
+  });
+}
 planos.contratos.push({
   id: "ctr_1", tipo: "contrato", numero: "CT-2026-0001", estado: "firme_vigente",
   cliente: { nombreComercial: "Centro 0", razonesSociales: [] },
@@ -210,11 +223,16 @@ await prueba("los registros vuelven en la forma que espera app.js", async () => 
   cierto(["abierto", "presupuestado", "ganado", "perdido"].includes(t.estado),
     `estado en forma vieja: ${t.estado}`);
 
-  const c = estado.data[0];
+  // Tras separar etapas, `data` contiene solo contratos: las propuestas
+  // viven en su propia colección.
+  const original = planos.contratos.find((x) => x.tipo === "contrato");
+  const c = estado.data.find((x) => x.id === original.id);
+  cierto(c, "el contrato sigue en la colección de contratos");
+  igual(estado.data.length, 1, "las propuestas ya no están acá");
   igual(c.estado, "firme_vigente");
-  igual(c.fechas, planos.contratos[0].fechas, "las fechas del contrato sobreviven");
-  igual(c.negociacion, planos.contratos[0].negociacion, "la negociación sobrevive");
-  igual(c.equipos, planos.contratos[0].equipos);
+  igual(c.fechas, original.fechas, "las fechas del contrato sobreviven");
+  igual(c.negociacion, original.negociacion, "la negociación sobrevive");
+  igual(c.equipos, original.equipos);
 });
 
 await prueba("el país del presupuesto sobrevive a la migración", async () => {
@@ -281,6 +299,66 @@ await prueba("reintenta ante escritura concurrente en vez de perder el cambio", 
   const guardados = await r3.almacen.cargar("tickets", { periodos: ["2026-03"] });
   cierto(guardados.some((x) => x.id === "tk_concurrente"), "el registro sobrevivió al conflicto");
   cierto(guardados.length > 1, "y no borró lo que ya estaba");
+});
+
+
+await prueba("separa el registro único en propuesta y contrato", async () => {
+  const r2 = new REP.Repositorio(CFG, {});
+  await r2.abrir();
+  const props = await r2.almacen.cargar("propuestas");
+  const ctrs = await r2.almacen.cargar("contratos");
+  igual(props.length, 4, "las cuatro propuestas");
+  igual(ctrs.length, 1, "el contrato que ya era contrato");
+});
+
+await prueba("las propuestas se numeran con serie PR propia", async () => {
+  const r2 = new REP.Repositorio(CFG, {});
+  await r2.abrir();
+  const props = await r2.almacen.cargar("propuestas");
+  cierto(props.every((p) => /^PR-\d{4}-\d{4}$/.test(p.numero)),
+    props.map((p) => p.numero).join(" "));
+  // Y el número con el que circularon queda para reconciliar.
+  cierto(props.every((p) => p.numeroLegado.startsWith("P2026")));
+  // Serie separada de la de contratos: no comparten correlativo.
+  const ctrs = await r2.almacen.cargar("contratos");
+  cierto(!ctrs.some((c) => props.some((p) => p.numero === c.numero)),
+    "ningún número se repite entre series");
+});
+
+await prueba("las aceptadas sin contrato quedan marcadas como histórico", async () => {
+  const r2 = new REP.Repositorio(CFG, {});
+  await r2.abrir();
+  const props = await r2.almacen.cargar("propuestas");
+  const aceptadas = props.filter((p) => p.estado === "Aceptada");
+  igual(aceptadas.length, 2, "las dos que estaban en firme_vigente");
+  cierto(aceptadas.every((p) => p.esquemaAnterior),
+    "marcadas como esquema anterior, no convertidas a contrato");
+  cierto(aceptadas.every((p) => !p.contratoId),
+    "sin contrato inventado: nadie firmó uno");
+
+  // Y las que no estaban aceptadas no llevan la marca.
+  igual(props.filter((p) => p.estado === "Borrador")[0].esquemaAnterior, false);
+});
+
+await prueba("el estado viejo se traduce al ciclo de la propuesta", async () => {
+  const r2 = new REP.Repositorio(CFG, {});
+  await r2.abrir();
+  const props = await r2.almacen.cargar("propuestas");
+  const porLegado = Object.fromEntries(props.map((p) => [p.numeroLegado, p.estado]));
+  igual(porLegado.P20260700, "Borrador");
+  igual(porLegado.P20260701, "Enviada");
+  igual(porLegado.P20260702, "Aceptada");
+});
+
+await prueba("la propuesta conserva lo que se le ofreció al cliente", async () => {
+  const r2 = new REP.Repositorio(CFG, {});
+  await r2.abrir();
+  const p = (await r2.almacen.cargar("propuestas")).find((x) => x.numeroLegado === "P20260702");
+  igual(p.economico.canonMensual, 4000);
+  igual(p.equipos.length, 1);
+  igual(p.cobertura, { soporteRemoto: true });
+  igual(p.plan, { id: "performance" });
+  igual(p.vigenciaPropuesta.meses, 12);
 });
 
 await prueba("ninguna partición se acerca al límite de 1 MB de la API", async () => {

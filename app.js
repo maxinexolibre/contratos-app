@@ -34,16 +34,22 @@ const state = {
   leads: [], leadsSha: null,
   facturaciones: [], facturacionesSha: null,
   tiposCambio: [], tiposCambioSha: null,
+  propuestas: [], propuestasSha: null,
+  clientes: [], clientesSha: null,
   vendedores: [], vendedoresSha: null,
   acuerdosComision: [], acuerdosSha: null,
   comisiones: [], comisionesSha: null,
   rol: "admin",      // sin servidor el rol es preferencia de interfaz, no permiso real
+  // País activo en los tableros. "" = consolidado. Cada país tiene su moneda,
+  // sus impuestos y sus acuerdos, así que el corte por país no es cosmético:
+  // cambia el significado de casi todos los números.
+  paisActivo: "",
   user: localStorage.getItem(LS.user) || "",
   ws: "contratos", // área de trabajo activa: 'contratos' | 'presupuestos'
   selected: new Set(),
   filtro: { q: "", estado: "", modalidad: "" },
-  filtroPre: { q: "", estado: "", tipo: "" },
-  filtroTk: { q: "", estado: "" },
+  filtroPre: { q: "", estado: "", tipo: "", pais: "", mes: "", pagina: 1 },
+  filtroTk: { q: "", estado: "", pais: "", mes: "", pagina: 1 },
   editId: null,
   soloLectura: false, // se activa solo si el token no tiene permiso de escritura
 };
@@ -364,6 +370,8 @@ const STORE_DEF = {
   leads: { path: () => CFG.leadsPath, key: "leads", shaKey: "leadsSha", ls: "nexo_demo_leads", seed: () => [], migrate: (a) => normalizar("leads", a) },
   facturaciones: { path: () => CFG.facturacionesPath, key: "facturaciones", shaKey: "facturacionesSha", ls: "nexo_demo_facturaciones", seed: () => [], migrate: (a) => normalizar("facturaciones", a) },
   tiposCambio: { path: () => CFG.tiposCambioPath, key: "tiposCambio", shaKey: "tiposCambioSha", ls: "nexo_demo_tc", seed: () => [], migrate: (a) => normalizar("tiposCambio", a) },
+  propuestas: { path: () => CFG.propuestasPath, key: "propuestas", shaKey: "propuestasSha", ls: "nexo_demo_prop", seed: () => [], migrate: (a) => normalizar("propuestas", a) },
+  clientes: { path: () => CFG.clientesPath, key: "clientes", shaKey: "clientesSha", ls: "nexo_demo_cli", seed: () => [], migrate: (a) => normalizar("clientes", a) },
   vendedores: { path: () => CFG.vendedoresPath, key: "vendedores", shaKey: "vendedoresSha", ls: "nexo_demo_vnd", seed: () => [], migrate: (a) => normalizar("vendedores", a) },
   acuerdosComision: { path: () => CFG.acuerdosComisionPath, key: "acuerdosComision", shaKey: "acuerdosSha", ls: "nexo_demo_acu", seed: () => [], migrate: (a) => normalizar("acuerdosComision", a) },
   comisiones: { path: () => CFG.comisionesPath, key: "comisiones", shaKey: "comisionesSha", ls: "nexo_demo_com", seed: () => [], migrate: (a) => normalizar("comisiones", a) },
@@ -684,7 +692,8 @@ function refreshWho() {
 // ============================================================
 // La app se divide en dos áreas de trabajo, cada una con su tablero y secciones.
 const SUBNAV = {
-  contratos: [["dashboard", "Tablero"], ["listado", "Registros"], ["agenda", "Vencimientos"]],
+  contratos: [["dashboard", "Tablero"], ["pipeline", "Pipeline"], ["propuestas", "Propuestas"],
+    ["listado", "Contratos"], ["agenda", "Vencimientos"]],
   presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["facturacion", "Facturación"], ["reportes", "Reportes"]],
   marketing: [["mktablero", "Tablero"], ["campanas", "Campañas"], ["leads", "Leads"], ["canales", "Canales"]],
   equipo: [["vendedores", "Vendedores"], ["comisiones", "Comisiones"]],
@@ -692,6 +701,7 @@ const SUBNAV = {
 // A qué área pertenece cada vista/ruta.
 const VIEW_WS = {
   dashboard: "contratos", listado: "contratos", agenda: "contratos", detalle: "contratos", form: "contratos", pipeline: "contratos",
+  propuestas: "contratos", propdetalle: "contratos", propform: "contratos",
   ptablero: "presupuestos", presupuestos: "presupuestos", presudetalle: "presupuestos", presuform: "presupuestos",
   tickets: "presupuestos", tkdetalle: "presupuestos", tkform: "presupuestos", reportes: "presupuestos", direccion: "presupuestos",
   facturacion: "presupuestos", cambio: "presupuestos",
@@ -863,6 +873,7 @@ function renderDashboard() {
         <button class="btn sm" onclick="exportarCSV()">⬇ CSV</button>
       </div>
     </div>
+    ${barraPais()}
     <div class="grid-kpi">
       ${kpi("Contratos vigentes", vigentes.length, "en servicio activo")}
       ${kpi("En pipeline", pipeline.length, "propuestas abiertas")}
@@ -1102,7 +1113,7 @@ function renderDetalle(id) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${state.soloLectura ? "" : `<button class="btn sm" onclick="location.hash='form/${c.id}'">✎ Editar</button>`}
-        <button class="btn sm" onclick="generarPDF('${c.id}')">🧾 Ver / imprimir</button>
+        <button class="btn sm primary" onclick="verDocumento('contrato','${c.id}')">👁 Ver documento</button>
         <button class="btn sm" onclick="generarDocx('${c.id}')" title="Descarga un .docx editable en Word">⬇ Descargar .docx</button>
         ${!state.soloLectura && c.estado !== "firme_vigente" && ["enviada", "negociacion", "borrador"].includes(c.estado) ? `<button class="btn primary sm" onclick="hacerFirme('${c.id}')">✔ Marcar firme</button>` : ""}
       </div>
@@ -1938,38 +1949,79 @@ function exportarInforme() {
 const ticketPorId = (id) => state.tickets.find((t) => t.id === id);
 const presupuestosDeTicket = (tk) => state.presupuestos.filter((p) => p.ticketId === tk.id);
 
+/** Tickets que pasan el filtro activo, ordenados por fecha. */
+function ticketsFiltrados() {
+  return NEXO_TABLA.filtrar(state.tickets, state.filtroTk, {
+    texto: (t) => `${t.numero} ${t.cliente?.nombreComercial || ""} ${t.descripcion || ""}`,
+    pais: (t) => t.pais || "AR",
+  }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+}
+
 function renderTickets() {
   const el = document.getElementById("view-tickets");
-  const q = state.filtroTk.q.toLowerCase();
-  const rows = state.tickets.filter((t) => {
-    if (state.filtroTk.estado && t.estado !== state.filtroTk.estado) return false;
-    if (q && !(`${t.numero} ${t.cliente?.nombreComercial || ""} ${t.descripcion || ""}`.toLowerCase().includes(q))) return false;
-    return true;
-  }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
-  const abiertos = state.tickets.filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto").length;
+  const rows = ticketsFiltrados();
+  const pag = NEXO_TABLA.paginar(rows, state.filtroTk.pagina || 1);
+  const abiertos = rows.filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto").length;
+  const meses = NEXO_TABLA.mesesDisponibles(state.tickets);
+
   el.innerHTML = `
     <div class="kicker">Pedidos de cliente</div>
     <div class="page-head">
       <h1><span class="accent">Tickets</span></h1>
-      ${state.soloLectura ? "" : `<button class="btn primary sm" onclick="location.hash='tkform/new'">+ Nuevo ticket</button>`}
+      <div style="display:flex;gap:8px">
+        <button class="btn sm" onclick="exportarTicketsCSV()">⬇ CSV</button>
+        ${state.soloLectura ? "" : `<button class="btn primary sm" onclick="location.hash='tkform/new'">+ Nuevo ticket</button>`}
+      </div>
     </div>
     <div class="table-tools">
       <input type="search" id="tkq" placeholder="Buscar cliente, N° o descripción…" value="${esc(state.filtroTk.q)}" />
       <select id="tkfe"><option value="">Todos los estados</option>${TK_ESTADOS.map((e) => `<option value="${e.id}" ${state.filtroTk.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
+      <select id="tkfp"><option value="">Todos los países</option>${NEXO_ESQUEMA.PAIS.map((c) => `<option value="${c}" ${state.filtroTk.pais === c ? "selected" : ""}>${NEXO_ESQUEMA.PAIS_NOMBRE[c]}</option>`).join("")}</select>
+      <select id="tkfm"><option value="">Todos los meses</option>${meses.map((m) => `<option value="${m}" ${state.filtroTk.mes === m ? "selected" : ""}>${NEXO_TABLA.etiquetaMes(m)}</option>`).join("")}</select>
+      ${NEXO_TABLA.hayFiltro(state.filtroTk) ? `<button class="btn sm ghost" onclick="limpiarFiltroTk()">✕ Limpiar</button>` : ""}
       <span class="muted" style="font-size:13px">${abiertos} abierto${abiertos === 1 ? "" : "s"} · ${rows.length} de ${state.tickets.length}</span>
     </div>
     <div class="overflow"><table class="data">
-      <thead><tr><th>N°</th><th>Fecha</th><th>Cliente</th><th>Pedido</th><th>Estado</th><th>Presup.</th></tr></thead>
-      <tbody>${rows.map(ticketRow).join("") || `<tr><td colspan="6" class="empty">Sin tickets todavía.</td></tr>`}</tbody>
-    </table></div>`;
-  document.getElementById("tkq").oninput = (e) => { state.filtroTk.q = e.target.value; renderTickets(); };
-  document.getElementById("tkfe").onchange = (e) => { state.filtroTk.estado = e.target.value; renderTickets(); };
+      <thead><tr><th>N°</th><th>Fecha</th><th>País</th><th>Cliente</th><th>Pedido</th><th>Estado</th><th>Presup.</th></tr></thead>
+      <tbody>${pag.filas.map(ticketRow).join("") || `<tr><td colspan="7" class="empty">${
+        NEXO_TABLA.hayFiltro(state.filtroTk) ? "Ningún ticket coincide con el filtro." : "Sin tickets todavía."}</td></tr>`}</tbody>
+    </table></div>
+    ${NEXO_TABLA.pie(pag, "irPaginaTk")}`;
+
+  const cambia = (id, campo) => {
+    const e = document.getElementById(id);
+    if (!e) return;
+    const ev = e.tagName === "INPUT" ? "oninput" : "onchange";
+    e[ev] = (x) => { state.filtroTk[campo] = x.target.value; state.filtroTk.pagina = 1; renderTickets(); };
+  };
+  cambia("tkq", "q"); cambia("tkfe", "estado"); cambia("tkfp", "pais"); cambia("tkfm", "mes");
 }
+function irPaginaTk(n) { state.filtroTk.pagina = n; renderTickets(); window.scrollTo(0, 0); }
+function limpiarFiltroTk() { state.filtroTk = { q: "", estado: "", pais: "", mes: "", pagina: 1 }; renderTickets(); }
+
+/** CSV de tickets. Exporta lo filtrado, igual que el resto de los listados. */
+function exportarTicketsCSV() {
+  const rows = ticketsFiltrados();
+  const n = NEXO_TABLA.exportarCSV(rows, [
+    { titulo: "numero", valor: (t) => t.numero },
+    { titulo: "fecha", valor: (t) => t.fecha },
+    { titulo: "pais", valor: (t) => t.pais || "AR" },
+    { titulo: "cliente", valor: (t) => t.cliente?.nombreComercial || "" },
+    { titulo: "tipo_pedido", valor: (t) => TK_TIPO_PEDIDO[t.tipoPedido] || t.tipoPedido },
+    { titulo: "descripcion", valor: (t) => t.descripcion || "" },
+    { titulo: "estado", valor: (t) => TK_ESTADO_LABEL[t.estado] || t.estado },
+    { titulo: "vendedor", valor: (t) => t.vendedor || t.usuario || "" },
+    { titulo: "presupuestos", valor: (t) => presupuestosDeTicket(t).map((p) => p.numero).join(" ") },
+  ], "tickets");
+  toast(`CSV: ${n} tickets · ${NEXO_TABLA.describirFiltro(state.filtroTk)}`);
+}
+
 function ticketRow(t) {
   const np = presupuestosDeTicket(t).length;
   return `<tr onclick="location.hash='tkdetalle/${t.id}'">
     <td><b>${esc(t.numero)}</b></td>
     <td>${fmt(t.fecha)}</td>
+    <td><span class="pill">${esc(t.pais || "AR")}</span></td>
     <td><b>${esc(t.cliente?.nombreComercial || "—")}</b></td>
     <td>${esc(TK_TIPO_PEDIDO[t.tipoPedido] || t.tipoPedido)}<br><span class="muted" style="font-size:12px">${esc((t.descripcion || "").slice(0, 70))}${(t.descripcion || "").length > 70 ? "…" : ""}</span></td>
     <td><span class="badge ${t.estado}">${TK_ESTADO_LABEL[t.estado]}</span></td>
@@ -2083,7 +2135,7 @@ function nuevoTicket() {
   return {
     id: "tk_" + Date.now(), numero: proxNumeroTicket(), fecha: d,
     cliente: { nombreComercial: "", razonesSociales: [], contacto: "" },
-    tipoPedido: "servicio", descripcion: "", estado: "abierto", presupuestoIds: [],
+    tipoPedido: "servicio", pais: "AR", descripcion: "", estado: "abierto", presupuestoIds: [],
     usuario: state.user || "—", historial: [{ estado: "abierto", fecha: d, usuario: state.user || "—" }],
   };
 }
@@ -2101,6 +2153,7 @@ function renderTicketForm(id) {
         ${inp("Cliente (nombre comercial)", "cliente.nombreComercial", t.cliente?.nombreComercial, "full")}
         ${inp("Contacto", "cliente.contacto", t.cliente?.contacto)}
         ${sel("Tipo de pedido", "tipoPedido", t.tipoPedido, Object.entries(TK_TIPO_PEDIDO))}
+        ${sel("País", "pais", t.pais || "AR", Object.entries(NEXO_ESQUEMA.PAIS_NOMBRE))}
         ${!isNew ? sel("Estado", "estado", t.estado, TK_ESTADOS.map((e) => [e.id, e.label])) : ""}
       </div>
       <div class="field full" style="margin-top:12px"><label>Descripción del pedido</label>
@@ -2164,18 +2217,26 @@ function totalesPorMoneda(lista, campo = "anual") {
 // Texto de un mapa {moneda: monto} para mostrar sin mezclar.
 const textoMonedas = (m) => Object.entries(m).filter(([, v]) => v).map(([mon, v]) => money(v, mon)).join(" · ") || money(0);
 
+/** Filas de presupuestos que pasan el filtro activo, ya ordenadas. */
+function presupuestosFiltrados() {
+  return NEXO_TABLA.filtrar(state.presupuestos, state.filtroPre, {
+    texto: (p) => `${p.numero} ${p.cliente?.nombreComercial || ""} ${p.titulo || ""} ` +
+      (p.cliente?.razonesSociales || []).map((r) => r.razonSocial).join(" "),
+    pais: (p) => p.pais || "AR",
+  }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+}
+
 function renderPresupuestos() {
   const el = document.getElementById("view-presupuestos");
-  const q = state.filtroPre.q.toLowerCase();
-  const rows = state.presupuestos.filter((p) => {
-    if (state.filtroPre.tipo && p.tipo !== state.filtroPre.tipo) return false;
-    if (state.filtroPre.estado && p.estado !== state.filtroPre.estado) return false;
-    const rs = (p.cliente?.razonesSociales || []).map((r) => r.razonSocial).join(" ");
-    if (q && !(`${p.numero} ${p.cliente?.nombreComercial || ""} ${rs}`.toLowerCase().includes(q))) return false;
-    return true;
-  }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
-  const abiertos = state.presupuestos.filter((p) => PRE_ABIERTOS.has(p.estado));
+  const rows = presupuestosFiltrados();
+  const pag = NEXO_TABLA.paginar(rows, state.filtroPre.pagina || 1);
+
+  // Los totales se calculan sobre lo FILTRADO, no sobre todo: un total que
+  // ignora el filtro contradice lo que se está viendo en la tabla.
+  const abiertos = rows.filter((p) => PRE_ABIERTOS.has(p.estado));
   const pipe = textoMonedas(totalesPorMoneda(abiertos));
+  const meses = NEXO_TABLA.mesesDisponibles(state.presupuestos);
+
   el.innerHTML = `
     <div class="kicker">Cotizaciones</div>
     <div class="page-head">
@@ -2186,19 +2247,33 @@ function renderPresupuestos() {
       </div>
     </div>
     <div class="table-tools">
-      <input type="search" id="pq" placeholder="Buscar cliente o N°…" value="${esc(state.filtroPre.q)}" />
+      <input type="search" id="pq" placeholder="Buscar cliente, N° o título…" value="${esc(state.filtroPre.q)}" />
       <select id="pfe"><option value="">Todos los estados</option>${PRE_ESTADOS.map((e) => `<option value="${e.id}" ${state.filtroPre.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
       <select id="pft"><option value="">Todo tipo</option>${Object.entries(PRE_TIPOS).map(([k, v]) => `<option value="${k}" ${state.filtroPre.tipo === k ? "selected" : ""}>${v.label}</option>`).join("")}</select>
+      <select id="pfp"><option value="">Todos los países</option>${NEXO_ESQUEMA.PAIS.map((c) => `<option value="${c}" ${state.filtroPre.pais === c ? "selected" : ""}>${NEXO_ESQUEMA.PAIS_NOMBRE[c]}</option>`).join("")}</select>
+      <select id="pfm"><option value="">Todos los meses</option>${meses.map((m) => `<option value="${m}" ${state.filtroPre.mes === m ? "selected" : ""}>${NEXO_TABLA.etiquetaMes(m)}</option>`).join("")}</select>
+      ${NEXO_TABLA.hayFiltro(state.filtroPre) ? `<button class="btn sm ghost" onclick="limpiarFiltroPre()">✕ Limpiar</button>` : ""}
       <span class="muted" style="font-size:13px">${abiertos.length} abiertos · ${pipe} anualizado en juego</span>
     </div>
     <div class="overflow"><table class="data">
-      <thead><tr><th>N°</th><th>Fecha</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th>Total</th></tr></thead>
-      <tbody>${rows.map(presuRow).join("") || `<tr><td colspan="6" class="empty">Sin presupuestos todavía.</td></tr>`}</tbody>
-    </table></div>`;
-  document.getElementById("pq").oninput = (e) => { state.filtroPre.q = e.target.value; renderPresupuestos(); };
-  document.getElementById("pfe").onchange = (e) => { state.filtroPre.estado = e.target.value; renderPresupuestos(); };
-  document.getElementById("pft").onchange = (e) => { state.filtroPre.tipo = e.target.value; renderPresupuestos(); };
+      <thead><tr><th>N°</th><th>Fecha</th><th>País</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th>Total</th></tr></thead>
+      <tbody>${pag.filas.map(presuRow).join("") || `<tr><td colspan="7" class="empty">${
+        NEXO_TABLA.hayFiltro(state.filtroPre) ? "Ningún presupuesto coincide con el filtro." : "Sin presupuestos todavía."}</td></tr>`}</tbody>
+    </table></div>
+    ${NEXO_TABLA.pie(pag, "irPaginaPre")}`;
+
+  const cambia = (id, campo) => {
+    const e = document.getElementById(id);
+    if (!e) return;
+    const ev = e.tagName === "INPUT" ? "oninput" : "onchange";
+    e[ev] = (x) => { state.filtroPre[campo] = x.target.value; state.filtroPre.pagina = 1; renderPresupuestos(); };
+  };
+  cambia("pq", "q"); cambia("pfe", "estado"); cambia("pft", "tipo");
+  cambia("pfp", "pais"); cambia("pfm", "mes");
 }
+function irPaginaPre(n) { state.filtroPre.pagina = n; renderPresupuestos(); window.scrollTo(0, 0); }
+function limpiarFiltroPre() { state.filtroPre = { q: "", estado: "", tipo: "", pais: "", mes: "", pagina: 1 }; renderPresupuestos(); }
+
 function presuRow(p) {
   const v = valorPresu(p);
   const totalTxt = v.mensual && v.unaVez ? `${money(v.unaVez, v.moneda)} + ${money(v.mensual, v.moneda)}/mes`
@@ -2206,6 +2281,7 @@ function presuRow(p) {
   return `<tr onclick="location.hash='presudetalle/${p.id}'">
     <td><b>${esc(p.numero)}</b></td>
     <td>${fmt(p.fecha)}</td>
+    <td><span class="pill">${esc(p.pais || "AR")}</span></td>
     <td><b>${esc(p.cliente?.nombreComercial || "—")}</b>${p.titulo ? `<br><span class="muted" style="font-size:12px">${esc(p.titulo.slice(0, 62))}${p.titulo.length > 62 ? "…" : ""}</span>` : ""}</td>
     <td>${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)}${p.subtipo ? `<br><span class="muted" style="font-size:12px">${esc(PRE_SUBTIPOS[p.subtipo] || p.subtipo)}</span>` : ""}</td>
     <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span>${presuVencido(p) ? ' <span class="badge vencida" title="La validez de la oferta ya venció">validez vencida</span>' : ""}</td>
@@ -2230,6 +2306,7 @@ function renderPresuDetalle(id) {
         ${ro ? "" : `<button class="btn sm" onclick="location.hash='presuform/${p.id}'">✎ Editar</button>`}
         ${ro ? "" : `<button class="btn sm" onclick="duplicarPresu('${p.id}')" title="Crear una copia editable (revisión de negociación)">⧉ Duplicar</button>`}
         <button class="btn sm" onclick="generarPresuPDF('${p.id}')">🧾 Ver / imprimir</button>
+        <button class="btn sm primary" onclick="verDocumento('presupuesto','${p.id}')">👁 Ver documento</button>
         <button class="btn sm" onclick="generarPresupuestoDocx('${p.id}')" title="Descarga un .docx editable">⬇ Descargar .docx</button>
         ${ro ? "" : estadoPresuBtns(p)}
       </div>
@@ -2367,6 +2444,8 @@ function renderPresuForm(id, ticketId) {
         ${!isNew ? sel("Estado", "estado", p.estado, PRE_ESTADOS.map((e) => [e.id, e.label])) : ""}
       </div>
       ${inp("Título del presupuesto", "titulo", p.titulo, "full")}
+      ${sel("País de la operación", "pais", p.pais || "AR", Object.entries(NEXO_ESQUEMA.PAIS_NOMBRE))}
+      ${sel("Condición de IVA", "condicionIVA", p.condicionIVA || "Gravado", NEXO_ESQUEMA.CONDICION_IVA.map((c) => [c, ({Gravado: "Gravado · IVA se suma", Exento: "Exento · sin IVA", IncluidoEnPrecio: "IVA incluido en el precio", NoGravado: "No gravado"})[c]]))}
       <p class="hint" style="margin:4px 0 0">Es el que va al documento y al nombre del archivo: «Servicio de diagnóstico y reparación de bobina — MRI GE Profile 0.2T».</p>
       <p class="hint" id="tipoHint" style="margin:6px 0 0"></p>
       </fieldset>
@@ -2614,13 +2693,15 @@ function renderPresupuestoHTML(m) {
     <div class="foot">${m.pie}${m.plantilla ? ' Los campos <span class="ph">[entre corchetes]</span> se completan al emitir.' : ""}<br>Nexolibre es miembro de <img src="${NEXO_BRAND.grupoNexo}" alt="Grupo Nexo" />.</div>`;
 }
 function exportarPresuCSV() {
-  const rows = state.presupuestos;
-  const cols = ["numero", "fecha", "tipo", "estado", "cliente", "razon_social", "ticket", "moneda", "neto_una_vez", "iva", "total_una_vez", "abono_mensual_neto", "total_mensual", "valor_anualizado"];
+  // Lo que se exporta es exactamente lo que se ve. Antes bajaba la lista
+  // completa aunque hubiera filtros aplicados.
+  const rows = presupuestosFiltrados();
+  const cols = ["numero", "fecha", "pais", "tipo", "estado", "cliente", "razon_social", "ticket", "moneda", "neto_una_vez", "iva", "total_una_vez", "abono_mensual_neto", "total_mensual", "valor_anualizado"];
   const lines = [cols.join(",")];
   for (const p of rows) {
     const cc = NEXO_PRESUPUESTO.calcPresupuesto(p);
     const v = valorPresu(p);
-    const vals = [p.numero, p.fecha, (PRE_TIPOS[p.tipo] || {}).label || p.tipo, PRE_ESTADO_LABEL[p.estado],
+    const vals = [p.numero, p.fecha, p.pais || "AR", (PRE_TIPOS[p.tipo] || {}).label || p.tipo, PRE_ESTADO_LABEL[p.estado],
       p.cliente?.nombreComercial, rsPrincipal(p).razonSocial, p.ticketNumero || "", cc.moneda,
       cc.netoUnaVez, cc.ivaUnaVez, cc.totalUnaVez, cc.abonoMensualNeto, cc.totalMensual, v.anual];
     lines.push(vals.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(","));
@@ -2630,7 +2711,7 @@ function exportarPresuCSV() {
   a.href = URL.createObjectURL(blob);
   a.download = `presupuestos-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
-  toast(`CSV: ${rows.length} presupuestos`);
+  toast(`CSV: ${rows.length} presupuestos · ${NEXO_TABLA.describirFiltro(state.filtroPre)}`);
 }
 
 // ============================================================
@@ -2638,16 +2719,41 @@ function exportarPresuCSV() {
 // ============================================================
 // Todos los números del tablero de dirección salen de acá, para que reporte
 // e informe usen exactamente lo mismo.
+/**
+ * Recorta una lista al país activo. Sin país seleccionado devuelve todo:
+ * la mirada consolidada sigue siendo la principal.
+ */
+function porPaisActivo(lista, leerPais) {
+  if (!state.paisActivo) return lista;
+  const leer = leerPais || ((r) => r.pais || "AR");
+  return (lista || []).filter((r) => leer(r) === state.paisActivo);
+}
+
+/** Barra de países para los tableros. */
+function barraPais() {
+  return `<div class="table-tools" style="margin:0 0 16px">
+    ${NEXO_TABLA.selectorPais(state.paisActivo, "elegirPais")}
+    ${state.paisActivo ? `<span class="muted" style="font-size:13px">Mostrando solo ${
+      NEXO_ESQUEMA.PAIS_NOMBRE[state.paisActivo]} · moneda, impuestos y acuerdos propios</span>`
+      : `<span class="muted" style="font-size:13px">Consolidado de todos los países</span>`}
+  </div>`;
+}
+
+function elegirPais(p) {
+  state.paisActivo = p;
+  router();
+}
+
 function kpisDireccion() {
-  const vig = state.data.filter((c) => ACTIVOS.has(c.estado));
+  const vig = porPaisActivo(state.data).filter((c) => ACTIVOS.has(c.estado));
   const mrr = vig.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
   const equipos = vig.reduce((s, c) => s + (c.equipos || []).length, 0);
 
-  const abiertos = state.presupuestos.filter((p) => PRE_ABIERTOS.has(p.estado));
+  const abiertos = porPaisActivo(state.presupuestos).filter((p) => PRE_ABIERTOS.has(p.estado));
   const pipeAnual = abiertos.reduce((s, p) => s + valorPresu(p).anual, 0);
   const pipePond = abiertos.reduce((s, p) => s + valorPresu(p).anual * (PRE_PROB[p.estado] || 0), 0);
-  const ganados = state.presupuestos.filter((p) => p.estado === "ganado");
-  const perdidos = state.presupuestos.filter((p) => p.estado === "perdido");
+  const ganados = porPaisActivo(state.presupuestos).filter((p) => p.estado === "ganado");
+  const perdidos = porPaisActivo(state.presupuestos).filter((p) => p.estado === "perdido");
   // El win rate lo calcula el núcleo: la división segura, el denominador sobre
   // resueltos y el null cuando no hay muestra están definidos en un solo lugar.
   const winRatePct = NKPI.pct(ganados.length, ganados.length + perdidos.length);
@@ -2669,7 +2775,7 @@ function kpisDireccion() {
   const pipePorEtapa = {};
   for (const p of abiertos) { const v = valorPresu(p); if (v.moneda === "USD") pipePorEtapa[p.estado] = (pipePorEtapa[p.estado] || 0) + v.anual; }
 
-  const tkAbiertos = state.tickets.filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto");
+  const tkAbiertos = porPaisActivo(state.tickets).filter((t) => TK_ESTADOS.find((e) => e.id === t.estado)?.grupo === "abierto");
   // Antigüedad promedio de los tickets abiertos (días)
   const hoyN = hoy();
   const edad = tkAbiertos.map((t) => daysUntil(parseDate(t.fecha)) === null ? null : -daysUntil(parseDate(t.fecha))).filter((x) => x != null);
@@ -2754,14 +2860,17 @@ function chartFunnel(stages) {
 function renderPTablero() {
   const el = document.getElementById("view-ptablero");
   const k = kpisDireccion();
-  const abiertos = state.presupuestos.filter((p) => PRE_ABIERTOS.has(p.estado));
+  // Todo el tablero se calcula sobre el país activo: mezclar países junta
+  // monedas, impuestos y acuerdos distintos en un mismo número.
+  const presus = porPaisActivo(state.presupuestos);
+  const abiertos = presus.filter((p) => PRE_ABIERTOS.has(p.estado));
   const pipeTxt = textoMonedas(totalesPorMoneda(abiertos));
   const pond = abiertos.reduce((s, p) => s + valorPresu(p).anual * (PRE_PROB[p.estado] || 0), 0);
   const pondTxt = money(Math.round(pond));
-  const vencidos = state.presupuestos.filter(presuVencido).length;
+  const vencidos = presus.filter(presuVencido).length;
   // Funnel del pipeline por etapa (monto anualizado)
   const etapas = ["borrador", "enviado", "negociacion", "ganado"];
-  const stageAmt = (e) => state.presupuestos.filter((p) => p.estado === e).reduce((s, p) => { const v = valorPresu(p); return s + (v.moneda === "USD" ? v.anual : 0); }, 0);
+  const stageAmt = (e) => presus.filter((p) => p.estado === e).reduce((s, p) => { const v = valorPresu(p); return s + (v.moneda === "USD" ? v.anual : 0); }, 0);
   const funnelData = etapas.map((e) => { const v = stageAmt(e); return { label: PRE_ESTADO_LABEL[e], value: v, text: moneyK(v) }; });
   // Ventas cerradas por tipo (dona)
   const tipoItems = Object.entries(k.porTipo).map(([t, v]) => ({ label: (PRE_TIPOS[t] || {}).label || t, value: v, text: moneyK(v) }));
@@ -2785,6 +2894,7 @@ function renderPTablero() {
         <button class="btn sm" onclick="location.hash='presuform/new'">+ Nuevo presupuesto</button>
       </div>
     </div>
+    ${barraPais()}
     <div class="grid-kpi">
       ${kpi("Presupuestos abiertos", abiertos.length, `${state.presupuestos.length} en total`)}
       ${kpi("Pipeline (anualizado)", pipeTxt, "en juego")}
@@ -3027,6 +3137,8 @@ Object.assign(window, {
   avanzar, toggleSel, exportarCSV, exportarInforme, generarPDF, hacerFirme, addEquipo,
   addRazon, aplicarPlanAForm, subirArchivo, quitarArchivo, resetDemo,
   registrarAjuste, regularizarAjustes, calcAjuste, calcAjustePct,
+  irPaginaPre, limpiarFiltroPre, irPaginaTk, limpiarFiltroTk, exportarTicketsCSV,
+  elegirPais, porPaisActivo,
 });
 
 // Si el arranque falla, el error tiene que verse completo y la aplicación

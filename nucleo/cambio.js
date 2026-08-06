@@ -228,6 +228,32 @@
    * cambio del día. No escribe nada: devuelve el registro para que pase por
    * las reglas.
    */
+  /**
+   * Descompone un importe según la condición de IVA.
+   *
+   * Los tres casos dan importes finales distintos, y tratarlos igual factura
+   * de más a unos y de menos a otros:
+   *   Gravado           el precio es neto y el IVA se suma encima.
+   *   IncluidoEnPrecio  el precio ya trae el IVA adentro; hay que extraerlo.
+   *   Exento / NoGravado no lleva IVA en absoluto.
+   */
+  function desglosarIVA(monto, condicion, ivaPct) {
+    const pct = Number(ivaPct) || 0;
+    switch (condicion) {
+      case "IncluidoEnPrecio": {
+        const neto = E.money(monto / (1 + pct / 100));
+        return { neto, iva: E.money(monto - neto), total: E.money(monto) };
+      }
+      case "Exento":
+      case "NoGravado":
+        return { neto: E.money(monto), iva: 0, total: E.money(monto) };
+      default: {
+        const iva = E.money((monto * pct) / 100);
+        return { neto: E.money(monto), iva, total: E.money(monto + iva) };
+      }
+    }
+  }
+
   function prepararFacturacion(presupuesto, opciones = {}) {
     const serie = opciones.serie || [];
     const hoy = opciones.hoy || E.hoy();
@@ -240,19 +266,65 @@
     const p = PAISES[pais];
     if (!p) err("NX-032", `País desconocido en el presupuesto: ${pais}`);
 
-    // Estados Unidos factura en USD: no hay cotización que buscar ni que vencer.
-    if (p.sinConversion) {
+    // Período que se cobra. En un abono mensual, cada mes es un cobro distinto.
+    const periodoCobrado = opciones.periodoCobrado || hoy.slice(0, 7);
+    const condicionIVA = opciones.condicionIVA || presupuesto.condicionIVA || "Gravado";
+    const ivaPct = opciones.ivaPct ?? presupuesto.economico?.ivaPct ?? 21;
+    const tipoComprobante = opciones.tipoComprobante || "Factura";
+
+    // La moneda en la que está expresado el presupuesto. Normalmente USD,
+    // pero los registros heredados están cotizados directamente en moneda
+    // local: convertirlos multiplicaría un importe que ya está convertido.
+    const monedaCotizacion = presupuesto.economico?.moneda || "USD";
+    const yaEnMonedaLocal = monedaCotizacion === p.moneda;
+
+    const base = {
+      presupuestoId: presupuesto.id,
+      contratoId: opciones.contratoId || null,
+      numeroComprobante: opciones.numeroComprobante || "",
+      fechaEmision: hoy,
+      periodoCobrado,
+      pais,
+      tipoComprobante,
+      condicionIVA,
+      ivaPct,
+      monedaCotizacion,
+      montoCotizado: presupuesto.total,
+      emitidoPor: opciones.usuario || "",
+      observaciones: opciones.observaciones || "",
+    };
+
+    /** Cierra el comprobante desglosando el IVA sobre el importe local. */
+    const cerrar = (montoLocal, extra) => {
+      const d = desglosarIVA(montoLocal, condicionIVA, ivaPct);
       return E.ENTIDADES.facturaciones.normalizar({
-        presupuestoId: presupuesto.id, contratoId: opciones.contratoId || null,
-        numeroComprobante: opciones.numeroComprobante || "",
-        fechaEmision: hoy, pais,
-        monedaCotizacion: "USD", montoCotizado: presupuesto.total,
-        tcUnidad: "USD", tcValor: 1, tcFecha: hoy, tcFuente: "sin conversión",
-        monedaLiquidacion: "USD", montoLiquidado: presupuesto.total,
-        emitidoPor: opciones.usuario || "",
+        ...base, ...extra,
+        monedaLiquidacion: extra.monedaLiquidacion,
+        montoNeto: d.neto, montoIVA: d.iva, montoLiquidado: d.total,
+      });
+    };
+
+    // Caso 1 · el presupuesto YA está en la moneda del país (heredado).
+    // No se convierte nada: multiplicar acá es el error que inflaba un abono
+    // de $ 6.060.000 hasta miles de millones.
+    if (yaEnMonedaLocal) {
+      return cerrar(presupuesto.total, {
+        tcUnidad: p.moneda, tcValor: 1, tcFecha: hoy,
+        tcFuente: `cotizado directamente en ${p.moneda}`,
+        monedaLiquidacion: p.moneda,
+        referenciaUF: null,
       });
     }
 
+    // Caso 2 · Estados Unidos: la cotización ya está en la moneda de destino.
+    if (p.sinConversion) {
+      return cerrar(presupuesto.total, {
+        tcUnidad: "USD", tcValor: 1, tcFecha: hoy, tcFuente: "sin conversión",
+        monedaLiquidacion: "USD", referenciaUF: null,
+      });
+    }
+
+    // Caso 3 · conversión con la cotización del día.
     const c = cotizacion(serie, p.moneda, hoy);
     if (!c) {
       err("NX-030", `No hay cotización de ${p.moneda} cargada`,
@@ -264,36 +336,53 @@
         "y corregirlo después implica nota de crédito");
     }
 
-    return E.ENTIDADES.facturaciones.normalizar({
-      presupuestoId: presupuesto.id,
-      contratoId: opciones.contratoId || null,
-      numeroComprobante: opciones.numeroComprobante || "",
-      fechaEmision: hoy,
-      pais,
-      monedaCotizacion: "USD",
-      montoCotizado: presupuesto.total,
-      tcUnidad: p.moneda,
-      tcValor: c.tasa,
-      tcFecha: c.fecha,
-      tcFuente: c.fuente,
+    return cerrar(E.money(presupuesto.total * c.tasa), {
+      tcUnidad: p.moneda, tcValor: c.tasa, tcFecha: c.fecha, tcFuente: c.fuente,
       monedaLiquidacion: p.moneda,
-      montoLiquidado: E.money(presupuesto.total * c.tasa),
       // Referencia en UF para Chile: no se factura en UF, pero es el número
       // con el que el cliente chileno piensa el contrato.
       referenciaUF: p.referenciaUF ? equivalenteUF(presupuesto.total, hoy, serie) : null,
-      emitidoPor: opciones.usuario || "",
     });
   }
 
+  /**
+   * Períodos ya cobrados de un presupuesto.
+   * Las notas de crédito no cuentan como cobro: revierten uno.
+   */
+  function periodosCobrados(presupuestoId, facturaciones) {
+    return new Set((facturaciones || [])
+      .filter((f) => f.presupuestoId === presupuestoId && f.tipoComprobante !== "NotaCredito")
+      .map((f) => f.periodoCobrado));
+  }
+
+  /**
+   * ¿Queda algo por cobrar de este presupuesto, en el período indicado?
+   *
+   * Un pago único se cobra una sola vez. Un abono mensual se cobra todos los
+   * meses: darlo por cerrado con el primer cobro deja de facturar un contrato
+   * vigente, que es una pérdida de plata silenciosa.
+   */
+  function pendienteDeCobro(presupuesto, facturaciones, periodo) {
+    if (presupuesto.estado !== "Aprobado") return false;
+    const cobrados = periodosCobrados(presupuesto.id, facturaciones);
+    if (presupuesto.economico?.recurrencia !== "mensual") return cobrados.size === 0;
+    return !cobrados.has(periodo || E.hoy().slice(0, 7));
+  }
+
   /** Texto explicativo del cálculo, para mostrar en el comprobante. */
+  const SIM = { USD: "US$", ARS: "$", CLP: "CLP$", COP: "COP$", UYU: "$U", UF: "UF" };
   function explicar(f) {
-    const sim = { USD: "US$", ARS: "$", CLP: "CLP$", COP: "COP$", UYU: "$U", UF: "UF" };
-    if (f.tcValor === 1 && f.monedaLiquidacion === "USD") {
-      return `US$ ${f.montoCotizado.toLocaleString("es-AR")} · sin conversión`;
+    const cot = `${SIM[f.monedaCotizacion] || f.monedaCotizacion} ${f.montoCotizado.toLocaleString("es-AR")}`;
+    const fin = `${SIM[f.monedaLiquidacion] || f.monedaLiquidacion} ${Math.round(f.montoLiquidado).toLocaleString("es-AR")}`;
+    const iva = f.montoIVA > 0
+      ? ` · IVA ${f.ivaPct}% ${Math.round(f.montoIVA).toLocaleString("es-AR")}`
+      : (f.condicionIVA === "Exento" ? " · exento de IVA" : "");
+
+    if (f.tcValor === 1) {
+      // Sin conversión: o ya estaba en moneda local, o es Estados Unidos.
+      return `${cot}${f.montoIVA > 0 ? ` + IVA = ${fin}` : ""}${iva} · ${f.tcFuente}`;
     }
-    return `US$ ${f.montoCotizado.toLocaleString("es-AR")} × ` +
-           `${f.tcValor.toLocaleString("es-AR")} = ` +
-           `${sim[f.monedaLiquidacion]} ${Math.round(f.montoLiquidado).toLocaleString("es-AR")}` +
+    return `${cot} × ${f.tcValor.toLocaleString("es-AR")} = ${fin}${iva}` +
            `  ·  ${f.tcFuente}, ${f.tcFecha}`;
   }
 
@@ -325,8 +414,8 @@
     TOLERANCIA_DIAS, PAISES, UNIDADES, FUENTES,
     cotizacion, estaVigente, estadoSerie,
     traer, actualizarTodo,
-    monedaDe, convertir, equivalenteUF,
-    prepararFacturacion, explicar,
+    monedaDe, convertir, equivalenteUF, desglosarIVA,
+    prepararFacturacion, explicar, periodosCobrados, pendienteDeCobro,
     nuevaCotizacion, upsert,
   };
 })(typeof window !== "undefined" ? window : globalThis);

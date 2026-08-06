@@ -182,6 +182,14 @@
     actualizarSiCorresponde();
   }
 
+  /** Enlaza los selectores de la barra de facturación. */
+  function enlazarFiltroFac() {
+    for (const [id, campo] of [["ffp", "pais"], ["ffm", "mes"], ["fft", "tipo"]]) {
+      const e = document.getElementById(id);
+      if (e) e.onchange = (x) => { filtro()[campo] = x.target.value; renderFacturacion(); };
+    }
+  }
+
   async function guardarCotizacion() {
     try {
       const cot = C.nuevaCotizacion(
@@ -201,14 +209,29 @@
   // Facturación
   // --------------------------------------------------------------------------
 
+  /** Filtro de la pantalla de facturación. */
+  const filtro = () => (global.state.filtroFac = global.state.filtroFac ||
+    { pais: "", mes: "", tipo: "", pagina: 1 });
+
   function renderFacturacion() {
+    const T = global.NEXO_TABLA;
     const presus = presupuestosNuevos();
     const facturas = global.state?.facturaciones || [];
-    const facturados = new Set(facturas.map((f) => f.presupuestoId));
+    const f = filtro();
+    // Período que se está cobrando. Por defecto el mes en curso; si hay un mes
+    // filtrado, se cobra ese: sirve para ponerse al día con meses atrasados.
+    const periodo = f.mes || E.hoy().slice(0, 7);
 
-    const facturables = presus
-      .filter((p) => p.estado === "Aprobado" && !facturados.has(p.id))
+    // Un abono mensual vuelve a estar pendiente cada mes. Un pago único, no.
+    const facturables = T.filtrar(
+      presus.filter((p) => C.pendienteDeCobro(p, facturas, periodo)),
+      { pais: f.pais },
+      { pais: (p) => p.pais })
       .sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+    const emitidas = T.filtrar(facturas, f,
+      { pais: (x) => x.pais, fecha: (x) => x.fechaEmision, tipo: (x) => x.tipoComprobante })
+      .sort((a, b) => b.fechaEmision.localeCompare(a.fechaEmision));
 
     // Solo se avisa por las monedas que hacen falta para lo pendiente: un
     // aviso que aparece siempre deja de leerse.
@@ -219,14 +242,26 @@
     const bloqueado = C.estadoSerie(serie()).filter((x) => !x.vigente && necesarias.has(x.unidad));
 
     const porMoneda = {};
-    for (const f of facturas) {
-      porMoneda[f.monedaLiquidacion] = E.money(
-        (porMoneda[f.monedaLiquidacion] || 0) + f.montoLiquidado);
+    for (const x of emitidas) {
+      porMoneda[x.monedaLiquidacion] = E.money(
+        (porMoneda[x.monedaLiquidacion] || 0) + x.montoLiquidado);
     }
+    const meses = T.mesesDisponibles(facturas, (x) => x.fechaEmision);
+    const barra = `<div class="table-tools" style="margin:14px 0">
+      <select id="ffp"><option value="">Todos los países</option>${E.PAIS.map((c) =>
+        `<option value="${c}"${f.pais === c ? " selected" : ""}>${E.PAIS_NOMBRE[c]}</option>`).join("")}</select>
+      <select id="ffm"><option value="">Todos los meses</option>${meses.map((m) =>
+        `<option value="${m}"${f.mes === m ? " selected" : ""}>${T.etiquetaMes(m)}</option>`).join("")}</select>
+      <select id="fft"><option value="">Todo comprobante</option>${E.COMPROBANTE_TIPO.map((c) =>
+        `<option value="${c}"${f.tipo === c ? " selected" : ""}>${c}</option>`).join("")}</select>
+      ${T.hayFiltro(f) ? `<button class="btn sm ghost" onclick="limpiarFiltroFac()">✕ Limpiar</button>` : ""}
+      <button class="btn sm" onclick="exportarFacturacionCSV()">⬇ CSV</button>
+    </div>`;
 
     document.getElementById("view-facturacion").innerHTML = `
       <div class="kicker">Administración</div>
       <h1>Factura<span class="hl">ción</span></h1>
+      ${barra}
 
       <div class="grid-kpi" style="margin:18px 0">
         <div class="kpi">
@@ -237,7 +272,7 @@
         <div class="kpi">
           <div class="label">Emitido</div>
           <div class="num num-${K.textoMonedas(porMoneda).length > 15 ? "sm" : "md"}">${K.textoMonedas(porMoneda)}</div>
-          <div class="sub">${facturas.length} comprobante(s)</div>
+          <div class="sub">${emitidas.length} comprobante(s)</div>
         </div>
       </div>
 
@@ -252,13 +287,13 @@
       <h3>Pendientes</h3>
       ${facturables.length ? `<div style="overflow-x:auto"><table class="data">
         <thead><tr>
-          <th>N.º</th><th>País</th><th>Fecha</th><th>Título</th>
-          <th class="num">Cotizado (USD)</th><th class="num">A facturar hoy</th><th></th>
+          <th>N.º</th><th>País</th><th>Fecha</th><th>Título</th><th>Cobra</th>
+          <th class="num">Cotizado</th><th class="num">A cobrar</th><th></th>
         </tr></thead>
         <tbody>${facturables.map((p) => {
           let previsto = "—", puede = false, motivo = "", uf = null;
           try {
-            const f = C.prepararFacturacion(p, { serie: serie() });
+            const f = C.prepararFacturacion(p, { serie: serie(), periodoCobrado: periodo });
             previsto = money(f.montoLiquidado, f.monedaLiquidacion);
             uf = f.referenciaUF;
             puede = true;
@@ -268,33 +303,39 @@
             <td><span class="pill">${esc(p.pais)}</span></td>
             <td>${esc(p.fecha)}</td>
             <td>${esc(p.titulo || "—")}</td>
-            <td class="num">${money(p.total, "USD")}${p.economico.recurrencia === "mensual"
+            <td>${p.economico.recurrencia === "mensual"
+              ? `<span class="pill">${esc(T.etiquetaMes(periodo))}</span>`
+              : `<span class="muted">pago único</span>`}</td>
+            <td class="num">${money(p.total, p.economico.moneda)}${p.economico.recurrencia === "mensual"
               ? "<span class='muted'>/mes</span>" : ""}</td>
             <td class="num">${esc(previsto)}${uf ? `<br><span class="muted" style="font-size:11px">≈ UF ${num(uf, 2)}</span>` : ""}</td>
             <td>${puede
-              ? `<button class="btn sm primary" onclick="facturar('${esc(p.id)}')">Facturar</button>`
+              ? `<button class="btn sm primary" onclick="facturar('${esc(p.id)}','${esc(periodo)}')">Registrar cobro</button>`
               : `<span class="muted" title="${esc(motivo)}">bloqueado</span>`}</td>
           </tr>`;
         }).join("")}</tbody>
       </table></div>` : `<p class="muted">No hay presupuestos aprobados sin facturar.</p>`}
 
       <h3 style="margin-top:26px">Comprobantes emitidos</h3>
-      ${facturas.length ? `<div style="overflow-x:auto"><table class="data">
+      ${emitidas.length ? `<div style="overflow-x:auto"><table class="data">
         <thead><tr>
-          <th>Comprobante</th><th>País</th><th>Fecha</th><th class="num">Cotizado</th>
+          <th>Comprobante</th><th>Período</th><th>País</th><th>Fecha</th><th class="num">Cotizado</th>
           <th class="num">Tipo de cambio</th><th class="num">Facturado</th><th>Fuente</th>
         </tr></thead>
-        <tbody>${[...facturas].sort((a, b) => b.fechaEmision.localeCompare(a.fechaEmision))
-          .map((f) => `<tr>
-            <td><b>${esc(f.numeroComprobante || "—")}</b></td>
-            <td><span class="pill">${esc(f.pais)}</span></td>
-            <td>${esc(f.fechaEmision)}</td>
-            <td class="num">${money(f.montoCotizado, "USD")}</td>
-            <td class="num">${f.tcValor === 1 ? "—" : num(f.tcValor, 2)}
-              <span class="muted" style="font-size:11px">${esc(f.tcFecha)}</span></td>
-            <td class="num"><b>${money(f.montoLiquidado, f.monedaLiquidacion)}</b>
-              ${f.referenciaUF ? `<br><span class="muted" style="font-size:11px">≈ UF ${num(f.referenciaUF, 2)}</span>` : ""}</td>
-            <td class="muted" style="font-size:12px">${esc(f.tcFuente)}</td>
+        <tbody>${emitidas.map((x) => `<tr>
+            <td><b>${esc(x.numeroComprobante || "—")}</b><br>
+              <span class="pill">${esc(x.tipoComprobante)}</span></td>
+            <td>${esc(x.periodoCobrado || "—")}</td>
+            <td><span class="pill">${esc(x.pais)}</span></td>
+            <td>${esc(x.fechaEmision)}</td>
+            <td class="num">${money(x.montoCotizado, x.monedaCotizacion)}</td>
+            <td class="num">${x.tcValor === 1 ? "—" : num(x.tcValor, 2)}
+              <span class="muted" style="font-size:11px">${esc(x.tcFecha)}</span></td>
+            <td class="num"><b>${money(x.montoLiquidado, x.monedaLiquidacion)}</b>
+              ${x.montoIVA > 0 ? `<br><span class="muted" style="font-size:11px">neto ${num(x.montoNeto, 0)} + IVA ${num(x.montoIVA, 0)}</span>`
+                : `<br><span class="muted" style="font-size:11px">${esc(x.condicionIVA)}</span>`}
+              ${x.referenciaUF ? `<br><span class="muted" style="font-size:11px">≈ UF ${num(x.referenciaUF, 2)}</span>` : ""}</td>
+            <td class="muted" style="font-size:12px">${esc(x.tcFuente)}</td>
           </tr>`).join("")}</tbody>
       </table></div>
       <p class="muted" style="font-size:13px; margin-top:10px">
@@ -304,26 +345,149 @@
     `;
   }
 
-  async function facturar(presupuestoId) {
+  /**
+   * Diálogo de emisión. No alcanza con pedir un número: hay operaciones
+   * exentas de IVA, otras con el impuesto ya incluido en el precio, y cobros
+   * en efectivo que no llevan factura pero igual cierran la venta.
+   */
+  function facturar(presupuestoId, periodo) {
+    const p = presupuestosNuevos().find((x) => x.id === presupuestoId);
+    if (!p) return;
+    const info = C.PAISES[p.pais] || C.PAISES.AR;
+    const per = periodo || E.hoy().slice(0, 7);
+    const esAbono = p.economico?.recurrencia === "mensual";
+
+    const ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.id = "ovFacturar";
+    ov.innerHTML = `<div class="modal">
+      <div class="kicker">Emitir comprobante</div>
+      <h2>${esc(p.numero)} · <span style="color:var(--orange)">${esc(info.nombre)}</span></h2>
+      <p class="muted" style="font-size:14px;margin:4px 0 14px">
+        Cotizado ${money(p.total, p.economico.moneda)} · se liquida en ${esc(info.moneda)}
+        ${esAbono ? `<br><b>Abono mensual · se cobra ${esc(global.NEXO_TABLA.etiquetaMes(per))}</b>` : ""}
+      </p>
+      <input type="hidden" id="fPeriodo" value="${esc(per)}" />
+
+      <div class="field"><label for="fTipo">Tipo de comprobante</label>
+        <select id="fTipo">${E.COMPROBANTE_TIPO.map((t) =>
+          `<option value="${t}">${({ Factura: "Factura", Recibo: "Recibo",
+            Efectivo: "Efectivo · sin factura", Transferencia: "Transferencia",
+            NotaCredito: "Nota de crédito" })[t]}</option>`).join("")}</select>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">
+          Un cobro en efectivo se registra igual: cierra la operación aunque no
+          haya factura, y sin eso el presupuesto queda como pendiente para siempre.
+        </p></div>
+
+      <div class="field"><label for="fIVA">Condición de IVA</label>
+        <select id="fIVA">${E.CONDICION_IVA.map((c) =>
+          `<option value="${c}"${(p.condicionIVA || "Gravado") === c ? " selected" : ""}>${
+            ({ Gravado: "Gravado · el IVA se suma al precio",
+               Exento: "Exento · el cliente no paga IVA",
+               IncluidoEnPrecio: "IVA incluido en el precio cotizado",
+               NoGravado: "No gravado" })[c]}</option>`).join("")}</select></div>
+
+      <div class="form-grid">
+        <div class="field"><label for="fNum">Número de comprobante</label>
+          <input id="fNum" placeholder="A-0001-00000123" /></div>
+        <div class="field"><label for="fIvaPct">Alícuota %</label>
+          <input type="number" id="fIvaPct" value="${p.economico?.ivaPct ?? 21}" min="0" max="100" step="0.5" /></div>
+      </div>
+
+      <div class="field"><label for="fObs">Observaciones</label>
+        <input id="fObs" placeholder="Opcional" /></div>
+
+      <div class="card interno" id="fPreview" style="margin:12px 0"></div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn ghost" onclick="cerrarFacturar()">Cancelar</button>
+        <button class="btn primary" onclick="confirmarFacturar('${esc(p.id)}')">Emitir</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.style.display = "flex";
+
+    const refrescar = () => {
+      const prev = document.getElementById("fPreview");
+      try {
+        const f = C.prepararFacturacion(p, {
+          serie: serie(),
+          periodoCobrado: document.getElementById("fPeriodo").value,
+          tipoComprobante: document.getElementById("fTipo").value,
+          condicionIVA: document.getElementById("fIVA").value,
+          ivaPct: document.getElementById("fIvaPct").value,
+        });
+        prev.innerHTML = `<b>${esc(C.explicar(f))}</b>` +
+          (f.referenciaUF ? `<br><span class="muted">≈ UF ${num(f.referenciaUF, 2)}</span>` : "");
+      } catch (e) {
+        prev.innerHTML = `<b>No se puede emitir:</b> ${esc(e.message)}` +
+          (e.sugerencia ? `<br><span class="muted">${esc(e.sugerencia)}</span>` : "");
+      }
+    };
+    for (const id of ["fTipo", "fIVA", "fIvaPct"]) {
+      document.getElementById(id).onchange = refrescar;
+      document.getElementById(id).oninput = refrescar;
+    }
+    refrescar();
+  }
+
+  function cerrarFacturar() {
+    document.getElementById("ovFacturar")?.remove();
+  }
+
+  async function confirmarFacturar(presupuestoId) {
     try {
       const p = presupuestosNuevos().find((x) => x.id === presupuestoId);
-      if (!p) throw new Error("Presupuesto no encontrado");
-
-      const numero = prompt(
-        `Número de comprobante para ${p.numero}\n\n` +
-        `${money(p.total, "USD")} · ${C.PAISES[p.pais]?.nombre} · se factura en ${C.monedaDe(p.pais)}`, "");
-      if (numero === null) return;
-
       const f = C.prepararFacturacion(p, {
-        serie: serie(), numeroComprobante: numero.trim(), usuario: global.state?.user || "",
+        serie: serie(),
+        periodoCobrado: document.getElementById("fPeriodo").value,
+        tipoComprobante: document.getElementById("fTipo").value,
+        condicionIVA: document.getElementById("fIVA").value,
+        ivaPct: document.getElementById("fIvaPct").value,
+        numeroComprobante: document.getElementById("fNum").value.trim(),
+        observaciones: document.getElementById("fObs").value.trim(),
+        usuario: global.state?.user || "",
       });
       global.state.facturaciones = [...(global.state.facturaciones || []), f];
-      await global.persist(`Comprobante ${f.numeroComprobante} · ${p.numero}`, "facturaciones");
+      await global.persist(
+        `${f.tipoComprobante} ${f.numeroComprobante || "s/n"} · ${p.numero}`, "facturaciones", f);
+      cerrarFacturar();
       global.toast(C.explicar(f));
       renderFacturacion();
     } catch (e) {
       global.toast(e.sugerencia ? `${e.message} — ${e.sugerencia}` : e.message, true, true);
     }
+  }
+
+  function limpiarFiltroFac() {
+    global.state.filtroFac = { pais: "", mes: "", tipo: "", pagina: 1 };
+    renderFacturacion();
+  }
+
+  /** CSV de lo emitido, respetando el filtro activo. */
+  function exportarFacturacionCSV() {
+    const T = global.NEXO_TABLA;
+    const filas = T.filtrar(global.state.facturaciones || [], filtro(),
+      { pais: (x) => x.pais, fecha: (x) => x.fechaEmision, tipo: (x) => x.tipoComprobante });
+    const n = T.exportarCSV(filas, [
+      { titulo: "comprobante", valor: (x) => x.numeroComprobante },
+      { titulo: "tipo", valor: (x) => x.tipoComprobante },
+      { titulo: "fecha", valor: (x) => x.fechaEmision },
+      { titulo: "periodo_cobrado", valor: (x) => x.periodoCobrado },
+      { titulo: "pais", valor: (x) => x.pais },
+      { titulo: "moneda_cotizacion", valor: (x) => x.monedaCotizacion },
+      { titulo: "monto_cotizado", valor: (x) => x.montoCotizado },
+      { titulo: "tipo_cambio", valor: (x) => x.tcValor },
+      { titulo: "tc_fecha", valor: (x) => x.tcFecha },
+      { titulo: "tc_fuente", valor: (x) => x.tcFuente },
+      { titulo: "condicion_iva", valor: (x) => x.condicionIVA },
+      { titulo: "neto", valor: (x) => x.montoNeto },
+      { titulo: "iva", valor: (x) => x.montoIVA },
+      { titulo: "total", valor: (x) => x.montoLiquidado },
+      { titulo: "moneda", valor: (x) => x.monedaLiquidacion },
+      { titulo: "observaciones", valor: (x) => x.observaciones },
+    ], "facturacion");
+    global.toast(`CSV: ${n} comprobante(s) · ${T.describirFiltro(filtro())}`);
   }
 
   // --------------------------------------------------------------------------
@@ -332,7 +496,8 @@
   global.NEXO_VISTAS.cambio = renderCambio;
   global.NEXO_VISTAS.facturacion = renderFacturacion;
 
-  global.guardarCotizacion = guardarCotizacion;
-  global.facturar = facturar;
-  global.actualizarCotizaciones = actualizarCotizaciones;
+  Object.assign(global, {
+    guardarCotizacion, facturar, cerrarFacturar, confirmarFacturar,
+    actualizarCotizaciones, limpiarFiltroFac, exportarFacturacionCSV,
+  });
 })(typeof window !== "undefined" ? window : globalThis);

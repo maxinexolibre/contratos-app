@@ -673,21 +673,22 @@ prueba("factura congelando el tipo de cambio, la fecha y la fuente", () => {
   igual(f.tcValor, 1520);
   cierto(f.tcFuente.includes("BNA"));
   igual(f.monedaLiquidacion, "ARS");
-  igual(f.montoLiquidado, 28120000, "18.500 × 1.520");
+  igual(f.montoNeto, 28120000, "18.500 × 1.520");
+  igual(f.montoLiquidado, 34025200, "más 21% de IVA");
 });
 
 prueba("un presupuesto de Chile se factura en CLP con referencia en UF", () => {
   const p = presuBase({ estado: "Aprobado", pais: "CL" });
   const f = C.prepararFacturacion(p, { serie: serieBase });
   igual(f.monedaLiquidacion, "CLP");
-  igual(f.montoLiquidado, 16785050, "18.500 USD × 907,30");
+  igual(f.montoNeto, 16785050, "18.500 USD × 907,30");
   cierto(f.referenciaUF > 0, "Chile lleva el equivalente en UF");
 });
 
 prueba("un presupuesto de Estados Unidos no necesita cotización", () => {
   const f = C.prepararFacturacion(presuBase({ estado: "Aprobado", pais: "US" }), { serie: [] });
   igual(f.monedaLiquidacion, "USD");
-  igual(f.montoLiquidado, 18500);
+  igual(f.montoNeto, 18500, "el neto es el cotizado");
 });
 
 prueba("no se factura con cotización vieja", () => {
@@ -1132,6 +1133,17 @@ prueba("contrato: ida y vuelta sin perder ningún bloque de dominio", () => {
   igual(otraVez, nuevo, "convertir dos veces da el mismo resultado");
 });
 
+prueba("la condición de IVA sobrevive al adaptador", () => {
+  // Regresión: sin propagarla, un presupuesto no gravado volvía a "Gravado"
+  // y la facturación le sumaba 21% que el cliente no paga.
+  const idx = AD.indiceClientes(AD.clientesDesde({ presupuestos: [presuViejo()] }));
+  const exento = AD.presupuestoANuevo(
+    presuViejo({ condicionIVA: "NoGravado" }), { indiceClientes: idx });
+  igual(exento.condicionIVA, "NoGravado");
+  const vuelta = AD.presupuestoAViejo(exento, { clientes: [] });
+  igual(vuelta.condicionIVA, "NoGravado", "y vuelve entera");
+});
+
 prueba("presupuesto: ida y vuelta sin pérdida", () => {
   const clientes = AD.clientesDesde({ presupuestos: [presuViejo()] });
   const idx = AD.indiceClientes(clientes);
@@ -1154,6 +1166,187 @@ prueba("ticket: ida y vuelta estable", () => {
   const otraVez = AD.ticketANuevo({ ...vuelta, presupuestoIds: nuevo.presupuestoIds }, ctx);
   igual(otraVez, nuevo, "estable en la segunda vuelta");
   igual(vuelta.pais, "UY");
+});
+
+prueba("un presupuesto heredado en ARS no se vuelve a convertir", () => {
+  // Regresión: P20260802 es un abono acordado en pesos. Multiplicarlo por el
+  // tipo de cambio daba miles de millones.
+  const p = presuBase({ estado: "Aprobado", pais: "AR",
+    items: [{ detalle: "Abono", cantidad: 1, unitario: 6060000 }],
+    economico: { moneda: "ARS", validezDias: 15, descuentoPct: 0,
+      recurrencia: "mensual", ivaPct: 21, incluyeIVA: false } });
+  const f = C.prepararFacturacion(p, { serie: serieBase });
+  igual(f.tcValor, 1, "sin conversión: ya está en pesos");
+  igual(f.montoNeto, 6060000, "el importe es el mismo, no multiplicado");
+  igual(f.monedaLiquidacion, "ARS");
+  cierto(f.tcFuente.includes("directamente"), f.tcFuente);
+});
+
+prueba("cliente exento: no se agrega IVA", () => {
+  const f = C.prepararFacturacion(
+    presuBase({ estado: "Aprobado", pais: "US", condicionIVA: "Exento" }), { serie: [] });
+  igual(f.montoIVA, 0);
+  igual(f.montoLiquidado, 18500, "paga el neto, sin IVA encima");
+  igual(f.condicionIVA, "Exento");
+});
+
+prueba("IVA incluido en el precio: se extrae, no se suma", () => {
+  const f = C.prepararFacturacion(
+    presuBase({ estado: "Aprobado", pais: "US", condicionIVA: "IncluidoEnPrecio" }), { serie: [] });
+  igual(f.montoLiquidado, 18500, "el total no cambia: el IVA ya estaba adentro");
+  igual(f.montoNeto, 15289.26);
+  igual(f.montoIVA, 3210.74);
+  igual(E.money(f.montoNeto + f.montoIVA), 18500, "neto + IVA = total");
+});
+
+prueba("el desglose de IVA cubre los tres tratamientos", () => {
+  igual(C.desglosarIVA(1000, "Gravado", 21), { neto: 1000, iva: 210, total: 1210 });
+  igual(C.desglosarIVA(1210, "IncluidoEnPrecio", 21), { neto: 1000, iva: 210, total: 1210 });
+  igual(C.desglosarIVA(1000, "Exento", 21), { neto: 1000, iva: 0, total: 1000 });
+});
+
+prueba("un cobro en efectivo se registra y cierra la operación", () => {
+  const f = C.prepararFacturacion(
+    presuBase({ estado: "Aprobado", pais: "AR", condicionIVA: "NoGravado" }),
+    { serie: serieBase, tipoComprobante: "Efectivo", numeroComprobante: "",
+      observaciones: "Cobrado en efectivo, sin factura" });
+  igual(f.tipoComprobante, "Efectivo");
+  igual(f.montoIVA, 0);
+  cierto(f.montoLiquidado > 0, "queda registrado el importe cobrado");
+  igual(f.numeroComprobante, "", "sin número: no hay factura");
+});
+
+// ---------------------------------------------------------------------------
+// Cobro por período · el caso P20260802
+// ---------------------------------------------------------------------------
+
+/** El caso real: contrato de mantenimiento en pesos, en efectivo, sin IVA. */
+const abonoEnPesos = (over = {}) => E.ENTIDADES.presupuestos.normalizar({
+  id: "pre_ars", numero: "P20260802", ticketId: "tk_x", fecha: "2026-08-04",
+  pais: "AR", estado: "Aprobado", titulo: "Propuesta de mantenimiento",
+  items: [{ detalle: "Mantenimiento", cantidad: 1, unitario: 6060000 }],
+  economico: { moneda: "ARS", validezDias: 15, descuentoPct: 0,
+    recurrencia: "mensual", ivaPct: 21, incluyeIVA: false },
+  condicionIVA: "NoGravado", ...over,
+});
+
+prueba("contrato en pesos, en efectivo y sin IVA: el importe queda intacto", () => {
+  const f = C.prepararFacturacion(abonoEnPesos(), {
+    serie: serieBase, tipoComprobante: "Efectivo", condicionIVA: "NoGravado",
+    periodoCobrado: "2026-08" });
+  igual(f.montoLiquidado, 6060000, "ni se convierte ni se le suma IVA");
+  igual(f.tcValor, 1);
+  igual(f.montoIVA, 0);
+  igual(f.tipoComprobante, "Efectivo");
+  igual(f.numeroComprobante, "", "un cobro en efectivo no lleva número");
+  igual(f.periodoCobrado, "2026-08");
+});
+
+prueba("un abono mensual vuelve a estar pendiente el mes siguiente", () => {
+  const p = abonoEnPesos();
+  const cobroAgosto = E.ENTIDADES.facturaciones.normalizar({
+    id: "f1", presupuestoId: p.id, fechaEmision: "2026-08-05",
+    periodoCobrado: "2026-08", tipoComprobante: "Efectivo", montoLiquidado: 6060000 });
+
+  cierto(!C.pendienteDeCobro(p, [cobroAgosto], "2026-08"), "agosto ya está cobrado");
+  cierto(C.pendienteDeCobro(p, [cobroAgosto], "2026-09"),
+    "septiembre sigue pendiente: es un abono, no un pago único");
+  igual([...C.periodosCobrados(p.id, [cobroAgosto])], ["2026-08"]);
+});
+
+prueba("un pago único se cobra una sola vez", () => {
+  const p = presuBase({ estado: "Aprobado" });   // recurrencia "unica"
+  const cobro = E.ENTIDADES.facturaciones.normalizar({
+    id: "f1", presupuestoId: p.id, fechaEmision: "2026-08-05", periodoCobrado: "2026-08" });
+  cierto(C.pendienteDeCobro(p, [], "2026-08"), "sin cobros, pendiente");
+  cierto(!C.pendienteDeCobro(p, [cobro], "2026-09"),
+    "cobrado una vez, no reaparece nunca más");
+});
+
+prueba("una nota de crédito no cuenta como cobro", () => {
+  const p = abonoEnPesos();
+  const nc = E.ENTIDADES.facturaciones.normalizar({
+    id: "f2", presupuestoId: p.id, fechaEmision: "2026-08-10",
+    periodoCobrado: "2026-08", tipoComprobante: "NotaCredito" });
+  cierto(C.pendienteDeCobro(p, [nc], "2026-08"),
+    "una nota de crédito revierte un cobro, no lo constituye");
+});
+
+prueba("solo se cobra un presupuesto aprobado", () => {
+  cierto(!C.pendienteDeCobro(presuBase({ estado: "Enviado" }), [], "2026-08"));
+  cierto(!C.pendienteDeCobro(presuBase({ estado: "Rechazado" }), [], "2026-08"));
+});
+
+// ---------------------------------------------------------------------------
+// Las dos etapas: propuesta comercial -> contrato
+// ---------------------------------------------------------------------------
+
+const propBase = (over = {}) => E.ENTIDADES.propuestas.normalizar({
+  id: "prop_1", numero: "PR-2026-0001", clienteId: "cli_1", pais: "AR",
+  estado: "Borrador", economico: { canonMensual: 4000, moneda: "USD" },
+  equipos: [{ modelo: "A", marca: "GE", modalidad: "MRI" }],
+  cobertura: { soporteRemoto: true }, plan: { id: "performance" }, ...over,
+});
+
+prueba("la propuesta no se resuelve sin haber salido al cliente", () => {
+  rechaza("NX-020", () => R.validar("propuestas", "editar",
+    propBase({ estado: "Aceptada" }), propBase(), ADMIN));
+  R.validar("propuestas", "editar",
+    propBase({ estado: "Aceptada" }), propBase({ estado: "Enviada" }), ADMIN);
+});
+
+prueba("una propuesta resuelta es terminal", () => {
+  rechaza("NX-020", () => R.validar("propuestas", "editar",
+    propBase({ estado: "Enviada" }), propBase({ estado: "Aceptada" }), ADMIN));
+});
+
+prueba("no se envia una propuesta sin canon", () => {
+  rechaza("NX-040", () => R.validar("propuestas", "editar",
+    propBase({ estado: "Enviada", economico: { canonMensual: 0, moneda: "USD" } }),
+    propBase(), ADMIN));
+});
+
+prueba("una propuesta rechazada necesita motivo", () => {
+  rechaza("NX-040", () => R.validar("propuestas", "editar",
+    propBase({ estado: "Rechazada" }), propBase({ estado: "Enviada" }), ADMIN));
+});
+
+const contratoDePropuesta = (over = {}) => E.ENTIDADES.contratos.normalizar({
+  id: "ctr_1", numero: "CT-2026-0001", origen: "independiente", clienteId: "cli_1",
+  propuestaId: "prop_1", estado: "Borrador",
+  economico: { canonMensual: 4000, moneda: "USD" }, ...over,
+});
+
+prueba("el contrato se redacta recien con la propuesta aceptada", () => {
+  rechaza("NX-071", () => R.validar("contratos", "crear", contratoDePropuesta(), null,
+    { ...ADMIN, propuestas: [propBase({ estado: "Enviada" })] }));
+  R.validar("contratos", "crear", contratoDePropuesta(), null,
+    { ...ADMIN, propuestas: [propBase({ estado: "Aceptada" })] });
+});
+
+prueba("el contrato y su propuesta no pueden ser de clientes distintos", () => {
+  rechaza("NX-041", () => R.validar("contratos", "crear",
+    contratoDePropuesta({ clienteId: "cli_9" }), null,
+    { ...ADMIN, propuestas: [propBase({ estado: "Aceptada" })] }));
+});
+
+prueba("efecto · el contrato queda referenciado desde su propuesta", () => {
+  const cambios = R.efectos("contratos", "crear", contratoDePropuesta(), null,
+    { propuestas: [propBase({ estado: "Aceptada" })] });
+  const ref = cambios.find((c) => c.entidad === "propuestas");
+  igual(ref.campos.contratoId, "ctr_1",
+    "sin esto la propuesta no sabria que ya se convirtio");
+});
+
+prueba("una propuesta con contrato no se desvincula sola", () => {
+  rechaza("NX-070", () => R.validar("propuestas", "editar",
+    propBase({ estado: "Aceptada", contratoId: null }),
+    propBase({ estado: "Aceptada", contratoId: "ctr_1" }), ADMIN));
+});
+
+prueba("un contrato sin propuesta sigue siendo valido", () => {
+  R.validar("contratos", "crear",
+    contratoDePropuesta({ propuestaId: null }), null, { ...ADMIN, propuestas: [] });
 });
 
 // ===========================================================================

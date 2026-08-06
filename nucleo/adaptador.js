@@ -161,6 +161,9 @@
       clienteId: idx.get(E.claveCliente(p.cliente?.nombreComercial)) || "",
       // País de origen de la cotización: define la moneda de facturación.
       pais: p.pais,
+      // Cómo se factura. Sin propagarlo, un presupuesto exento o no gravado
+      // volvía al default y se le sumaba un IVA que el cliente no paga.
+      condicionIVA: p.condicionIVA,
       estado: PRESU_ESTADO_A_NUEVO[p.estado] || "Borrador",
       estadoOrigen: p.estadoOrigen,
       items: p.items || [],
@@ -264,6 +267,7 @@
       estado: PRESU_ESTADO_A_VIEJO[p.estado] || "borrador",
       estadoOrigen: p.estadoOrigen,
       pais: p.pais,
+      condicionIVA: p.condicionIVA,
       fecha: p.fecha,
       ticketId: p.ticketId,
       ticketNumero: ctx.ticketNumero || "",

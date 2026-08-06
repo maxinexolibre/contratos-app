@@ -27,6 +27,17 @@
   const PRIORIDAD = ["Baja", "Media", "Alta", "Critica"];
   const PRESUPUESTO_ESTADO = ["Borrador", "Enviado", "Aprobado", "Rechazado"];
   const CONTRATO_ESTADO = ["Borrador", "EnRevision", "Firmado", "Activo", "Finalizado", "Anulado"];
+
+  /**
+   * Ciclo de la propuesta comercial. Es la primera de las dos etapas: se vende
+   * la idea de trabajar con Nexolibre. Recién cuando el cliente acepta se
+   * redacta el contrato con cláusulas y coberturas.
+   *
+   * Separarlas permite medir cuántas propuestas hacen falta por cada contrato
+   * y cuánto tarda una en convertirse — con un solo registro, una propuesta
+   * rechazada y un contrato sin firmar eran indistinguibles.
+   */
+  const PROPUESTA_ESTADO = ["Borrador", "Enviada", "Aceptada", "Rechazada"];
   const CAMPANA_ESTADO = ["Planificada", "Activa", "Finalizada", "Cancelada"];
   const ESTRATEGIA_ESTADO = ["Planificada", "EnCurso", "Finalizada", "Cancelada"];
   const ESTRATEGIA_TIPO = ["Contenido", "Ads", "Influencer", "Evento"];
@@ -50,6 +61,19 @@
    */
   const COMISION_ALCANCE = ["Vendedor", "Area"];
   const AREAS_COMISION = ["Gerencia comercial", "Marketing", "Diseño", "Ventas"];
+
+  /**
+   * Cómo entra la plata. No todo lo que se cobra se factura: hay operaciones
+   * en efectivo que igual necesitan cierre formal, y sin registrarlas el
+   * presupuesto queda eternamente "aprobado sin facturar".
+   */
+  const COMPROBANTE_TIPO = ["Factura", "Recibo", "Efectivo", "Transferencia", "NotaCredito"];
+
+  /**
+   * Tratamiento del IVA. El cliente exento y el precio con IVA incluido
+   * cambian el importe final, y confundirlos factura de más o de menos.
+   */
+  const CONDICION_IVA = ["Gravado", "Exento", "IncluidoEnPrecio", "NoGravado"];
 
   /** Países donde opera Nexolibre. Todo se cotiza en USD. */
   const PAIS = ["AR", "CL", "CO", "UY", "US"];
@@ -231,6 +255,11 @@
           // País de origen de la cotización. Define en qué moneda se factura:
           // se cotiza siempre en USD y se convierte recién al emitir.
           pais: enumerado(r.pais, PAIS, "AR"),
+          // Cómo se factura este presupuesto. El cliente exento y el precio
+          // con IVA incluido dan importes distintos: asumir "gravado" para
+          // todos factura de más a unos y de menos a otros.
+          condicionIVA: enumerado(r.condicionIVA, CONDICION_IVA,
+            esBool(r.economico?.incluyeIVA) ? "IncluidoEnPrecio" : "Gravado"),
           estado: enumerado(r.estado, PRESUPUESTO_ESTADO, "Borrador"),
           // Se conserva el estado tal como lo llevaba el usuario en su planilla.
           estadoOrigen: esTexto(r.estadoOrigen),
@@ -260,6 +289,69 @@
       },
     },
 
+    /**
+     * Propuesta comercial: la primera de las dos etapas del contrato.
+     *
+     * Lleva el plan, los equipos alcanzados, la cobertura ofrecida y el canon
+     * propuesto — todo lo que hace falta para que el cliente decida— pero NO
+     * las cláusulas legales. Esas viven en el contrato, que se redacta recién
+     * cuando la propuesta se acepta.
+     */
+    propuestas: {
+      archivo: "propuestas",
+      particionado: false,
+      idPrefijo: "prop_",
+      normalizar(r) {
+        const estado = enumerado(r.estado, PROPUESTA_ESTADO, "Borrador");
+        return {
+          id: esTexto(r.id) || nuevoId("prop_"),
+          numero: esTexto(r.numero),
+          // Número con el que circuló antes de la serie PR-. Se conserva para
+          // poder reconciliar contra los documentos ya enviados al cliente.
+          numeroLegado: esTexto(r.numeroLegado),
+          clienteId: esTexto(r.clienteId),
+          pais: enumerado(r.pais, PAIS, "AR"),
+          ticketId: esTexto(r.ticketId) || null,
+          estado,
+          // Contrato al que dio lugar. Null mientras no se haya generado.
+          contratoId: esTexto(r.contratoId) || null,
+          fechas: {
+            creado: fecha(r.fechas?.creado) || hoy(),
+            enviado: fecha(r.fechas?.enviado),
+            resuelto: fecha(r.fechas?.resuelto),
+          },
+          validezDias: esNumero(r.validezDias, 30),
+          motivoRechazo: estado === "Rechazada" ? esTexto(r.motivoRechazo) : "",
+          // Lo que se le ofrece al cliente
+          plan: r.plan || {},
+          equipos: esLista(r.equipos),
+          cobertura: r.cobertura || {},
+          economico: {
+            canonMensual: money(r.economico?.canonMensual),
+            moneda: esTexto(r.economico?.moneda) || "USD",
+            ivaPct: esNumero(r.economico?.ivaPct, 21),
+            incluyeIVA: esBool(r.economico?.incluyeIVA),
+            formaPago: esTexto(r.economico?.formaPago),
+          },
+          vigenciaPropuesta: {
+            meses: esNumero(r.vigenciaPropuesta?.meses, 12),
+            inicioEstimado: fecha(r.vigenciaPropuesta?.inicioEstimado),
+          },
+          /**
+           * Marca los registros que vienen del esquema anterior, donde una
+           * misma ficha hacía de propuesta y de contrato. Estos quedaron
+           * aceptados y operando sin que se redactara nunca el contrato: no se
+           * les inventa un documento que no existió, se los deja visibles como
+           * lo que son.
+           */
+          esquemaAnterior: esBool(r.esquemaAnterior),
+          archivos: esLista(r.archivos),
+          notas: esTexto(r.notas),
+          historialEstados: esLista(r.historialEstados),
+        };
+      },
+    },
+
     contratos: {
       archivo: "contratos",
       particionado: false,
@@ -278,6 +370,9 @@
           // País de la operación. Define la moneda de facturación y qué
           // acuerdos de área del reparto interno le corresponden.
           pais: enumerado(r.pais, PAIS, "AR"),
+          // Propuesta comercial que le dio origen. Null en los contratos que
+          // se negociaron directo, sin propuesta previa.
+          propuestaId: esTexto(r.propuestaId) || null,
           ticketId: origen === "comercial" ? esTexto(r.ticketId) : null,
           presupuestoId: origen === "comercial" ? esTexto(r.presupuestoId) : null,
           hashPresupuesto: esTexto(r.hashPresupuesto),
@@ -408,6 +503,19 @@
           numeroComprobante: esTexto(r.numeroComprobante),
           fechaEmision: fecha(r.fechaEmision) || hoy(),
           pais: enumerado(r.pais, PAIS, "AR"),
+          // Un cobro en efectivo no tiene número de factura pero sí cierra la
+          // operación. Sin registrarlo, el presupuesto queda para siempre
+          // "aprobado sin facturar" y ensucia todos los pendientes.
+          // Período que se está cobrando. En un abono mensual hay un cobro por
+          // mes: sin este campo, el primero daba la operación por cerrada y el
+          // mes siguiente no quedaba nada por cobrar.
+          periodoCobrado: esTexto(r.periodoCobrado) ||
+            (fecha(r.fechaEmision) || hoy()).slice(0, 7),
+          tipoComprobante: enumerado(r.tipoComprobante, COMPROBANTE_TIPO, "Factura"),
+          condicionIVA: enumerado(r.condicionIVA, CONDICION_IVA, "Gravado"),
+          ivaPct: esNumero(r.ivaPct, 21),
+          montoIVA: money(r.montoIVA),
+          montoNeto: money(r.montoNeto),
           // Equivalente en UF al emitir. Solo Chile; informativo.
           referenciaUF: r.referenciaUF === null || r.referenciaUF === undefined
             ? null : money(r.referenciaUF),
@@ -642,10 +750,11 @@
     ENTIDADES,
     TICKET_ESTADO, TICKET_TIPO, PRIORIDAD, PRESUPUESTO_ESTADO, CONTRATO_ESTADO,
     CAMPANA_ESTADO, ESTRATEGIA_ESTADO, ESTRATEGIA_TIPO, CANAL, LEAD_ESTADO,
+    PROPUESTA_ESTADO,
     RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_LIQUIDACION, PESO_ETAPA,
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
     COMISION_ORIGEN, COMISION_ESTADO, COMISION_ALCANCE, AREAS_COMISION,
-    PAIS, PAIS_NOMBRE,
+    PAIS, PAIS_NOMBRE, COMPROBANTE_TIPO, CONDICION_IVA,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
   };

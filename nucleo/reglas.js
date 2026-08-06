@@ -59,6 +59,9 @@
     "NX-067": "El acuerdo se superpone con otro del mismo vendedor",
     "NX-068": "El acuerdo ya tiene comisiones calculadas",
     "NX-069": "La comisión todavía no puede liquidarse",
+    // Propuestas
+    "NX-070": "La propuesta ya generó un contrato",
+    "NX-071": "La propuesta todavía no fue aceptada",
   };
 
   const fallar = (codigo, detalle, sugerencia) => {
@@ -217,6 +220,48 @@
     return true;
   }
 
+  const TRANSICION_PROPUESTA = {
+    Borrador: ["Borrador", "Enviada"],
+    // Una propuesta se resuelve solo después de haber salido al cliente.
+    Enviada: ["Enviada", "Aceptada", "Rechazada"],
+    // Resueltas son terminales: para reintentar se hace una propuesta nueva,
+    // así queda registro de cuántas hicieron falta.
+    Aceptada: ["Aceptada"],
+    Rechazada: ["Rechazada"],
+  };
+
+  function validarPropuesta(nuevo, anterior, ctx) {
+    if (!nuevo.clienteId) fallar("NX-040", "La propuesta necesita un cliente");
+
+    if (anterior && nuevo.estado !== anterior.estado) {
+      const permitidas = TRANSICION_PROPUESTA[anterior.estado] || [];
+      if (!permitidas.includes(nuevo.estado)) {
+        fallar("NX-020",
+          `La propuesta ${nuevo.numero} no puede pasar de ${anterior.estado} a ${nuevo.estado}`,
+          ["Aceptada", "Rechazada"].includes(anterior.estado)
+            ? "Ya está resuelta: para reintentar, generá una propuesta nueva" : "");
+      }
+    }
+
+    // Sin canon no hay nada que proponer.
+    if (nuevo.estado !== "Borrador" && !(nuevo.economico.canonMensual > 0)) {
+      fallar("NX-040", `La propuesta ${nuevo.numero} no tiene canon cargado`,
+        "Una propuesta sin precio no se puede enviar");
+    }
+    if (nuevo.estado === "Rechazada" && !nuevo.motivoRechazo) {
+      fallar("NX-040", "Una propuesta rechazada necesita motivo",
+        "El motivo alimenta el análisis de por qué se pierden");
+    }
+
+    // No se puede desarmar el vínculo con un contrato ya generado.
+    if (anterior?.contratoId && nuevo.contratoId !== anterior.contratoId) {
+      fallar("NX-070",
+        `La propuesta ${nuevo.numero} ya generó el contrato ${anterior.contratoId}`,
+        "Anulá el contrato antes de desvincularlo");
+    }
+    return true;
+  }
+
   function validarContrato(nuevo, anterior, ctx) {
     if (!nuevo.clienteId && !nuevo.ticketId) {
       fallar("NX-040", "El contrato necesita un cliente");
@@ -252,6 +297,22 @@
     const vigente = ["Firmado", "Activo", "Finalizado"].includes(nuevo.estado);
     if (vigente && !nuevo.fechaFirma) {
       fallar("NX-040", "Un contrato firmado o vigente necesita fecha de firma");
+    }
+
+    // Segunda etapa: el contrato se redacta sobre una propuesta aceptada.
+    // Redactarlo antes significa escribir cláusulas de algo que el cliente
+    // todavía no aprobó.
+    if (nuevo.propuestaId) {
+      const prop = (ctx.propuestas || []).find((x) => x.id === nuevo.propuestaId);
+      if (!prop) fallar("NX-041", "La propuesta de origen no existe");
+      if (prop.estado !== "Aceptada") {
+        fallar("NX-071",
+          `La propuesta ${prop.numero} está ${prop.estado}`,
+          "El contrato se redacta recién cuando el cliente acepta la propuesta");
+      }
+      if (prop.clienteId && nuevo.clienteId && prop.clienteId !== nuevo.clienteId) {
+        fallar("NX-041", "El contrato y su propuesta son de clientes distintos");
+      }
     }
     return true;
   }
@@ -499,6 +560,7 @@
   }
 
   const VALIDADORES = {
+    propuestas: validarPropuesta,
     vendedores: validarVendedor,
     acuerdosComision: validarAcuerdoComision,
     comisiones: validarComision,
@@ -572,6 +634,15 @@
       }
     }
 
+    if (entidad === "contratos" && nuevo.propuestaId) {
+      // El contrato generado queda referenciado desde su propuesta: sin esto
+      // la propuesta no sabría que ya se convirtió.
+      const prop = (ctx.propuestas || []).find((x) => x.id === nuevo.propuestaId);
+      if (prop && prop.contratoId !== nuevo.id) {
+        cambios.push({ entidad: "propuestas", id: prop.id, campos: { contratoId: nuevo.id } });
+      }
+    }
+
     if (entidad === "contratos") {
       const vigente = ["Firmado", "Activo", "Finalizado"].includes(nuevo.estado);
       const eraVigente = anterior && ["Firmado", "Activo", "Finalizado"].includes(anterior.estado);
@@ -599,7 +670,7 @@
 
   global.NEXO_REGLAS = {
     ErrorNexo, CODIGOS, validar, efectos,
-    TRANSICION_TICKET, TRANSICION_PRESUPUESTO, TRANSICION_CAMPANA,
+    TRANSICION_TICKET, TRANSICION_PRESUPUESTO, TRANSICION_CAMPANA, TRANSICION_PROPUESTA,
     TC_DIAS_TOLERANCIA,
   };
 })(typeof window !== "undefined" ? window : globalThis);

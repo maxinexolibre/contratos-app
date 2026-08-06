@@ -47,6 +47,16 @@
       marketing:              { crear: null, leer: null, editar: null, borrar: null },
       admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
     },
+    propuestas: {
+      // La propuesta comercial es la etapa de venta: el vendedor la arma y la
+      // envía. El contrato que sale de ella ya es otra cosa.
+      vendedor:               { crear: "todos", leer: "propios", editar: "propios", borrar: null },
+      gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
+      gerente_administrativo: { crear: null, leer: "todos", editar: null, borrar: null },
+      direccion:              { crear: null, leer: "todos", editar: null, borrar: null },
+      marketing:              { crear: null, leer: null, editar: null, borrar: null },
+      admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
+    },
     contratos: {
       vendedor:               { crear: null, leer: "propios", editar: null, borrar: null },
       gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: null },
