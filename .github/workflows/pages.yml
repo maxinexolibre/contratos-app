@@ -1,0 +1,49 @@
+# Despliegue del sitio estático a GitHub Pages.
+#
+# El constructor "legacy" de Pages corre Jekyll sobre el repo aunque el sitio
+# no lo use, y venía fallando con "Page build failed" sin más detalle. Este
+# workflow sube los archivos tal cual: sin Jekyll, sin transformaciones, y con
+# el registro completo si algo falla.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  # Permite lanzarlo a mano desde la pestaña Actions.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Un despliegue por vez. No se cancela el que está en curso: interrumpir una
+# publicación a medias deja el sitio en un estado indefinido.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  desplegar:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar el núcleo antes de publicar
+        # Si las reglas de negocio o la capa de datos están rotas, no se
+        # despliega. Es barato y evita publicar algo que ya sabemos que falla.
+        run: |
+          node tools/probar-nucleo.mjs
+          node tools/probar-repositorio.mjs
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
