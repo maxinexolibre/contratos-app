@@ -57,8 +57,16 @@ function prueba(nombre, fn) {
   }
 }
 
+/** Serializa con las claves ordenadas: el orden no es información. */
+function estable(v) {
+  if (Array.isArray(v)) return "[" + v.map(estable).join(",") + "]";
+  if (v && typeof v === "object") {
+    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + estable(v[k])).join(",") + "}";
+  }
+  return JSON.stringify(v);
+}
 function igual(a, b, msg) {
-  const sa = JSON.stringify(a), sb = JSON.stringify(b);
+  const sa = estable(a), sb = estable(b);
   if (sa !== sb) throw new Error(`${msg || "distinto"}: esperaba ${sb}, obtuve ${sa}`);
 }
 function cierto(v, msg) { if (!v) throw new Error(msg || "esperaba verdadero"); }
@@ -1068,6 +1076,84 @@ prueba("dos acuerdos de la misma área con países cruzados se solapan", () => {
   // Distinta área: no se pisan
   const marketing = CM.acuerdosReparto("2026-01-01")[1];
   cierto(!CM.seSolapa(otro, marketing));
+});
+
+// ---------------------------------------------------------------------------
+// Ida y vuelta sin pérdida · requisito para migrar al almacén particionado
+// ---------------------------------------------------------------------------
+
+const contratoViejo = (over = {}) => ({
+  id: "ctr_1", tipo: "contrato", numero: "CT-2026-0001", estado: "firme_vigente",
+  cliente: { nombreComercial: "Centro Ejemplo", razonesSociales: [
+    { razonSocial: "Centro Ejemplo S.A.", cuit: "30-00000000-0", domicilio: "Calle 1", principal: true }] },
+  equipos: [{ modelo: "Modelo A", marca: "GE", modalidad: "MRI", serie: "X1", ubicacion: "Sede" }],
+  cobertura: { preventivoInspeccionesAnuales: 4, correctivoManoObra: true,
+    reparacionBobinasPorAnio: 2, bobinasAlcance: "flota", soporteRemoto: true,
+    saasMonitoreo: true, partesIncluidas: false, viaticosIncluidos: true,
+    enviosRepuestosIncluidos: true, reparacionesIncluidas: ["Reparación electrónica"] },
+  economico: { canonMensual: 4000, moneda: "USD", incluyeIVA: false, ivaPct: 21,
+    formaPago: "Mensual, antes del 5º día hábil" },
+  ajuste: { periodicidad: "trimestral", indice: "IPC", historial: [] },
+  vigencia: { inicio: "2026-01-01", meses: 12, fin: "", renovacionAutomatica: true, preavisoDias: 30 },
+  fechas: { creado: "2025-12-15", enviado: "2025-12-16", firmado: "2025-12-20" },
+  archivos: [{ nombre: "contrato.pdf", ruta: "2026/contrato.pdf" }],
+  notas: "Nota con & y <b>",
+  historialEstados: [{ estado: "borrador", fecha: "2025-12-15", usuario: "maxi" }],
+  plan: { id: "performance", etiquetaPublica: "NexoCare Performance", modulos: ["cryo"], notasInternas: "n" },
+  negociacion: { desviaciones: [{ clausula: "precio", texto: "ajuste semestral" }] },
+  ...over,
+});
+
+prueba("contrato: ida y vuelta sin perder ningún bloque de dominio", () => {
+  const clientes = AD.clientesDesde({ data: [contratoViejo()] });
+  const idx = AD.indiceClientes(clientes);
+  const nuevo = AD.contratoANuevo(contratoViejo(), { indiceClientes: idx });
+  const vuelta = AD.contratoAViejo(nuevo, { clientes });
+
+  // Los bloques de dominio tienen que volver idénticos, no parecidos.
+  for (const campo of ["equipos", "cobertura", "economico", "ajuste",
+                       "fechas", "archivos", "historialEstados", "plan", "negociacion"]) {
+    igual(vuelta[campo], contratoViejo()[campo], `bloque ${campo}`);
+  }
+  // Vigencia: el esquema normaliza la fecha vacía a null. Es limpieza, no
+  // pérdida — ambos significan "sin fecha de fin"— así que se compara el
+  // significado y no los bytes.
+  igual(vuelta.vigencia.inicio, "2026-01-01");
+  igual(vuelta.vigencia.meses, 12);
+  igual(vuelta.vigencia.renovacionAutomatica, true);
+  igual(vuelta.vigencia.preavisoDias, 30);
+  cierto(!vuelta.vigencia.fin, "sin fecha de fin, sea \"\" o null");
+  igual(vuelta.estado, "firme_vigente", "el estado vuelve a la forma vieja");
+  igual(vuelta.numero, "CT-2026-0001");
+  igual(vuelta.notas, "Nota con & y <b>", "el texto no se escapa dos veces");
+
+  // Y una segunda vuelta tiene que dar lo mismo: la conversión es estable.
+  const otraVez = AD.contratoANuevo(vuelta, { indiceClientes: idx });
+  igual(otraVez, nuevo, "convertir dos veces da el mismo resultado");
+});
+
+prueba("presupuesto: ida y vuelta sin pérdida", () => {
+  const clientes = AD.clientesDesde({ presupuestos: [presuViejo()] });
+  const idx = AD.indiceClientes(clientes);
+  const ctx = { indiceClientes: idx };
+  const nuevo = AD.presupuestoANuevo(presuViejo({ pais: "CL", notas: "x & y" }), ctx);
+  const vuelta = AD.presupuestoAViejo(nuevo, { clientes });
+  const otraVez = AD.presupuestoANuevo(vuelta, ctx);
+  igual(otraVez, nuevo, "estable en la segunda vuelta");
+  igual(vuelta.pais, "CL", "el país sobrevive");
+  igual(vuelta.items, [{ detalle: "Cold head", cantidad: 1, unitario: 18500 }]);
+  igual(vuelta.economico.moneda, "USD");
+});
+
+prueba("ticket: ida y vuelta estable", () => {
+  const clientes = AD.clientesDesde({ tickets: [ticketViejo()] });
+  const idx = AD.indiceClientes(clientes);
+  const ctx = { indiceClientes: idx, presupuestos: [presuViejo()] };
+  const nuevo = AD.ticketANuevo(ticketViejo({ pais: "UY", estado: "ganado" }), ctx);
+  const vuelta = AD.ticketAViejo(nuevo, { clientes });
+  const otraVez = AD.ticketANuevo({ ...vuelta, presupuestoIds: nuevo.presupuestoIds }, ctx);
+  igual(otraVez, nuevo, "estable en la segunda vuelta");
+  igual(vuelta.pais, "UY");
 });
 
 // ===========================================================================

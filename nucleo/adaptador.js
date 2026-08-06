@@ -134,7 +134,13 @@
       recurrencia,
       presupuestoIds: t.presupuestoIds || [],
       fechaCierre: terminal ? (t.fechaCierre || t.historial?.at(-1)?.fecha || t.fecha) : null,
-      cierreEstimado: terminal && !t.fechaCierre,
+      // Si el registro ya dice si el cierre fue deducido, se respeta. Volver a
+      // inferirlo por la ausencia de fecha lo daría vuelta en cuanto el dato se
+      // escribe una vez, y el ciclo de venta pasaría a contar cierres de 0 días
+      // como si fueran reales.
+      cierreEstimado: typeof t.cierreEstimado === "boolean"
+        ? t.cierreEstimado
+        : (terminal && !t.fechaCierre),
       motivoPerdida: t.motivoPerdida ||
         (estado === "Perdido" ? "Migrado sin motivo registrado" : ""),
       historial: t.historial || [],
@@ -183,6 +189,10 @@
       estado,
       tipo: c.tipo,
       fechaFirma: c.fechas?.firmado || (vigente ? c.vigencia?.inicio || c.fechas?.creado : null),
+      // Las tres fechas del documento y las desviaciones negociadas viajan
+      // enteras: son datos del registro, no derivados.
+      fechas: c.fechas || {},
+      negociacion: c.negociacion || { desviaciones: [] },
       vigencia: c.vigencia || {},
       economico: c.economico || {},
       // La forma vieja no tiene campo de recurrencia: todos los contratos
@@ -268,6 +278,43 @@
       usuario: p.usuario,
       origen: p.origen || "",
       historialEstados: p.historialEstados,
+    };
+  }
+
+  /**
+   * Contrato v3 → forma vieja.
+   *
+   * Los bloques de dominio (equipos, cobertura, ajuste, plan, negociación)
+   * viajan tal cual: el esquema los guarda sin tocar y acá vuelven enteros.
+   * Lo único que se traduce es el estado y la estructura de fechas.
+   */
+  function contratoAViejo(c, ctx = {}) {
+    return {
+      id: c.id,
+      tipo: c.tipo,
+      numero: c.numero,
+      // Se conserva el número original para poder reconciliar contra los
+      // documentos que ya circularon con la numeración anterior.
+      numeroLegado: c.numeroLegado,
+      origen: c.origen,
+      estado: CONTRATO_ESTADO_A_VIEJO[c.estado] || "borrador",
+      pais: c.pais,
+      cliente: bloqueCliente(c.clienteId, ctx.clientes),
+      clienteId: c.clienteId,
+      ticketId: c.ticketId,
+      presupuestoId: c.presupuestoId,
+      recurrencia: c.recurrencia,
+      equipos: c.equipos,
+      cobertura: c.cobertura,
+      economico: c.economico,
+      ajuste: c.ajuste,
+      vigencia: c.vigencia,
+      fechas: c.fechas,
+      archivos: c.archivos,
+      notas: c.notas,
+      historialEstados: c.historialEstados,
+      plan: c.plan,
+      negociacion: c.negociacion,
     };
   }
 
@@ -385,7 +432,7 @@
     CONTRATO_ESTADO_A_NUEVO, CONTRATO_ESTADO_A_VIEJO,
     indiceClientes, indicePresupuestos, clientesDesde,
     ticketANuevo, presupuestoANuevo, contratoANuevo,
-    ticketAViejo, presupuestoAViejo, bloqueCliente,
+    ticketAViejo, presupuestoAViejo, contratoAViejo, bloqueCliente,
     validarEnFormaVieja, estadoANuevo,
   };
 })(typeof window !== "undefined" ? window : globalThis);

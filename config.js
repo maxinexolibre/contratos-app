@@ -16,5 +16,8 @@ window.NEXO_CONFIG = {
   vendedoresPath: "data/vendedores.json",
   acuerdosComisionPath: "data/acuerdos-comision.json",
   comisionesPath: "data/comisiones.json",
+  // Raíz de la estructura particionada. Los archivos planos de `data/` quedan
+  // como copia de seguridad hasta que se decida eliminarlos.
+  baseDatos: "data/v3",
   branch: "main",
 };

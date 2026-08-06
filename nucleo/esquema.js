@@ -284,6 +284,16 @@
           estado,
           tipo: esTexto(r.tipo) || "contrato",
           fechaFirma: fecha(r.fechaFirma),
+          // Las tres fechas del ciclo del documento. `fechaFirma` es la que
+          // usan las reglas, pero creado y enviado también son datos reales
+          // del registro: perderlos en la migración sería destruir información.
+          fechas: {
+            creado: fecha(r.fechas?.creado),
+            enviado: fecha(r.fechas?.enviado),
+            firmado: fecha(r.fechas?.firmado) || fecha(r.fechaFirma),
+          },
+          // Desviaciones negociadas respecto del texto base del contrato.
+          negociacion: r.negociacion || { desviaciones: [] },
           vigencia: {
             inicio: fecha(r.vigencia?.inicio),
             meses: esNumero(r.vigencia?.meses, 12),

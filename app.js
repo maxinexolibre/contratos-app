@@ -400,6 +400,43 @@ async function loadStore(store) {
   state[def.key] = def.migrate(arr);
   state[def.shaKey] = sha;
 }
+
+/**
+ * Capa de datos particionada. Se instancia al conectar y, a partir de ahí,
+ * todas las lecturas y escrituras pasan por acá.
+ */
+let repo = null;
+
+/**
+ * Carga todo desde la estructura particionada.
+ *
+ * Si el repo todavía no la tiene, se leen los archivos planos y se migran en
+ * el momento. Es una sola vez y queda hecho para todo el equipo.
+ */
+async function cargarDesdeRepositorio() {
+  repo = new window.NEXO_REPOSITORIO.Repositorio({
+    owner: CFG.owner, dataRepo: CFG.dataRepo, branch: CFG.branch,
+    token: localStorage.getItem(LS.pat), base: CFG.baseDatos || "data/v3",
+  }, state);
+  await repo.abrir();
+
+  if (!repo.migrado) {
+    toast("Primera vez: migrando a la estructura particionada…", false, true);
+    const informe = await repo.migrarDesdePlano(
+      { contratos: CFG.dataPath, presupuestos: CFG.presupuestosPath, tickets: CFG.ticketsPath },
+      async (ruta) => (await ghLoadFile(ruta)).arr);
+    console.info("Migración a estructura particionada:", informe);
+    if (informe.errores.length) console.warn("Errores en la migración:", informe.errores);
+    toast(`Migrado: ${informe.tickets} tickets · ${informe.presupuestos} presupuestos · ` +
+          `${informe.contratos} contratos · ${informe.clientes} clientes`);
+    await repo.abrir();
+  }
+
+  const r = await repo.cargarTodo({ meses: 12 });
+  console.info(`Cargado desde particiones: ${r.tickets} tickets, ${r.presupuestos} ` +
+    `presupuestos de los últimos 12 meses (${r.periodosDisponibles} períodos disponibles).`);
+  return r;
+}
 async function ghUploadFile(path, base64, msg) {
   const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${path}`;
   // averiguar sha si ya existe
@@ -450,10 +487,22 @@ async function ghSaveConReintento(store, msg) {
   }
 }
 
-async function persist(msg, store = "contratos") {
+/**
+ * Guarda cambios.
+ *
+ * Con `registro` se escribe una sola partición —el archivo del mes de ese
+ * registro— en lugar de toda la colección. Es la diferencia entre reescribir
+ * 30 KB y reescribir 120 KB en cada guardado, y crece con la historia.
+ */
+async function persist(msg, store = "contratos", registro = null) {
   if (state.soloLectura) throw new Error("Tu acceso es de solo lectura: podés consultar y descargar, no modificar.");
   const def = STORE_DEF[store];
   if (state.mode === "connected") {
+    if (repo) {
+      if (registro) await repo.guardar(store, registro, msg);
+      else await repo.guardarColeccion(store, msg);
+      return;
+    }
     state[def.shaKey] = await ghSaveConReintento(store, msg);
   } else {
     localStorage.setItem(def.ls, JSON.stringify(state[def.key]));
@@ -586,9 +635,7 @@ async function init() {
   if (pat) {
     try {
       state.mode = "connected";
-      await loadStore("contratos");
-      await loadStore("presupuestos");
-      await loadStore("tickets");
+      await cargarDesdeRepositorio();
       state.soloLectura = !(await ghPuedeEscribir());
     } catch (e) {
       toast("No se pudo conectar: " + e.message + " — modo demo", true, true);
@@ -2028,7 +2075,7 @@ async function cambiarEstadoTicket(id, nuevo) {
   t.estado = nuevo;
   t.historial = t.historial || [];
   t.historial.push({ estado: nuevo, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
-  try { await persist(`Ticket ${t.numero} → ${nuevo}`, "tickets"); toast(`${t.numero}: ${TK_ESTADO_LABEL[nuevo]}`); router(); }
+  try { await persist(`Ticket ${t.numero} → ${nuevo}`, "tickets", t); toast(`${t.numero}: ${TK_ESTADO_LABEL[nuevo]}`); router(); }
   catch (e) { toast("Error: " + e.message, true, true); }
 }
 function nuevoTicket() {
@@ -2075,7 +2122,7 @@ async function guardarTicket(isNew, id) {
   if (!isNew && prev !== t.estado) t.historial.push({ estado: t.estado, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
   if (isNew) state.tickets.push(t);
   else { const i = state.tickets.findIndex((x) => x.id === id); state.tickets[i] = t; }
-  try { await persist(`${isNew ? "Alta" : "Edición"} ticket ${t.numero} · ${t.cliente.nombreComercial}`, "tickets"); go("tkdetalle/" + t.id); toast(isNew ? "Ticket creado ✓" : "Guardado ✓"); }
+  try { await persist(`${isNew ? "Alta" : "Edición"} ticket ${t.numero} · ${t.cliente.nombreComercial}`, "tickets", t); go("tkdetalle/" + t.id); toast(isNew ? "Ticket creado ✓" : "Guardado ✓"); }
   catch (e) { toast("Error: " + e.message, true, true); }
 }
 
@@ -2254,7 +2301,7 @@ async function cambiarEstadoPresu(id, nuevo) {
   p.historialEstados = p.historialEstados || [];
   p.historialEstados.push({ estado: nuevo, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
   try {
-    await persist(`Presupuesto ${p.numero} → ${nuevo}`, "presupuestos");
+    await persist(`Presupuesto ${p.numero} → ${nuevo}`, "presupuestos", p);
     // Si se gana un presupuesto de un ticket, el ticket pasa a ganado.
     if (nuevo === "ganado" && p.ticketId) { const tk = ticketPorId(p.ticketId); if (tk && tk.estado !== "ganado") await cambiarEstadoTicket(tk.id, "ganado"); }
     toast(`${p.numero}: ${PRE_ESTADO_LABEL[nuevo]}`);
@@ -2493,7 +2540,7 @@ async function guardarPresu(isNew, id) {
   if (isNew) state.presupuestos.push(p);
   else { const i = state.presupuestos.findIndex((x) => x.id === id); state.presupuestos[i] = p; }
   try {
-    await persist(`${isNew ? "Alta" : "Edición"} ${p.numero} · ${p.cliente.nombreComercial}`, "presupuestos");
+    await persist(`${isNew ? "Alta" : "Edición"} ${p.numero} · ${p.cliente.nombreComercial}`, "presupuestos", p);
     // Al vincular un ticket, se lo marca presupuestado y se le ata el N°.
     if (tk && !tk.presupuestoIds.includes(p.id)) {
       tk.presupuestoIds.push(p.id);
