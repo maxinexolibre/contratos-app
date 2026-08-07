@@ -169,8 +169,14 @@ function renderPresuItemsTabla(p) {
   let html = `<div class="overflow"><table class="data"><thead><tr>${t.head.map((h) => `<th${h.num ? ' style="text-align:right"' : ""}>${h.t}</th>`).join("")}</tr></thead><tbody>`;
   html += t.rows.map((r) => `<tr>${r.map((c, i) => `<td${t.head[i]?.num ? ' style="text-align:right"' : ""}>${c.strong ? `<b>${c.t}</b>` : c.t}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${t.head.length}" class="muted">Sin ítems</td></tr>`;
   html += `</tbody></table></div>`;
-  if (m.saasTabla) {
-    html += `<h4 style="margin:12px 0 4px;color:var(--taupe)">SaaS</h4><div class="overflow"><table class="data"><thead><tr>${m.saasTabla.head.map((h) => `<th${h.num ? ' style="text-align:right"' : ""}>${h.t}</th>`).join("")}</tr></thead><tbody>${m.saasTabla.rows.map((r) => `<tr>${r.map((c, i) => `<td${m.saasTabla.head[i]?.num ? ' style="text-align:right"' : ""}>${c.t}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  if (m.notas.length) {
+    html += `<h4 style="margin:12px 0 4px;color:var(--taupe)">Notas</h4><ul style="margin:0;padding-left:18px;font-size:13px">${m.notas.map((n) => `<li>${n}</li>`).join("")}</ul>`;
+  }
+  if (m.garantia) {
+    html += `<h4 style="margin:12px 0 4px;color:var(--taupe)">Garantía · ${m.garantia.plazo}</h4>`;
+    html += m.garantia.libre
+      ? `<p style="font-size:13px;margin:0">${m.garantia.libre}</p>`
+      : `<div class="overflow"><table class="data"><tbody>${m.garantia.puntos.map(([l, v]) => `<tr><th style="width:26%;text-align:left">${l}</th><td>${v}</td></tr>`).join("")}</tbody></table></div>`;
   }
   return html;
 }
@@ -235,13 +241,16 @@ async function duplicarPresu(id) {
 function nuevoPresupuesto(ticketId) {
   const d = new Date().toISOString().slice(0, 10);
   const tk = ticketId ? ticketPorId(ticketId) : null;
-  const tipoDeTk = { servicio: "servicio", parte: "venta", equipo: "venta", saas: "saas" };
+  // El SaaS ya no se cotiza por presupuesto: tiene documento propio. Un ticket
+  // de ese tipo cae en "servicio" para no dejar el alta sin tipo válido.
+  const tipoDeTk = { servicio: "servicio", parte: "venta", equipo: "venta", saas: "servicio" };
   return {
     id: "pre_" + Date.now(), numero: proxNumeroPresu(), tipo: tk ? (tipoDeTk[tk.tipoPedido] || "servicio") : "servicio",
     estado: "borrador", fecha: d, ticketId: tk?.id || "", ticketNumero: tk?.numero || "",
     subtipo: "", titulo: tk?.descripcion || "",
     cliente: tk ? structuredClone(tk.cliente) : { nombreComercial: "", razonesSociales: [{ razonSocial: "", cuit: "", domicilio: "", principal: true }], contacto: "", localidad: "", provincia: "" },
-    items: [], saas: [],
+    items: [],
+    garantia: { aplica: true, dias: 90, texto: "" },
     economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15, formaPago: "", descuentoPct: 0, recurrencia: "unica" },
     notas: "", archivos: [], usuario: state.user || "—", historialEstados: [{ estado: "borrador", fecha: d, usuario: state.user || "—" }],
   };
@@ -318,16 +327,23 @@ function renderPresuForm(id, ticketId) {
 function renderPresuItemsSection() {
   const p = window._draftPre;
   const tipo = p.tipo;
-  const itemsLegend = tipo === "partes" ? "Partes a cotizar" : tipo === "equipos" ? "Equipo y conceptos" : tipo === "saas" ? "Ítems adicionales (opcional)" : "Ítems / servicios";
+  const itemsLegend = tipo === "partes" ? "Partes a cotizar" : tipo === "equipos" ? "Equipo y conceptos" : "Ítems / servicios";
+  const g = p.garantia || {};
   return `
     <fieldset><legend>${itemsLegend}</legend>
       <div class="items-list" id="preItems" data-tipo="${tipo}">${(p.items || []).map((it) => itemRow(tipo, it)).join("")}</div>
       <button type="button" class="btn sm" onclick="document.getElementById('preItems').insertAdjacentHTML('beforeend', itemRow(document.getElementById('preItems').dataset.tipo, {}));refrescarTotalesPresu()">+ Ítem</button>
     </fieldset>
-    <fieldset><legend>Servicios SaaS ${tipo === "saas" ? "" : "(add-on opcional)"}</legend>
-      <p class="hint" style="margin:0 0 8px">Abono mensual de Cryo / Gestión, con setup inicial si aplica. Se puede sumar a cualquier presupuesto.</p>
-      <div class="items-list" id="preSaas">${(p.saas || []).map(saasRow).join("")}</div>
-      <button type="button" class="btn sm" onclick="document.getElementById('preSaas').insertAdjacentHTML('beforeend', saasRow({}));refrescarTotalesPresu()">+ Servicio SaaS</button>
+    <fieldset><legend>Garantía</legend>
+      <p class="hint" style="margin:0 0 8px">Se imprime como <b>Anexo I</b> del presupuesto. Cubre el trabajo realizado o la parte provista; el texto estándar sale de las condiciones que ya se venían ofreciendo.</p>
+      <div class="check-row">${chk("Ofrecer garantía en este presupuesto", "garantia.aplica", g.aplica !== false)}</div>
+      <div class="form-grid" style="margin-top:10px">
+        ${inp("Plazo (días)", "garantia.dias", g.dias ?? 90, "", "number")}
+      </div>
+      <div class="field full" style="margin-top:10px">
+        <label>Texto propio (opcional — si se completa, reemplaza el anexo estándar)</label>
+        <textarea data-path="garantia.texto" rows="3" placeholder="Dejar vacío para usar las condiciones estándar de garantía.">${esc(g.texto || "")}</textarea>
+      </div>
     </fieldset>`;
 }
 function itemRow(tipo, it = {}) {
@@ -351,17 +367,7 @@ function itemRow(tipo, it = {}) {
     <button type="button" class="btn sm danger" aria-label="Quitar ítem" title="Quitar ítem" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
   </div>`;
 }
-function saasRow(x = {}) {
-  return `<div class="it-row it-saas">
-    <select data-sa="producto" style="max-width:150px"><option value="cryo" ${x.producto === "cryo" ? "selected" : ""}>Cryo</option><option value="gestion" ${x.producto === "gestion" ? "selected" : ""}>Gestión</option></select>
-    <input placeholder="Detalle (opcional)" data-sa="detalle" value="${esc(x.detalle || "")}">
-    <input type="number" placeholder="Abono/mes" data-sa="abonoMensual" value="${x.abonoMensual ?? ""}" style="max-width:110px">
-    <input type="number" placeholder="Meses" data-sa="meses" value="${x.meses ?? ""}" style="max-width:80px">
-    <input type="number" placeholder="Setup" data-sa="setup" value="${x.setup ?? ""}" style="max-width:100px">
-    <button type="button" class="btn sm danger" aria-label="Quitar ítem" title="Quitar ítem" onclick="this.parentElement.remove();refrescarTotalesPresu()">✕</button>
-  </div>`;
-}
-// Lee los ítems/SaaS del DOM al draft (para recomputar o antes de re-render).
+// Lee los ítems del DOM al draft (para recomputar o antes de re-render).
 function leerItemsPresu() {
   const p = window._draftPre;
   p.items = [...document.querySelectorAll("#preItems .it-row")].map((row) => {
@@ -373,10 +379,12 @@ function leerItemsPresu() {
     });
     return o;
   });
-  p.saas = [...document.querySelectorAll("#preSaas .it-row")].map((row) => {
-    const o = {};
-    row.querySelectorAll("[data-sa]").forEach((f) => (o[f.dataset.sa] = f.type === "number" ? (f.value === "" ? "" : Number(f.value)) : f.value));
-    return o;
+  // La garantía vive en la misma sección que los ítems, que se re-dibuja al
+  // cambiar el tipo. Sin leerla acá, cambiar de tipo borraba el plazo cargado.
+  p.garantia = p.garantia || {};
+  document.querySelectorAll("#pform [data-path^='garantia.']").forEach((f) => {
+    const k = f.dataset.path.split(".")[1];
+    p.garantia[k] = f.type === "checkbox" ? f.checked : f.type === "number" ? (f.value === "" ? "" : Number(f.value)) : f.value;
   });
 }
 function onTipoPresuChange(e) {
@@ -490,6 +498,8 @@ function renderPresupuestoHTML(m) {
       #printRoot table.tot tr.big td { font-weight:800; color:#ef8f03; font-size:14px; border-bottom:2px solid #645d56; }
       #printRoot p.intro { text-align:justify; margin:0 0 10px; }
       #printRoot .cond { font-size:11.5px; color:#645d56; }
+      #printRoot ul.notas { margin:6px 0 10px; padding-left:18px; font-size:12px; }
+      #printRoot ul.notas li { margin-bottom:3px; break-inside:avoid; }
       #printRoot .sign { margin-top:36px; display:flex; gap:40px; break-inside:avoid; }
       #printRoot .sign div { flex:1; border-top:1px solid #211c16; padding-top:6px; font-size:11px; }
       #printRoot .foot { margin-top:22px; color:#8c867d; font-size:10.5px; border-top:1px solid #e0dacf; padding-top:8px; break-inside:avoid; }
@@ -504,11 +514,15 @@ function renderPresupuestoHTML(m) {
     ${m.filasCliente.length ? `<table>${m.filasCliente.map(filaCli).join("")}</table>` : ""}
     <p class="intro">${m.intro}</p>
     ${m.tabla.rows.length ? `<h2>Detalle</h2>${tablaHTML(m.tabla)}` : ""}
-    ${m.saasTabla ? `<h2>Servicios SaaS</h2>${tablaHTML(m.saasTabla)}` : ""}
     <h2>Totales</h2>
     <table class="tot">${m.totales.map(([l, v, big]) => `<tr class="${big ? "big" : ""}"><td>${l}</td><td class="r">${v}</td></tr>`).join("")}</table>
     ${m.condiciones.length ? `<h2>Condiciones comerciales</h2><table class="eco">${m.condiciones.map(([l, v]) => `<tr><th style="width:28%">${l}</th><td class="cond">${v}</td></tr>`).join("")}</table>` : ""}
-    ${m.notas ? `<p style="font-size:12px;margin-top:10px"><b>Notas:</b> ${m.notas}</p>` : ""}
+    ${m.notas.length ? `<h2>Notas</h2><ul class="notas">${m.notas.map((n) => `<li>${n}</li>`).join("")}</ul>` : ""}
+    ${m.garantia ? `<h2>Anexo I · Garantía (${m.garantia.plazo})</h2>${
+      m.garantia.libre
+        ? `<p class="intro">${m.garantia.libre}</p>`
+        : `<table class="eco">${m.garantia.puntos.map(([l, v]) => `<tr><th style="width:26%">${l}</th><td class="cond">${v}</td></tr>`).join("")}</table>`
+    }` : ""}
     <div class="sign">
       <div><b>Por Nexolibre</b><br>Aclaración / cargo:</div>
       <div><b>Conformidad del Cliente · ${m.firmaCliente}</b><br>Aclaración / cargo:</div>

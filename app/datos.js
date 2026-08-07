@@ -274,7 +274,6 @@ const DEMO_PRESU = [
       { detalle: "Diagnóstico y reparación electrónica de bobina de RF", cantidad: 1, unitario: 3200 },
       { detalle: "Visita técnica y viáticos", cantidad: 1, unitario: 400 },
     ],
-    saas: [],
     economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15, formaPago: "50% anticipo, 50% contra entrega" },
     notas: "Registro de ejemplo. Los datos reales se cargan al conectar con el repositorio privado.",
     archivos: [], usuario: "demo", historialEstados: [{ estado: "borrador", fecha: "2026-02-12", usuario: "demo" }, { estado: "enviado", fecha: "2026-02-12", usuario: "demo" }],
@@ -285,7 +284,6 @@ const DEMO_PRESU = [
     items: [
       { detalle: "Gradient amplifier (reacondicionado)", sku: "GA-000", cantidad: 1, unitario: 18500, unitarioIntercambio: 12500, intercambio: true },
     ],
-    saas: [],
     economico: { moneda: "USD", ivaPct: 10.5, incluyeIVA: false, validezDias: 20, formaPago: "Contado" },
     notas: "Registro de ejemplo.", archivos: [], usuario: "demo", historialEstados: [{ estado: "borrador", fecha: "2026-03-01", usuario: "demo" }],
   },

@@ -364,7 +364,6 @@ async function armarPresupuestoDocx(D, m) {
   kids.push(P(m.intro, { size: 20, align: AlignmentType.JUSTIFIED, after: 160 }));
 
   if (m.tabla.rows.length) { kids.push(H2("Detalle")); kids.push(tabla(m.tabla)); }
-  if (m.saasTabla) { kids.push(H2("Servicios SaaS")); kids.push(tabla(m.saasTabla)); }
 
   // Totales (tabla a la derecha, dos columnas)
   kids.push(H2("Totales"));
@@ -389,7 +388,27 @@ async function armarPresupuestoDocx(D, m) {
     }));
   }
 
-  if (m.notas) kids.push(P(`<b>Notas:</b> ${m.notas}`, { size: 18, after: 120 }));
+  if (m.notas.length) {
+    kids.push(H2("Notas"));
+    for (const n of m.notas) kids.push(P(`· ${n}`, { size: 18, after: 60 }));
+  }
+
+  // Anexo de garantía. Va después de la firma en el papel? No: antes, para que
+  // lo que el cliente firma incluya la cobertura que se le prometió.
+  if (m.garantia) {
+    kids.push(H2(`Anexo I · Garantía (${m.garantia.plazo})`));
+    if (m.garantia.libre) {
+      kids.push(P(m.garantia.libre, { size: 18, align: AlignmentType.JUSTIFIED, after: 120 }));
+    } else {
+      kids.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: ["top", "bottom", "left", "right", "insideHorizontal", "insideVertical"].reduce((a, k) => (a[k] = { style: BorderStyle.SINGLE, size: 4, color: DC.line }, a), {}),
+        rows: m.garantia.puntos.map(([l, v]) => new TableRow({
+          children: [cellTxt(l, { w: 26, bg: DC.crema, strong: true }), cellTxt(v, { w: 74 })],
+        })),
+      }));
+    }
+  }
 
   // Firmas
   kids.push(new Paragraph({ text: "", spacing: { before: 400 } }));

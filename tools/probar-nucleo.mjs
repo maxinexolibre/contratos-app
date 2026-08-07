@@ -537,7 +537,9 @@ const presuViejo = (over = {}) => ({
   titulo: "Cold head", estado: "borrador", estadoOrigen: "No enviado",
   fecha: "2026-08-01", ticketId: "tk_1",
   cliente: { nombreComercial: "Centro Ejemplo", razonesSociales: [] },
-  items: [{ detalle: "Cold head", cantidad: 1, unitario: 18500 }], saas: [],
+  items: [{ detalle: "Cold head", sku: "", cantidad: 1, unitario: 18500,
+            intercambio: false, unitarioIntercambio: null }],
+  garantia: { aplica: true, dias: 90, texto: "" },
   economico: { moneda: "USD", ivaPct: 21, incluyeIVA: false, validezDias: 15,
                formaPago: "", descuentoPct: 0, recurrencia: "unica" },
   notas: "", archivos: [], usuario: "test", historialEstados: [], ...over,
@@ -560,6 +562,37 @@ prueba("traduce estados de ticket en ambas direcciones", () => {
   igual(AD.ticketANuevo(ticketViejo(), { indiceClientes: idx,
     presupuestos: [presuViejo({ estado: "enviado" })] }).estado, "EnNegociacion");
   igual(AD.ticketANuevo(ticketViejo({ estado: "ganado" }), ctx).estado, "Cerrado");
+});
+
+// El precio con intercambio y la garantía son campos que el adaptador ya
+// descartaba (o descartaría) en silencio. Los dos cambian plata o compromiso
+// asumido, así que van con prueba propia en las dos direcciones.
+prueba("conserva el precio con intercambio en el ida y vuelta", () => {
+  const idx = AD.indiceClientes(AD.clientesDesde({ tickets: [ticketViejo()] }));
+  const viejo = presuViejo({
+    items: [{ detalle: "Amplificador RF S-30", sku: "S30", cantidad: 1,
+              unitario: 34000, intercambio: true, unitarioIntercambio: 22900 }],
+  });
+  const nuevo = AD.presupuestoANuevo(viejo, { indiceClientes: idx });
+  igual(nuevo.items[0].unitarioIntercambio, 22900, "guarda el precio con intercambio");
+  cierto(nuevo.items[0].intercambio, "guarda que se toma el intercambio");
+  // Con intercambio rige ese precio, no el de lista: 22.900, no 34.000.
+  igual(nuevo.items[0].total, 22900, "el total usa el precio con intercambio");
+  igual(nuevo.total, 22900, "el total del presupuesto no cotiza el precio de lista");
+  const vuelta = AD.presupuestoAViejo(nuevo, {});
+  igual(vuelta.items[0].unitarioIntercambio, 22900, "la vuelta conserva el precio");
+  igual(vuelta.items[0].sku, "S30", "la vuelta conserva el SKU");
+});
+
+prueba("conserva la garantía acordada en el ida y vuelta", () => {
+  const idx = AD.indiceClientes(AD.clientesDesde({ tickets: [ticketViejo()] }));
+  const viejo = presuViejo({ garantia: { aplica: true, dias: 180, texto: "" } });
+  const nuevo = AD.presupuestoANuevo(viejo, { indiceClientes: idx });
+  igual(nuevo.garantia.dias, 180, "no vuelve al default de 90 días");
+  igual(AD.presupuestoAViejo(nuevo, {}).garantia.dias, 180, "la vuelta la conserva");
+  // Un presupuesto sin garantía explícita no puede quedar prometiendo una.
+  const sin = AD.presupuestoANuevo(presuViejo({ garantia: { aplica: false } }), { indiceClientes: idx });
+  igual(sin.garantia.aplica, false, "respeta que no se ofrezca garantía");
 });
 
 prueba("el ida y vuelta no pierde información", () => {
@@ -1153,8 +1186,10 @@ prueba("presupuesto: ida y vuelta sin pérdida", () => {
   const otraVez = AD.presupuestoANuevo(vuelta, ctx);
   igual(otraVez, nuevo, "estable en la segunda vuelta");
   igual(vuelta.pais, "CL", "el país sobrevive");
-  igual(vuelta.items, [{ detalle: "Cold head", cantidad: 1, unitario: 18500 }]);
+  igual(vuelta.items, [{ detalle: "Cold head", sku: "", cantidad: 1, unitario: 18500,
+                         intercambio: false, unitarioIntercambio: null }]);
   igual(vuelta.economico.moneda, "USD");
+  igual(vuelta.garantia.dias, 90, "la garantía sobrevive la vuelta");
 });
 
 prueba("ticket: ida y vuelta estable", () => {

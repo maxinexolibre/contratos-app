@@ -61,6 +61,15 @@ arranca la aplicación. Ese orden está en `index.html` y hay que respetarlo.
 Ticket → Presupuesto → Contrato para trabajos puntuales.
 Propuesta comercial → Contrato para acuerdos de mantenimiento (dos etapas).
 
+Tipos de presupuesto: **servicio** y **venta** (subtipo partes / intercambio /
+equipo). El SaaS de Gestión y Monitoreo Cryo **no se cotiza por presupuesto**:
+tiene documento propio. Como cobertura de un contrato sí existe
+(`saasMonitoreo` en `planes.js` y `contrato.js`) — son cosas distintas.
+
+El presupuesto lleva **Notas** (una por cada línea del campo) y un **Anexo I ·
+Garantía** de plazo configurable, 90 días por defecto, que se puede apagar por
+presupuesto o reemplazar por un texto propio.
+
 - **Todo se cotiza en USD** (o UF en Chile). La conversión a moneda local ocurre
   únicamente al facturar, y el tipo de cambio queda congelado en el comprobante.
 - Los importes **nunca se suman entre monedas**. Los KPIs devuelven mapas por
@@ -104,9 +113,14 @@ el equipo carga datos por la app mientras se trabaja.
 
 Cosas que ya rompieron y tienen prueba de regresión:
 
-- **Campo anidado sin propagar en el adaptador.** Pasó tres veces: `moneda` del
-  presupuesto, `condicionIVA`, `pais`. Al agregar un campo al esquema, revisá
-  `adaptador.js` en las **dos** direcciones.
+- **Campo anidado sin propagar en el adaptador.** Pasó cuatro veces: `moneda`
+  del presupuesto, `condicionIVA`, `pais` y `unitarioIntercambio` (este cotizaba
+  el precio de lista en una venta por intercambio: US$ 34.000 en lugar de
+  US$ 22.900). Al agregar un campo al esquema, revisá `adaptador.js` en las
+  **dos** direcciones y sumale una prueba de ida y vuelta.
+- **`null` que se vuelve `0` en la segunda vuelta.** `unitarioIntercambio: null`
+  significa "no se cotizó precio con intercambio"; `money(null)` da 0, que
+  significa "gratis". Usá `== null`, no `=== undefined`.
 - **KPI que lee de la raíz un campo anidado.** `p.canonMensual` vs
   `p.economico.canonMensual` — da cero en silencio.
 - **`cierreEstimado` dándose vuelta** en el ida y vuelta: hace que el ciclo de

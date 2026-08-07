@@ -283,14 +283,16 @@ const PRE_ABIERTOS = new Set(["borrador", "enviado", "negociacion"]);
 const PRE_PROB = { borrador: 0.2, enviado: 0.5, negociacion: 0.7, ganado: 1, perdido: 0 };
 // Tipos según el registro comercial real: Servicio y Venta. La Venta se
 // desglosa en subtipos para poder analizarla sin cambiar la nomenclatura.
+// El SaaS de Gestión y Monitoreo Cryo salió de acá: tiene su propio documento
+// comercial. Dejarlo como tipo de presupuesto significaba dos piezas distintas
+// vendiendo el mismo servicio.
 const PRE_TIPOS = {
   servicio: { label: "Servicio", requiereTicket: true },
   venta: { label: "Venta", requiereTicket: true },
-  saas: { label: "SaaS Cryo / Gestión", requiereTicket: false },
 };
 const PRE_SUBTIPOS = { "": "—", partes: "Partes", intercambio: "Partes por intercambio", equipo: "Equipo completo" };
 // Tipos viejos del sistema → tipos reales.
-const TIPO_VIEJO = { partes: ["venta", "partes"], equipos: ["venta", "equipo"] };
+const TIPO_VIEJO = { partes: ["venta", "partes"], equipos: ["venta", "equipo"], saas: ["servicio", ""] };
 function migrarPresupuesto(p) {
   p.cliente = p.cliente || {};
   const cl = p.cliente;
@@ -304,7 +306,14 @@ function migrarPresupuesto(p) {
   if (p.titulo == null) p.titulo = "";
   p.estado = p.estado || "borrador";
   p.items = Array.isArray(p.items) ? p.items : [];
-  p.saas = Array.isArray(p.saas) ? p.saas : [];
+  delete p.saas;
+  // Garantía: los presupuestos anteriores al anexo no la traen. Se asume la
+  // que se venía ofreciendo de hecho —90 días— en lugar de dejarlos sin
+  // ninguna, que sería prometer menos de lo que ya se prometía.
+  if (!p.garantia || typeof p.garantia !== "object") p.garantia = {};
+  if (p.garantia.aplica == null) p.garantia.aplica = true;
+  if (p.garantia.dias == null) p.garantia.dias = 90;
+  if (p.garantia.texto == null) p.garantia.texto = "";
   p.economico = p.economico || { moneda: "USD", ivaPct: 21, validezDias: 15 };
   if (p.economico.moneda == null) p.economico.moneda = "USD";
   if (p.economico.ivaPct == null) p.economico.ivaPct = 21;

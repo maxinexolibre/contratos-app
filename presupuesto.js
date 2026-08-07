@@ -4,11 +4,14 @@
    Misma idea que contrato.js: una sola fuente de verdad que consumen
    los dos renderizadores (documento en pantalla y descarga .docx).
 
-   Cuatro tipos de presupuesto:
+   Tres tipos de presupuesto:
      · servicio  — trabajo técnico, nace de un ticket
      · partes    — venta de partes, con precio con/sin intercambio
      · equipos   — venta de equipo MRI completo, por conceptos
-     · saas      — abono mensual de Cryo / Gestión + setup
+
+   El SaaS de Gestión y Monitoreo Cryo NO se cotiza acá: tiene su propio
+   documento. Lo que quedaba de ese tipo en la plantilla se quitó para que
+   no haya dos piezas comerciales compitiendo por el mismo servicio.
 
    Las cuentas viven en calcPresupuesto() para que dashboard y reportes
    usen exactamente los mismos números que el documento.
@@ -22,27 +25,24 @@ function unitarioEfectivo(it) {
   return Number(it.unitario) || 0;
 }
 
-// Cuentas del presupuesto. Separa lo que se cobra una vez (ítems + setup)
-// de lo recurrente (abono mensual de SaaS), porque conviven en un mismo doc.
+// Cuentas del presupuesto. Separa lo que se cobra una vez de lo recurrente
+// (el canon de un abono de mantenimiento), porque conviven en un mismo doc.
 function calcPresupuesto(p) {
   const eco = p.economico || {};
   const ivaPct = Number(eco.ivaPct ?? 21);
   const incl = !!eco.incluyeIVA;
   const items = p.items || [];
-  const saas = p.saas || [];
 
   const itemsNeto = items.reduce((s, it) => s + (Number(it.cantidad) || 0) * unitarioEfectivo(it), 0);
-  const setup = saas.reduce((s, x) => s + (Number(x.setup) || 0), 0);
   // Un presupuesto de abono (p. ej. mantenimiento) cotiza un valor MENSUAL:
   // sus ítems no son un pago único sino el canon que se factura cada mes.
   const esMensual = eco.recurrencia === "mensual";
   const descPct = Number(eco.descuentoPct) || 0;
-  const brutoUnaVez = (esMensual ? 0 : itemsNeto) + setup;
+  const brutoUnaVez = esMensual ? 0 : itemsNeto;
   const descuento = Math.round(brutoUnaVez * descPct / 100);
   const netoUnaVez = brutoUnaVez - descuento;
 
-  const abonoItems = esMensual ? Math.round(itemsNeto * (1 - descPct / 100)) : 0;
-  const abonoMensualNeto = saas.reduce((s, x) => s + (Number(x.abonoMensual) || 0), 0) + abonoItems;
+  const abonoMensualNeto = esMensual ? Math.round(itemsNeto * (1 - descPct / 100)) : 0;
 
   const ivaUnaVez = incl ? 0 : Math.round(netoUnaVez * ivaPct / 100);
   const ivaMensual = incl ? 0 : Math.round(abonoMensualNeto * ivaPct / 100);
@@ -108,7 +108,6 @@ function construirPresupuesto(p, opts = {}) {
     servicio: `A continuación se detalla el presupuesto por los servicios técnicos solicitados${p.ticketNumero ? ` (pedido ${esc(p.ticketNumero)})` : ""}. El presente comprende mano de obra e insumos indicados; toda tarea o repuesto no listado se cotiza por separado.`,
     partes: `A continuación se detalla el presupuesto por la provisión de las partes indicadas. Cuando corresponda, se consigna el precio de lista y el precio con intercambio de la parte usada (core). Los repuestos podrán ser nuevos, usados o reacondicionados según disponibilidad y contexto.`,
     equipos: `A continuación se detalla el presupuesto por la provisión del equipamiento indicado y los conceptos asociados (logística, instalación, puesta en marcha y capacitación según se detalle). La operación se rige por las condiciones comerciales al pie.`,
-    saas: `A continuación se detalla la propuesta de servicios <b>SaaS Nexolibre</b> de Gestión y Monitoreo, bajo modalidad de abono mensual, con el cargo inicial de implementación cuando corresponda.`,
   };
   const intro = introPorTipo[tipo] || introPorTipo.servicio;
 
@@ -138,23 +137,6 @@ function construirPresupuesto(p, opts = {}) {
     ];
   });
   const tabla = { head: cols, rows: itemRows };
-
-  // ---------- Tabla SaaS ----------
-  let saasTabla = null;
-  if ((p.saas || []).length) {
-    saasTabla = {
-      head: [
-        { t: "Servicio", w: 46 }, { t: "Abono mensual", w: 20, num: true },
-        { t: "Meses", w: 10, num: true }, { t: "Setup inicial", w: 24, num: true },
-      ],
-      rows: (p.saas || []).map((x) => [
-        { t: esc(x.detalle) || (SAAS_PRODUCTO[x.producto] || "Servicio SaaS") },
-        { t: money(x.abonoMensual, M), num: true },
-        { t: x.meses ? String(x.meses) : "—", num: true },
-        { t: x.setup ? money(x.setup, M) : "—", num: true },
-      ]),
-    };
-  }
 
   // ---------- Totales ----------
   const ivaLbl = `IVA ${cc.ivaPct}%`;
@@ -191,6 +173,46 @@ function construirPresupuesto(p, opts = {}) {
   condiciones.push(["Moneda", M === "USD" ? "Dólares estadounidenses (USD)" : "Pesos (ARS)"]);
   if (M === "USD") condiciones.push(["Conversión", "Los pagos en pesos se convierten al tipo de cambio vendedor del Banco de la Nación Argentina del día de la factura."]);
 
+  // ---------- Notas ----------
+  // Apartado propio, no un renglón al pie: acá van las aclaraciones de alcance
+  // (qué está incluido, qué se factura aparte) que antes se perdían en letra
+  // chica y después se discutían. Cada línea del texto es una nota.
+  const notas = (p.notas || "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*[-·•*]\s*/, "").trim())
+    .filter(Boolean)
+    .map((l) => esc(l));
+  if (plantilla && !notas.length) notas.push("[nota de alcance, si corresponde]");
+
+  // ---------- Anexo · Garantía ----------
+  const gar = p.garantia || {};
+  // El default vive en el esquema; acá solo se decide si el anexo se imprime.
+  const aplicaGar = gar.aplica === undefined
+    ? (tipo === "servicio" || tipo === "partes" || tipo === "equipos")
+    : !!gar.aplica;
+  let garantia = null;
+  if (aplicaGar) {
+    const dias = Number(gar.dias) || 90;
+    const enLetras = { 30: "treinta", 60: "sesenta", 90: "noventa", 180: "ciento ochenta", 365: "trescientos sesenta y cinco" }[dias];
+    const plazo = enLetras ? `${enLetras} (${dias}) días` : `${dias} días`;
+    // Lo que se entrega es un trabajo o una parte, según el tipo. Nombrarlo
+    // bien evita prometer garantía sobre algo que no se proveyó.
+    const objeto = tipo === "servicio" ? "del trabajo realizado" : "de la parte provista";
+    garantia = {
+      plazo,
+      // Un texto propio pisa el estándar, para el caso puntual que lo pida.
+      libre: gar.texto ? esc(gar.texto) : "",
+      puntos: gar.texto ? [] : [
+        ["Plazo", `${plazo[0].toUpperCase()}${plazo.slice(1)} contados desde la fecha de entrega del equipo operativo.`],
+        ["Cobertura", `Cubre únicamente desperfectos y defectos ${objeto} por Nexolibre, dentro del plazo indicado.`],
+        ["Limitaciones", "No se cubren daños causados por mal uso, abuso, negligencia, accidentes, alteraciones no autorizadas, falta de mantenimiento, uso incorrecto ni desgaste natural."],
+        ["Reclamo", "Para reclamar la garantía debe presentarse una descripción detallada del problema dentro del período de vigencia."],
+        ["Evaluación y resolución", "Nexolibre evalúa el reclamo para determinar si está cubierto. De estarlo, repara o reemplaza la parte defectuosa sin costo adicional. Si la reparación no resulta posible, se considera un reemplazo equivalente y, en su caso, un nuevo presupuesto."],
+        ["Exclusiones", "Quedan excluidos el desgaste normal, los daños por caso fortuito o fuerza mayor (incendio, inundación, sismo y similares) y las reparaciones o modificaciones efectuadas por terceros no autorizados."],
+      ],
+    };
+  }
+
   return {
     plantilla, tipo, tipoLabel, kicker,
     etiqueta: "Presupuesto",
@@ -198,18 +220,12 @@ function construirPresupuesto(p, opts = {}) {
     titulo: esc(p.titulo) || tipoLabel,
     subtitulo: "Presupuesto comercial · Ingeniería médica MRI / CT",
     numeroTxt: numero || "",
-    filasCliente, intro, tabla, saasTabla, totales, condiciones,
-    notas: p.notas ? esc(p.notas) : "",
+    filasCliente, intro, tabla, totales, condiciones,
+    notas, garantia,
     moneda: M,
     firmaCliente: esc(rsp.razonSocial || nombreCliente(p)) || (plantilla ? "[razón social]" : ""),
     pie: "Este presupuesto no constituye contrato. Su aceptación se perfecciona con la orden de compra o conformidad escrita del Cliente.",
   };
 }
 
-// Etiqueta pública de los productos SaaS.
-const SAAS_PRODUCTO = {
-  cryo: "SaaS Cryo — monitoreo criogénico de la base instalada",
-  gestion: "SaaS de Gestión — gestión de servicio y base instalada",
-};
-
-window.NEXO_PRESUPUESTO = { construirPresupuesto, calcPresupuesto, unitarioEfectivo, SAAS_PRODUCTO };
+window.NEXO_PRESUPUESTO = { construirPresupuesto, calcPresupuesto, unitarioEfectivo };

@@ -167,7 +167,9 @@
       estado: PRESU_ESTADO_A_NUEVO[p.estado] || "Borrador",
       estadoOrigen: p.estadoOrigen,
       items: p.items || [],
-      saas: p.saas || [],
+      // La garantía va entera: si se pierde, el presupuesto vuelve al default
+      // de 90 días y se promete una cobertura que no es la que se acordó.
+      garantia: p.garantia,
       economico: p.economico || {},
       notas: p.notas,
       archivos: p.archivos || [],
@@ -273,9 +275,10 @@
       ticketNumero: ctx.ticketNumero || "",
       cliente: bloqueCliente(p.clienteId, ctx.clientes),
       items: p.items.map((i) => ({
-        detalle: i.detalle, cantidad: i.cantidad, unitario: i.unitario,
+        detalle: i.detalle, sku: i.sku, cantidad: i.cantidad, unitario: i.unitario,
+        intercambio: i.intercambio, unitarioIntercambio: i.unitarioIntercambio,
       })),
-      saas: p.saas,
+      garantia: p.garantia,
       economico: p.economico,
       notas: p.notas,
       archivos: p.archivos,

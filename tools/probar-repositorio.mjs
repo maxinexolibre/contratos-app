@@ -127,7 +127,7 @@ for (let i = 0; i < 40; i++) {
     id: pid, numero: `P${mes.replace("-", "")}${i}`, tipo: "servicio", subtipo: "",
     titulo: `Presupuesto ${i}`, estado: ["borrador", "enviado", "ganado", "perdido"][i % 4],
     estadoOrigen: "", fecha, ticketId: id, cliente, pais: ["AR", "CL", "CO", "UY", "US"][i % 5],
-    items: [{ detalle: "Ítem", cantidad: 1, unitario: 1000 + i * 10 }], saas: [],
+    items: [{ detalle: "Ítem", cantidad: 1, unitario: 1000 + i * 10 }],
     economico: { moneda: "USD", validezDias: 15, descuentoPct: 0, recurrencia: "unica", ivaPct: 21, incluyeIVA: false },
     notas: "", archivos: [], usuario: "demo", historialEstados: [],
   });

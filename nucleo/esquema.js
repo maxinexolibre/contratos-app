@@ -214,17 +214,41 @@
         const items = esLista(r.items).map((i) => {
           const cantidad = esNumero(i.cantidad, 1);
           const unitario = money(i.unitario ?? i.precioUnitario);
+          // Venta por intercambio: el cliente entrega la parte usada (core) y
+          // rige el precio con intercambio. Sin guardar estos dos campos el
+          // documento cotizaba el precio de lista y se facturaba de más.
+          const intercambio = esBool(i.intercambio);
+          // null significa "no se cotizó precio con intercambio". Tratarlo como
+          // 0 haría que un ítem marcado como intercambio se cotice en cero.
+          const unitarioIntercambio = i.unitarioIntercambio == null || i.unitarioIntercambio === ""
+            ? null
+            : money(i.unitarioIntercambio);
+          const efectivo = intercambio && unitarioIntercambio != null ? unitarioIntercambio : unitario;
           return {
             detalle: esTexto(i.detalle || i.concepto),
+            sku: esTexto(i.sku),
             cantidad,
             unitario,
-            total: money(cantidad * unitario),
+            intercambio,
+            unitarioIntercambio,
+            total: money(cantidad * efectivo),
           };
         });
-        const saas = esLista(r.saas).map((s) => ({
-          producto: esTexto(s.producto),
-          abonoMensual: money(s.abonoMensual),
-        }));
+        const tipoPre = esTexto(r.tipo) || "servicio";
+
+        // Garantía ofrecida. Aplica a la reparación y a la venta de partes:
+        // son los dos casos donde el cliente recibe un trabajo o un componente
+        // que puede fallar. Un abono mensual no la lleva —la cobertura ya está
+        // en el contrato—, así que arranca apagada para lo recurrente.
+        const g = r.garantia || {};
+        const garantia = {
+          aplica: g.aplica === undefined
+            ? (tipoPre === "servicio" || tipoPre === "venta")
+            : esBool(g.aplica),
+          dias: esNumero(g.dias, 90),
+          // Permite pisar el texto estándar en un caso puntual sin tocar código.
+          texto: esTexto(g.texto),
+        };
 
         const eco = r.economico || {};
         const moneda = esTexto(eco.moneda) || "USD";
@@ -248,7 +272,7 @@
           fecha: f,
           validezDias,
           vence: sumarDias(f, validezDias),
-          tipo: esTexto(r.tipo) || "servicio",
+          tipo: tipoPre,
           subtipo: esTexto(r.subtipo),
           titulo: esTexto(r.titulo),
           clienteId: esTexto(r.clienteId),
@@ -264,7 +288,7 @@
           // Se conserva el estado tal como lo llevaba el usuario en su planilla.
           estadoOrigen: esTexto(r.estadoOrigen),
           items,
-          saas,
+          garantia,
           economico: {
             moneda,
             recurrencia,

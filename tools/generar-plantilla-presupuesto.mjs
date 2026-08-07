@@ -11,7 +11,19 @@ const ctx = {
 };
 ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = () => {};
 vm.createContext(ctx);
-for (const f of ["config.js", "brand.js", "planes.js", "contrato.js", "presupuesto.js", "app.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), ctx, { filename: f });
+// Mismo orden que index.html: los archivos de app/ comparten ámbito global y
+// las constantes declaradas antes tienen que existir cuando se cargan los de
+// después. app.js se dividió en módulos; cargar el archivo viejo ya no anda.
+const FUENTES = [
+  "config.js",
+  "nucleo/esquema.js", "nucleo/permisos.js", "nucleo/reglas.js", "nucleo/kpi.js",
+  "nucleo/almacen.js", "nucleo/adaptador.js", "nucleo/cambio.js",
+  "nucleo/comisiones.js", "nucleo/repositorio.js", "nucleo/tabla.js",
+  "brand.js", "planes.js", "contrato.js", "presupuesto.js",
+  "app/base.js", "app/datos.js", "app/chrome.js", "app/contratos.js",
+  "app/tickets.js", "app/presupuestos.js",
+];
+for (const f of FUENTES) vm.runInContext(fs.readFileSync(f, "utf8"), ctx, { filename: f });
 vm.runInContext(fs.readFileSync("vendor/docx.iife.js", "utf8"), ctx, { filename: "docx.iife.js" });
 vm.runInContext("window.docx = docx;", ctx);
 vm.runInContext(fs.readFileSync("docgen.js", "utf8"), ctx, { filename: "docgen.js" });
@@ -23,7 +35,7 @@ const blob = await vm.runInContext(`(async()=>{
     tipo:"servicio", numero:"", fecha:"",
     cliente:{ nombreComercial:"", razonesSociales:[{razonSocial:"",cuit:"",domicilio:"",principal:true}], contacto:"", localidad:"", provincia:"" },
     items:[ {detalle:"", cantidad:"", unitario:""}, {detalle:"", cantidad:"", unitario:""} ],
-    saas:[ {producto:"cryo", detalle:"", abonoMensual:"", meses:"", setup:""} ],
+    garantia:{ aplica:true, dias:90, texto:"" },
     economico:{ moneda:"USD", ivaPct:21, incluyeIVA:false, validezDias:"", formaPago:"" },
     notas:""
   };
