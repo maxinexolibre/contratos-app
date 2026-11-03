@@ -547,3 +547,37 @@ table.aj-hist tr:last-child td { border-bottom: 0; }
   .ws-switch { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .ws-switch button { flex: 0 0 auto; }
 }
+
+/* ---------- Catálogo · carga rápida (celular) ----------
+   Se usa parado en el depósito con una mano: todo lo tocable mide 48px o
+   más y los inputs van a 16px, porque con menos iOS hace zoom al enfocar y
+   descoloca la pantalla. */
+.rapida { max-width: 640px; margin: 0 auto; padding-bottom: 96px; }
+.rapida-cab { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 8px; }
+.rapida-cab h2 { margin: 0; font-family: var(--head); }
+.rapida-bloque { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+.rapida-bloque h3 { margin: 0 0 10px; font-family: var(--head); font-size: 15px; }
+.rapida-bloque > label { display: block; font-size: 12px; font-weight: 600; color: var(--mut); margin: 12px 0 6px; }
+.rapida-bloque .field { margin-top: 12px; }
+.rapida-botones { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
+.btn.grande { min-height: 52px; font-size: 16px; display: inline-flex; align-items: center; justify-content: center; }
+.rapida input.grande, .rapida textarea { width: 100%; min-height: 48px; font-size: 16px; box-sizing: border-box; }
+#rPN, #rSN { font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .04em; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px;
+  border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink); cursor: pointer;
+}
+.chip.on { background: var(--orange); border-color: var(--orange); color: #fff; font-weight: 600; }
+#rCandidatos .chip { font-family: ui-monospace, Menlo, Consolas, monospace; }
+#rMarcaOtra { margin-top: 8px; }
+.rapida-subiendo { display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--mut); }
+.rapida-pie {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -8px 20px -12px rgba(0,0,0,.25);
+}
+@media (min-width: 721px) { .rapida-pie { left: 50%; transform: translateX(-50%); max-width: 640px; border-radius: var(--radius) var(--radius) 0 0; } }
+.rapida .btn.grande { white-space: nowrap; gap: 6px; }
+#rPN, #rSN { text-transform: uppercase; }

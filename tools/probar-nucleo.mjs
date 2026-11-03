@@ -1570,6 +1570,26 @@ prueba("catálogo · duplicados: queda la ref más baja, el resto de baja", () =
   igual(CAT.planDesdeAuditoria([], items).plan.size, 0, "sin la opción no toca duplicados");
 });
 
+prueba("catálogo · etiqueta: PN y SN detrás de sus rótulos, con errores típicos de OCR", () => {
+  const r = CAT.leerEtiqueta("MARCA X MEDICAL\nP/N: 2217680-2 REV 5\nS/N 36528ABC\nMade in USA 2016");
+  igual([r.pn, r.sn], ["2217680-2", "36528ABC"]);
+  const ocr = CAT.leerEtiqueta("PIN 453530252282\nSerial No. a2552210");
+  igual([ocr.pn, ocr.sn], ["453530252282", "A2552210"]);
+  cierto(CAT.leerEtiqueta("REF 10185453").pn === "10185453", "REF cuenta como PN");
+});
+
+prueba("catálogo · etiqueta sin rótulos: solo candidatos con dígitos", () => {
+  const r = CAT.leerEtiqueta("COIL ARRAY 5341333 HEAD 16CH 2016");
+  igual([r.pn, r.sn], ["", ""]);
+  igual(r.candidatos, ["5341333", "16CH", "2016"]);
+});
+
+prueba("catálogo · nombre sugerido", () => {
+  igual(CAT.nombreSugerido({ marca: "GE", categoria: "Bobina", modalidad: "MRI", nroParte: "2217680" }),
+    "GE Bobina MRI · 2217680");
+  igual(CAT.nombreSugerido({}), "");
+});
+
 // ===========================================================================
 
 console.log(`\n  ${pasadas} pasadas · ${fallidas} fallidas\n`);
