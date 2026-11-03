@@ -36,7 +36,7 @@
   /** El resto ya nace en modelo v3: no necesita traducción. */
   const NATIVAS = ["clientes", "propuestas", "campanas", "estrategias", "leads",
     "facturaciones", "tiposCambio", "vendedores", "acuerdosComision", "comisiones",
-    "usuarios"];
+    "usuarios", "catalogo"];
 
   /** Estado viejo de un registro de contrato → estado de propuesta. */
   const ESTADO_PROPUESTA = {

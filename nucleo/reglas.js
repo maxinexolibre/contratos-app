@@ -62,6 +62,10 @@
     // Propuestas
     "NX-070": "La propuesta ya generó un contrato",
     "NX-071": "La propuesta todavía no fue aceptada",
+    // Catálogo
+    "NX-080": "La referencia ya existe en el catálogo",
+    "NX-081": "Referencia con formato inválido",
+    "NX-082": "La referencia publicada no se puede cambiar",
   };
 
   const fallar = (codigo, detalle, sugerencia) => {
@@ -452,6 +456,30 @@
     return true;
   }
 
+  /** Formato de referencia: NX-AR-001. El par de letras es el país o XX. */
+  const REF_CATALOGO = /^NX-[A-Z]{2}-\d{3,}$/;
+
+  function validarCatalogo(nuevo, anterior, ctx) {
+    if (!nuevo.nombre) fallar("NX-040", "El ítem necesita un nombre");
+    if (!nuevo.ref) fallar("NX-040", "El ítem necesita una referencia");
+    if (!REF_CATALOGO.test(nuevo.ref)) {
+      fallar("NX-081", `"${nuevo.ref}" no es una referencia válida`, "Usá el formato NX-AR-001");
+    }
+    // La referencia es la que el cliente manda por WhatsApp y el SKU de
+    // DOTmed: dos ítems con la misma hacen que la consulta llegue ambigua.
+    const dup = (ctx.catalogo || []).find((x) => x.id !== nuevo.id && x.ref === nuevo.ref);
+    if (dup) fallar("NX-080", `La referencia ${nuevo.ref} ya es de "${dup.nombre}"`);
+
+    // Una vez que la foto está en la web, el nombre del archivo lleva la ref:
+    // cambiarla deja huérfanas las fotos y rompe los links que ya circulan.
+    if (anterior && anterior.ref !== nuevo.ref && anterior.fotos.some((f) => f.publicada)) {
+      fallar("NX-082", `${anterior.ref} ya está publicada`, "Creá un ítem nuevo si es otra pieza");
+    }
+    if (nuevo.precio != null && nuevo.precio < 0) fallar("NX-040", "El precio no puede ser negativo");
+    if (nuevo.costo != null && nuevo.costo < 0) fallar("NX-040", "El costo no puede ser negativo");
+    return true;
+  }
+
   function validarAcuerdoComision(nuevo, anterior, ctx) {
     const C = global.NEXO_COMISIONES;
     if (nuevo.alcance === "Vendedor") {
@@ -562,6 +590,7 @@
   const VALIDADORES = {
     propuestas: validarPropuesta,
     vendedores: validarVendedor,
+    catalogo: validarCatalogo,
     acuerdosComision: validarAcuerdoComision,
     comisiones: validarComision,
     tickets: validarTicket,
@@ -671,6 +700,6 @@
   global.NEXO_REGLAS = {
     ErrorNexo, CODIGOS, validar, efectos,
     TRANSICION_TICKET, TRANSICION_PRESUPUESTO, TRANSICION_CAMPANA, TRANSICION_PROPUESTA,
-    TC_DIAS_TOLERANCIA,
+    TC_DIAS_TOLERANCIA, REF_CATALOGO,
   };
 })(typeof window !== "undefined" ? window : globalThis);

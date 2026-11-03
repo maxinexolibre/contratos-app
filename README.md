@@ -20,6 +20,20 @@ tablero, pipeline, cobertura visual, vencimientos/aumentos, PDF de marca y expor
    solo `contratos-data`, permiso *Contents: Read and write*) y pegalo.
 3. Listo: ves y editás los datos reales desde cualquier dispositivo.
 
+## Catálogo de la web
+
+El área **Catálogo** administra las partes y equipos a la venta y publica el
+catálogo de nexolibre.com (antes salía de una lista de SharePoint).
+
+- La primera vez, **Importar el catálogo actual de la web** trae lo que hoy se
+  muestra. Todo entra pendiente de auditoría; la pestaña **Auditoría** sirve para
+  confirmar qué sigue disponible.
+- **Publicar en la web** muestra qué aparece, qué desaparece y qué cambia, y
+  recién ahí escribe `parts.json` en el repo de la web.
+- Para publicar hace falta un token con *Contents: Read and write* sobre
+  `nexolibre/nexolibre`. Si el token de la app no lo tiene (los fine-grained
+  valen para un solo dueño), la app pide uno aparte la primera vez.
+
 ## Configuración
 
 `config.js` define el owner y el repo de datos. Editar solo si cambian esos valores.

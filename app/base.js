@@ -17,7 +17,7 @@ const LS = {
   tema: "nexo_tema",
 };
 // Subir esto invalida la copia demo guardada en el navegador.
-const DEMO_VERSION = "9";
+const DEMO_VERSION = "10";
 
 // -------- estado global --------
 const state = {
@@ -39,6 +39,7 @@ const state = {
   vendedores: [], vendedoresSha: null,
   acuerdosComision: [], acuerdosSha: null,
   comisiones: [], comisionesSha: null,
+  catalogo: [], catalogoSha: null,
   rol: "admin",      // sin servidor el rol es preferencia de interfaz, no permiso real
   // País activo en los tableros. "" = consolidado. Cada país tiene su moneda,
   // sus impuestos y sus acuerdos, así que el corte por país no es cosmético:

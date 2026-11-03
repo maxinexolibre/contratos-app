@@ -138,6 +138,19 @@
       marketing:              { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
       admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
     },
+    /**
+     * Catálogo de partes y equipos a la venta. Cargan dirección, gerencia
+     * comercial y admin (definición de Maxi, 2026-11-03); el resto lo consulta
+     * para cotizar. Publicar en la web es una capacidad aparte.
+     */
+    catalogo: {
+      vendedor:               { crear: null, leer: "todos", editar: null, borrar: null },
+      gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: null },
+      gerente_administrativo: { crear: null, leer: "todos", editar: null, borrar: null },
+      direccion:              { crear: "todos", leer: "todos", editar: "todos", borrar: null },
+      marketing:              { crear: null, leer: "todos", editar: null, borrar: null },
+      admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
+    },
   };
 
   /**
@@ -160,6 +173,9 @@
     ver_reportes: ["gerente_comercial", "gerente_administrativo", "direccion", "marketing", "admin"],
     configurar_umbrales: ["direccion", "admin"],
     administrar_usuarios: ["admin"],
+    // Publicar reescribe el catálogo de nexolibre.com: lo que se ve en la web
+    // pasa por una de estas dos personas (definición de Maxi, 2026-11-03).
+    publicar_catalogo: ["direccion", "admin"],
   };
 
   /** Áreas de trabajo visibles por rol. Define también dónde aterriza cada uno. */

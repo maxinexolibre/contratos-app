@@ -532,3 +532,18 @@ table.aj-hist tr:last-child td { border-bottom: 0; }
   .visor-doc { padding: 20px 18px; margin: 10px; }
   .visor-pdf { height: 70vh; }
 }
+
+/* ---- Catálogo de partes y equipos ---- */
+.cat-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); display: block; }
+.cat-sinfoto { display: block; }
+.cat-fotos { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-top: 12px; }
+.cat-foto { display: flex; flex-direction: column; gap: 4px; }
+.cat-foto-img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); }
+.cat-foto-pie { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+
+/* Con cinco áreas el selector no entra en un celular: se desplaza en vez de
+   ensanchar toda la página. */
+@media (max-width: 720px) {
+  .ws-switch { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .ws-switch button { flex: 0 0 auto; }
+}

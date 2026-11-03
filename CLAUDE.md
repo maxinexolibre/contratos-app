@@ -24,6 +24,7 @@ contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
 | Comisiones, acuerdos, reparto interno | `nucleo/comisiones.js` | 5k |
 | Capa de datos de la app sobre el almacén | `nucleo/repositorio.js` | 3k |
 | Filtros, paginación, CSV, selector de país | `nucleo/tabla.js` | 2k |
+| Catálogo de partes/equipos: parts.json, importación, auditoría | `nucleo/catalogo.js` | 4k |
 | Estado global, constantes, fechas, migraciones | `app/base.js` | 4k |
 | API de GitHub, stores, persistencia, demo | `app/datos.js` | 4k |
 | Arranque, router, navegación, tema | `app/chrome.js` | 2k |
@@ -32,6 +33,7 @@ contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
 | Pantallas de presupuestos | `app/presupuestos.js` | 9k |
 | Tableros, gráficos, reportes | `app/tableros.js` | 7k |
 | Propuestas, facturación, marketing, vendedores | `vistas/*.js` | 6–8k c/u |
+| Catálogo: pantallas y publicación en nexolibre.com | `vistas/catalogo.js` | 9k |
 
 **Empezá por la tabla, no por una búsqueda.** El repo entero son ~176 mil
 tokens; leer el archivo correcto cuesta entre 2k y 17k.
@@ -80,6 +82,21 @@ presupuesto o reemplazar por un texto propio.
 Países: AR · CL · CO · UY · US.
 
 ---
+
+## Catálogo de partes y equipos
+
+Reemplaza a la lista de SharePoint. Los ítems viven en `contratos-data`
+(`data/v3/catalogo.json`) y el botón **Publicar** escribe `parts.json` y las
+fotos nuevas en el repo **público** `nexolibre/nexolibre`, en un solo commit.
+
+- `aParte()` en `nucleo/catalogo.js` es una **lista blanca**. Costo, proveedor,
+  N° de serie y notas nunca salen. Un campo nuevo no se publica hasta que se
+  agrega ahí, y hay prueba que lo controla.
+- `parts.json` conserva la forma que escribía SharePoint: de ella dependen
+  `catalog.js`, `pseo_build.py`, el PDF y el bot de DOTmed.
+- Las fotos sin publicar quedan en `data/v3/catalogo-fotos/` del repo privado.
+- `NEXO_CATALOGO` (planes.js) es el catálogo comercial de planes; el de partes
+  es `NEXO_CATALOGO_PARTES`.
 
 ## Convenciones
 

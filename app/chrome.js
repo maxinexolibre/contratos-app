@@ -66,6 +66,7 @@ const SUBNAV = {
   presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["facturacion", "Facturación"], ["reportes", "Reportes"]],
   marketing: [["mktablero", "Tablero"], ["campanas", "Campañas"], ["leads", "Leads"], ["canales", "Canales"]],
   equipo: [["vendedores", "Vendedores"], ["comisiones", "Comisiones"]],
+  catalogo: [["catalogo", "Catálogo"], ["catauditoria", "Auditoría"], ["catpublicar", "Publicar en la web"]],
 };
 // A qué área pertenece cada vista/ruta.
 const VIEW_WS = {
@@ -77,8 +78,9 @@ const VIEW_WS = {
   mktablero: "marketing", campanas: "marketing", campdetalle: "marketing", campform: "marketing",
   leads: "marketing", leadform: "marketing", canales: "marketing",
   vendedores: "equipo", vnddetalle: "equipo", vndform: "equipo", comisiones: "equipo",
+  catalogo: "catalogo", catform: "catalogo", catauditoria: "catalogo", catpublicar: "catalogo",
 };
-const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero", marketing: "mktablero", equipo: "vendedores" };
+const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero", marketing: "mktablero", equipo: "vendedores", catalogo: "catalogo" };
 
 function router() {
   const view = (location.hash.replace("#", "") || "dashboard").split("/");
@@ -172,6 +174,7 @@ function refrescarBotonTema() {
 
 // El botón "+ Nuevo" crea la entidad del área activa.
 function nuevoDesdeContexto() {
+  if (state.ws === "catalogo") return go("catform/new");
   return go(state.ws === "presupuestos" ? "presuform/new" : "form/new");
 }
 
