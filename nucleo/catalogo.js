@@ -325,10 +325,104 @@
     }
   }
 
+  // --------------------------------------------------------------------------
+  // Resultado de una auditoría hecha afuera (planilla CSV)
+  // --------------------------------------------------------------------------
+
+  /** CSV con comillas dobles (RFC 4180). Devuelve objetos por encabezado. */
+  function leerCsv(texto) {
+    const filas = [];
+    let fila = [], campo = "", comillas = false;
+    const t = String(texto || "").replace(/^\uFEFF/, "");
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (comillas) {
+        if (c === '"' && t[i + 1] === '"') { campo += '"'; i++; }
+        else if (c === '"') comillas = false;
+        else campo += c;
+      } else if (c === '"') comillas = true;
+      else if (c === ",") { fila.push(campo); campo = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && t[i + 1] === "\n") i++;
+        fila.push(campo); campo = "";
+        if (fila.some((x) => x !== "")) filas.push(fila);
+        fila = [];
+      } else campo += c;
+    }
+    fila.push(campo);
+    if (fila.some((x) => x !== "")) filas.push(fila);
+    const [cab, ...resto] = filas;
+    if (!cab) return [];
+    const claves = cab.map((x) => x.trim().toLowerCase());
+    return resto.map((f) => Object.fromEntries(claves.map((k, i) => [k, (f[i] ?? "").trim()])));
+  }
+
+  const claveNombre = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  /**
+   * Convierte el resultado de una auditoría externa (ref, resultado, link,
+   * nota) en decisiones para la bandeja. No guarda nada: la bandeja las
+   * muestra marcadas y una persona las confirma.
+   *
+   *   DISPONIBLE / ALTERNATIVA → a pedido, con el link donde se consigue
+   *   NO_ENCONTRADA            → baja
+   *   DUDOSA / PENDIENTE       → no se toca: sigue pendiente
+   *
+   * Con `bajaDuplicados`, de cada grupo de ítems con el mismo nombre queda el
+   * de referencia más baja y el resto se da de baja. SharePoint acumuló la
+   * misma oportunidad de eBay con dos y tres refs, y en la web se veía repetida.
+   */
+  function planDesdeAuditoria(filas, items, { bajaDuplicados = false } = {}) {
+    const porRef = new Map((items || []).map((x) => [x.ref, x]));
+    const plan = new Map();
+    const omitidas = [];
+    for (const f of filas || []) {
+      const item = porRef.get(String(f.ref || "").trim().toUpperCase());
+      if (!item) { omitidas.push(f.ref); continue; }
+      const r = String(f.resultado || "").toUpperCase();
+      const nota = [r, f.precio_usd && `US$ ${f.precio_usd}`, f.nota].filter(Boolean).join(" · ");
+      if (r === "DISPONIBLE" || r === "ALTERNATIVA") {
+        plan.set(item.id, { decision: "pedido", origenUrl: esUrl(f.link) ? f.link : "", nota });
+      } else if (r === "NO_ENCONTRADA") {
+        plan.set(item.id, { decision: "baja", origenUrl: "", nota });
+      }
+    }
+    if (bajaDuplicados) {
+      const grupos = new Map();
+      for (const x of items || []) {
+        if (["Baja", "Vendido"].includes(x.disponibilidad)) continue;
+        // Solo terceros: en stock propio dos ítems con el mismo nombre son dos
+        // unidades físicas distintas (otro N° de serie), no un duplicado.
+        if (x.procedencia !== "Terceros") continue;
+        const k = claveNombre(x.nombre);
+        if (!k) continue;
+        if (!grupos.has(k)) grupos.set(k, []);
+        grupos.get(k).push(x);
+      }
+      for (const grupo of grupos.values()) {
+        if (grupo.length < 2) continue;
+        grupo.sort((a, b) => a.ref.localeCompare(b.ref, "es", { numeric: true }));
+        const [queda, ...repetidos] = grupo;
+        for (const x of repetidos) {
+          // Solo se bajan duplicados de algo que sigue: si el original también
+          // se da de baja, no hace falta una segunda razón.
+          const previo = plan.get(x.id);
+          plan.set(x.id, {
+            decision: "baja", origenUrl: previo?.origenUrl || "",
+            nota: `Duplicado de ${queda.ref}${previo?.nota ? ` · ${previo.nota}` : ""}`,
+          });
+        }
+      }
+    }
+    return { plan, omitidas };
+  }
+
   global.NEXO_CATALOGO_PARTES = {
     PUBLICABLES, CONDICION_TEXTO, DISPONIBILIDAD_TEXTO,
     textoAPrecio, precioATexto, proximaRef, nombreFoto, esUrl,
     esPublicable, aParte, aParts, fotosPorSubir, diferencias,
     desdeParte, importar, resumen, filtrar, auditar,
+    leerCsv, planDesdeAuditoria,
   };
 })(typeof window !== "undefined" ? window : globalThis);

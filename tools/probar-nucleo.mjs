@@ -1532,6 +1532,44 @@ prueba("catálogo · permisos: el vendedor consulta, no carga; publica direcció
     [true, true, false]);
 });
 
+prueba("catálogo · CSV con comillas, comas y comillas escapadas", () => {
+  const filas = CAT.leerCsv('ref,nombre,nota\r\nNX-AR-001,"Bobina, 8ch","dice ""ok"""\nNX-AR-002,Simple,\n');
+  igual(filas.length, 2);
+  igual([filas[0].nombre, filas[0].nota, filas[1].nota], ["Bobina, 8ch", 'dice "ok"', ""]);
+});
+
+prueba("catálogo · auditoría externa: disponible a pedido, no encontrada de baja, dudosa intacta", () => {
+  const items = ["NX-XX-001", "NX-XX-002", "NX-XX-003", "NX-XX-004"].map((ref, i) =>
+    itemBase({ id: `c${i}`, ref, nombre: `Pieza ${i}`, disponibilidad: "APedido" }));
+  const filas = [
+    { ref: "NX-XX-001", resultado: "DISPONIBLE", link: "https://ejemplo.invalid/itm/1", precio_usd: "100" },
+    { ref: "NX-XX-002", resultado: "NO_ENCONTRADA" },
+    { ref: "NX-XX-003", resultado: "DUDOSA", link: "https://ejemplo.invalid/itm/3" },
+    { ref: "NX-XX-999", resultado: "DISPONIBLE" },
+  ];
+  const { plan, omitidas } = CAT.planDesdeAuditoria(filas, items);
+  igual([plan.get("c0").decision, plan.get("c0").origenUrl], ["pedido", "https://ejemplo.invalid/itm/1"]);
+  igual(plan.get("c1").decision, "baja");
+  cierto(!plan.has("c2") && !plan.has("c3"), "dudosa y sin fila quedan pendientes");
+  igual(omitidas, ["NX-XX-999"]);
+});
+
+prueba("catálogo · duplicados: queda la ref más baja, el resto de baja", () => {
+  const items = [
+    itemBase({ id: "a", ref: "NX-XX-062", nombre: "Bobina  de rodilla" }),
+    itemBase({ id: "b", ref: "NX-AR-040", nombre: "bobina de rodilla" }),
+    itemBase({ id: "c", ref: "NX-XX-068", nombre: "Bobina de rodilla!" }),
+    itemBase({ id: "d", ref: "NX-XX-070", nombre: "Otra pieza" }),
+    // Stock propio con el mismo nombre: dos unidades reales, no se tocan.
+    itemBase({ id: "e", ref: "NX-AR-001", nombre: "Shoulder coil", procedencia: "Propia" }),
+    itemBase({ id: "f", ref: "NX-AR-005", nombre: "Shoulder coil", procedencia: "Propia" }),
+  ].map((x) => (x.id === "e" || x.id === "f" ? x : { ...x, procedencia: "Terceros" }));
+  const { plan } = CAT.planDesdeAuditoria([], items, { bajaDuplicados: true });
+  igual([...plan.keys()].sort(), ["a", "c"]);
+  cierto(plan.get("a").nota.includes("NX-AR-040"), "la nota dice de quién es duplicado");
+  igual(CAT.planDesdeAuditoria([], items).plan.size, 0, "sin la opción no toca duplicados");
+});
+
 // ===========================================================================
 
 console.log(`\n  ${pasadas} pasadas · ${fallidas} fallidas\n`);
