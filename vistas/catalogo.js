@@ -538,6 +538,8 @@
 
   /** Decisiones marcadas y todavía no guardadas: id → stock | pedido | baja. */
   const decisiones = new Map();
+  /** Datos que trae una auditoría externa: id → { origenUrl, nota }. */
+  const extrasAud = new Map();
   let filtroAud = "Terceros";
 
   const DECISION_TEXTO = { stock: "En stock", pedido: "A pedido", baja: "Ya no está" };
@@ -572,6 +574,10 @@
           <option value="Propia"${filtroAud === "Propia" ? " selected" : ""}>Propios (${cuenta("Propia")})</option>
           <option value=""${!filtroAud ? " selected" : ""}>Todos (${cuenta("")})</option>
         </select>
+        ${editable ? `<label class="btn sm ghost" title="Planilla con columnas ref, resultado, link, precio_usd, nota">
+          Cargar resultado (CSV) <input type="file" accept=".csv,text/csv" hidden onchange="catCargarAuditoria(this.files[0])" /></label>
+          <label class="muted" style="font-size:13px; display:flex; gap:6px; align-items:center">
+            <input type="checkbox" id="audDup" checked /> dar de baja duplicados</label>` : ""}
         ${decisiones.size ? `<span class="muted" style="font-size:13px">${decisiones.size} marcada(s) sin guardar</span>` : ""}
       </div>
       <div class="overflow"><table class="data">
@@ -586,7 +592,10 @@
               <a class="muted" style="font-size:12px" target="_blank" rel="noopener"
                 href="https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent([x.nroParte, x.nombre].filter(Boolean).join(" ").slice(0, 120))}">Buscar en eBay ↗</a></td>
             <td>${badgeDisp(x.disponibilidad)}<br><span class="muted" style="font-size:12px">${precioTxt(x)}</span></td>
-            <td style="white-space:nowrap">${editable ? btn("stock") + " " + btn("pedido") + " " + btn("baja") : "—"}</td>
+            <td style="white-space:nowrap">${editable ? btn("stock") + " " + btn("pedido") + " " + btn("baja") : "—"}
+              ${extrasAud.get(x.id) ? `<div class="muted" style="font-size:12px; white-space:normal; max-width:340px; margin-top:4px">
+                ${esc(extrasAud.get(x.id).nota)}${extrasAud.get(x.id).origenUrl
+                  ? ` · <a target="_blank" rel="noopener" href="${esc(extrasAud.get(x.id).origenUrl)}">ver aviso ↗</a>` : ""}</div>` : ""}</td>
           </tr>`;
         }).join("") || `<tr><td colspan="5" class="empty">Nada pendiente en este grupo</td></tr>`}</tbody>
       </table></div>`}`;
@@ -594,6 +603,32 @@
     const sel = document.getElementById("audProc");
     if (sel) sel.onchange = (e) => { filtroAud = e.target.value; renderCatAuditoria(); };
     hidratarFotos(el);
+  }
+
+  /**
+   * Carga una auditoría hecha afuera (por ejemplo, la revisión de los avisos
+   * de eBay) y deja las decisiones marcadas. No guarda: hay que revisar y
+   * apretar Guardar, como si se hubieran marcado a mano.
+   */
+  async function catCargarAuditoria(file) {
+    if (!file) return;
+    try {
+      const filas = CAT.leerCsv(await file.text());
+      const dup = document.getElementById("audDup")?.checked;
+      const { plan, omitidas } = CAT.planDesdeAuditoria(filas, items(), { bajaDuplicados: dup });
+      for (const [id, p] of plan) {
+        decisiones.set(id, p.decision);
+        extrasAud.set(id, { origenUrl: p.origenUrl, nota: p.nota });
+      }
+      const n = (d) => [...plan.values()].filter((p) => p.decision === d).length;
+      global.toast(`Marcadas ${plan.size}: ${n("pedido")} a pedido · ${n("baja")} de baja` +
+        (omitidas.length ? ` · ${omitidas.length} ref(s) que no están en el catálogo` : "") +
+        ". Revisá y guardá.");
+      filtroAud = "";
+    } catch (e) {
+      global.toast(`No se pudo leer el CSV: ${e.message}`, true, true);
+    }
+    renderCatAuditoria();
   }
 
   function catDecidir(id, decision) {
@@ -610,11 +645,19 @@
       const dec = decisiones.get(x.id);
       if (!dec) return x;
       n++;
-      return CAT.auditar(x, dec, { usuario: usuario(), hoy });
+      const r = CAT.auditar(x, dec, { usuario: usuario(), hoy });
+      const ex = extrasAud.get(x.id);
+      if (!ex) return r;
+      return {
+        ...r,
+        origenUrl: ex.origenUrl || r.origenUrl,
+        notas: [r.notas, `Auditoría ${hoy}: ${ex.nota}`].filter(Boolean).join("\n"),
+      };
     });
     try {
       await guardarTodos(`Auditoría del catálogo: ${n} ítem(s) revisados`);
       decisiones.clear();
+      extrasAud.clear();
       global.toast(`Auditoría guardada (${n}). La web cambia cuando publiques.`);
     } catch (e) {
       global.toast(e.message, true, true);
@@ -833,6 +876,6 @@
 
   Object.assign(global, {
     catImportarDesdeWeb, catGuardar, catSubirFotos, catQuitarFoto, catFotoPrincipal, catSugerirRef,
-    catDecidir, catGuardarAuditoria, catPublicar, catDescargarParts,
+    catDecidir, catGuardarAuditoria, catCargarAuditoria, catPublicar, catDescargarParts,
   });
 })(typeof window !== "undefined" ? window : globalThis);
