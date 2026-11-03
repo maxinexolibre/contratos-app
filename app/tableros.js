@@ -423,6 +423,10 @@ Object.assign(window, {
   registrarAjuste, regularizarAjustes, calcAjuste, calcAjustePct,
   irPaginaPre, limpiarFiltroPre, irPaginaTk, limpiarFiltroTk, exportarTicketsCSV,
   elegirPais, porPaisActivo,
+  // `go` es un const de chrome.js: los const de nivel superior no quedan en
+  // window, así que los módulos de vistas/ que llamaban global.go() fallaban
+  // después de guardar y la pantalla quedaba en el formulario.
+  go,
 });
 
 // Si el arranque falla, el error tiene que verse completo y la aplicación

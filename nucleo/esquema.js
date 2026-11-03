@@ -80,6 +80,25 @@
   const PAIS_NOMBRE = {
     AR: "Argentina", CL: "Chile", CO: "Colombia", UY: "Uruguay", US: "Estados Unidos",
   };
+  /**
+   * Catálogo de partes y equipos a la venta. Reemplaza a la lista de
+   * SharePoint que alimentaba el catálogo de nexolibre.com.
+   */
+  const CATALOGO_TIPO = ["Parte", "Equipo"];
+  const CATALOGO_CONDICION = ["Nuevo", "Reacondicionado", "Usado", "ParaPartes"];
+  /**
+   * "APedido" es lo que se consigue a terceros cuando alguien lo pide (las
+   * oportunidades de eBay). No es stock propio, y mezclarlos hacía que la web
+   * ofreciera como disponible algo que no estaba en ningún depósito.
+   */
+  const CATALOGO_DISPONIBILIDAD = ["EnStock", "APedido", "Reservado", "SinStock", "Vendido", "Baja"];
+  const CATALOGO_PROCEDENCIA = ["Propia", "Terceros"];
+  /**
+   * Lo importado de SharePoint entra "Pendiente": nadie confirmó todavía que
+   * siga existiendo. Lo que se carga en la app nace "Confirmado".
+   */
+  const CATALOGO_AUDITORIA = ["Pendiente", "Confirmado"];
+
   const COMISION_ORIGEN = ["Contrato", "Presupuesto", "Facturacion"];
   const COMISION_ESTADO = ["Devengada", "Aprobada", "Liquidada", "Anulada"];
   const ROL = ["vendedor", "gerente_comercial", "gerente_administrativo", "direccion", "marketing", "admin"];
@@ -701,6 +720,84 @@
       },
     },
 
+    /**
+     * Ítem del catálogo: una parte o un equipo a la venta.
+     *
+     * Mezcla a propósito datos públicos y privados en el mismo registro, porque
+     * se cargan juntos. Lo que sale a la web lo decide una lista blanca en
+     * nucleo/catalogo.js (`aParts`), nunca este esquema: un campo nuevo acá no
+     * se publica hasta que alguien lo agrega allá a conciencia.
+     */
+    catalogo: {
+      archivo: "catalogo",
+      particionado: false,
+      idPrefijo: "cat_",
+      normalizar(r) {
+        const disponibilidad = enumerado(r.disponibilidad, CATALOGO_DISPONIBILIDAD, "EnStock");
+        const au = r.auditoria || {};
+        return {
+          id: esTexto(r.id) || nuevoId("cat_"),
+          // Referencia pública (NX-AR-001). Es la clave que usan la web, el
+          // link de WhatsApp y el SKU de DOTmed: no cambia una vez publicada.
+          ref: esTexto(r.ref).trim().toUpperCase(),
+          tipo: enumerado(r.tipo, CATALOGO_TIPO, "Parte"),
+
+          // ---- públicos ----
+          nombre: esTexto(r.nombre).trim(),
+          categoria: esTexto(r.categoria).trim(),
+          modalidad: esTexto(r.modalidad).trim(),
+          marca: esTexto(r.marca).trim(),
+          modeloCompatible: esTexto(r.modeloCompatible).trim(),
+          nroParte: esTexto(r.nroParte).trim(),
+          condicion: enumerado(r.condicion, CATALOGO_CONDICION, "Usado"),
+          disponibilidad,
+          pais: enumerado(r.pais, PAIS, "AR"),
+          // null = sin garantía informada. No es lo mismo que 0 días.
+          garantiaDias: r.garantiaDias == null || r.garantiaDias === "" ? null : esNumero(r.garantiaDias),
+          // null = "Consultar". money(null) daría 0, que en la web se leería
+          // como gratis: por eso el == null antes de convertir.
+          precio: r.precio == null || r.precio === "" ? null : money(r.precio),
+          moneda: enumerado(r.moneda, MONEDA_COTIZACION, "USD"),
+          descripcion: esTexto(r.descripcion).trim(),
+          // Cada foto es un archivo (NX-AR-001-1.jpg) o una URL externa.
+          // `publicada` dice si ya está en assets/parts/ de la web; las que no,
+          // esperan en el repo privado hasta que se publique.
+          fotos: esLista(r.fotos).map((f) => (typeof f === "string"
+            ? { archivo: f, publicada: true }
+            : { archivo: esTexto(f?.archivo), publicada: esBool(f?.publicada) }))
+            .filter((f) => f.archivo),
+          publicarWeb: esBool(r.publicarWeb, true),
+          // Canales externos: quedan apagados mientras los bots están en stand-by.
+          canales: {
+            dotmed: esBool(r.canales?.dotmed),
+            ebay: esBool(r.canales?.ebay),
+          },
+
+          // ---- privados: nunca salen de la app ----
+          procedencia: enumerado(r.procedencia, CATALOGO_PROCEDENCIA, "Propia"),
+          proveedor: esTexto(r.proveedor),
+          origenUrl: esTexto(r.origenUrl),
+          costo: r.costo == null || r.costo === "" ? null : money(r.costo),
+          nroSerie: esTexto(r.nroSerie),
+          codigoInterno: esTexto(r.codigoInterno),
+          ubicacionFisica: esTexto(r.ubicacionFisica),
+          presupuestoId: esTexto(r.presupuestoId) || null,
+          notas: esTexto(r.notas),
+
+          auditoria: {
+            estado: enumerado(au.estado, CATALOGO_AUDITORIA, "Confirmado"),
+            fecha: fecha(au.fecha),
+            usuario: esTexto(au.usuario),
+          },
+          // De dónde vino el registro: "app" o "sharepoint" (importación inicial).
+          origen: esTexto(r.origen) || "app",
+          creado: fecha(r.creado) || hoy(),
+          actualizado: fecha(r.actualizado) || fecha(r.creado) || hoy(),
+          usuario: esTexto(r.usuario),
+        };
+      },
+    },
+
     usuarios: {
       archivo: "usuarios",
       particionado: false,
@@ -779,6 +876,8 @@
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
     COMISION_ORIGEN, COMISION_ESTADO, COMISION_ALCANCE, AREAS_COMISION,
     PAIS, PAIS_NOMBRE, COMPROBANTE_TIPO, CONDICION_IVA,
+    CATALOGO_TIPO, CATALOGO_CONDICION, CATALOGO_DISPONIBILIDAD, CATALOGO_PROCEDENCIA,
+    CATALOGO_AUDITORIA,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
   };

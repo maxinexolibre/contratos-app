@@ -50,6 +50,7 @@ const STORE_DEF = {
   clientes: { path: () => CFG.clientesPath, key: "clientes", shaKey: "clientesSha", ls: "nexo_demo_cli", seed: () => [], migrate: (a) => normalizar("clientes", a) },
   vendedores: { path: () => CFG.vendedoresPath, key: "vendedores", shaKey: "vendedoresSha", ls: "nexo_demo_vnd", seed: () => [], migrate: (a) => normalizar("vendedores", a) },
   acuerdosComision: { path: () => CFG.acuerdosComisionPath, key: "acuerdosComision", shaKey: "acuerdosSha", ls: "nexo_demo_acu", seed: () => [], migrate: (a) => normalizar("acuerdosComision", a) },
+  catalogo: { path: () => CFG.catalogoPath, key: "catalogo", shaKey: "catalogoSha", ls: "nexo_demo_catalogo", seed: () => DEMO_CATALOGO, migrate: (a) => normalizar("catalogo", a) },
   comisiones: { path: () => CFG.comisionesPath, key: "comisiones", shaKey: "comisionesSha", ls: "nexo_demo_com", seed: () => [], migrate: (a) => normalizar("comisiones", a) },
 };
 
@@ -287,6 +288,22 @@ const DEMO_PRESU = [
     economico: { moneda: "USD", ivaPct: 10.5, incluyeIVA: false, validezDias: 20, formaPago: "Contado" },
     notas: "Registro de ejemplo.", archivos: [], usuario: "demo", historialEstados: [{ estado: "borrador", fecha: "2026-03-01", usuario: "demo" }],
   },
+];
+
+// Catálogo demo: piezas FICTICIAS (repo público). Una propia en stock, una de
+// terceros pendiente de auditoría y un equipo sin publicar.
+const DEMO_CATALOGO = [
+  { id: "demo_cat1", ref: "NX-AR-001", tipo: "Parte", nombre: "Bobina de ejemplo 8 canales", categoria: "Bobina",
+    modalidad: "MRI", marca: "MarcaA", modeloCompatible: "Modelo A 1.5T", nroParte: "0000001", condicion: "Usado",
+    disponibilidad: "EnStock", pais: "AR", garantiaDias: 90, precio: 1500, descripcion: "Pieza de ejemplo.",
+    publicarWeb: true, costo: 400, proveedor: "Proveedor de ejemplo", notas: "Registro de ejemplo." },
+  { id: "demo_cat2", ref: "NX-XX-001", tipo: "Parte", nombre: "Amplificador de ejemplo", categoria: "Amplificador",
+    modalidad: "MRI", marca: "MarcaB", condicion: "Usado", disponibilidad: "APedido", pais: "AR", precio: null,
+    publicarWeb: true, procedencia: "Terceros", proveedor: "eBay", origen: "sharepoint",
+    auditoria: { estado: "Pendiente" } },
+  { id: "demo_cat3", ref: "NX-AR-002", tipo: "Equipo", nombre: "Resonador de ejemplo 1.5T", categoria: "Equipo",
+    modalidad: "MRI", marca: "MarcaC", condicion: "Reacondicionado", disponibilidad: "EnStock", pais: "AR",
+    precio: null, publicarWeb: false, notas: "Registro de ejemplo." },
 ];
 
 // ---- numeración ----

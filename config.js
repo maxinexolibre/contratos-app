@@ -18,8 +18,25 @@ window.NEXO_CONFIG = {
   comisionesPath: "data/comisiones.json",
   propuestasPath: "data/propuestas.json",
   clientesPath: "data/clientes.json",
+  catalogoPath: "data/catalogo.json",
   // Raíz de la estructura particionada. Los archivos planos de `data/` quedan
   // como copia de seguridad hasta que se decida eliminarlos.
   baseDatos: "data/v3",
   branch: "main",
+  // Catálogo de partes y equipos. La app lo publica en el repo PÚBLICO de la
+  // web: solo viaja la proyección de lista blanca (nucleo/catalogo.js), nunca
+  // costo, proveedor ni N° de serie. Quien publica necesita que su token
+  // tenga también permiso de escritura sobre este repo.
+  web: {
+    owner: "nexolibre",
+    repo: "nexolibre",
+    branch: "main",
+    partsPath: "parts.json",
+    fotosDir: "assets/parts",
+    sitio: "https://nexolibre.com",
+  },
+  // Fotos cargadas que todavía no se publicaron. Viven en el repo privado
+  // hasta que alguien aprieta Publicar: el repo de la web es público y una
+  // foto subida ahí ya es visible para cualquiera.
+  fotosCatalogoPath: "data/v3/catalogo-fotos",
 };

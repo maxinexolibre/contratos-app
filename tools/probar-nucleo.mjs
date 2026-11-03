@@ -34,13 +34,14 @@ contexto.window = contexto;
 contexto.globalThis = contexto;
 vm.createContext(contexto);
 
-for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones"]) {
+for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones", "catalogo"]) {
   vm.runInContext(readFileSync(resolve(RAIZ, `nucleo/${f}.js`), "utf8"), contexto, { filename: f });
 }
 
 const {
   NEXO_ESQUEMA: E, NEXO_PERMISOS: P, NEXO_REGLAS: R, NEXO_KPI: K,
   NEXO_ALMACEN: A, NEXO_ADAPTADOR: AD, NEXO_CAMBIO: C, NEXO_COMISIONES: CM,
+  NEXO_CATALOGO_PARTES: CAT,
 } = contexto;
 
 // --- mini framework --------------------------------------------------------
@@ -1382,6 +1383,153 @@ prueba("una propuesta con contrato no se desvincula sola", () => {
 prueba("un contrato sin propuesta sigue siendo valido", () => {
   R.validar("contratos", "crear",
     contratoDePropuesta({ propuestaId: null }), null, { ...ADMIN, propuestas: [] });
+});
+
+// ===========================================================================
+
+// ===========================================================================
+// CATÁLOGO
+// ===========================================================================
+
+// Pieza ficticia en la forma del parts.json que escribía SharePoint.
+const parteVieja = (over = {}) => ({
+  ref: "NX-AR-901", nombre: "Bobina de prueba", categoria: "Bobina", modalidad: "MRI",
+  marca: "MarcaX", modelo_compatible: "Modelo Y 1.5T", nro_parte: "0000000",
+  estado: "Used", disponibilidad: "En stock", ubicacion: "Argentina", garantia: 90.0,
+  precio: "1.200,00", descripcion: "Pieza de ejemplo", imagen: "NX-AR-901-1.jpg;NX-AR-901-2.jpg",
+  ...over,
+});
+const itemBase = (over = {}) => E.ENTIDADES.catalogo.normalizar({
+  id: "cat_1", ref: "NX-AR-901", nombre: "Bobina de prueba", condicion: "Usado",
+  disponibilidad: "EnStock", pais: "AR", precio: 1200, garantiaDias: 90,
+  fotos: [{ archivo: "NX-AR-901-1.jpg", publicada: true }], ...over,
+});
+
+prueba("catálogo · el precio null es Consultar, no gratis", () => {
+  igual(itemBase({ precio: null }).precio, null, "null no puede volverse 0");
+  igual(itemBase({ precio: "" }).precio, null, "vacío tampoco");
+  igual(CAT.aParte(itemBase({ precio: null })).precio, "Consultar", "en la web");
+  igual(CAT.aParte(itemBase({ precio: 0 })).precio, "0,00", "0 explícito sí es 0");
+});
+
+prueba("catálogo · precio en el formato que entiende el bot de DOTmed", () => {
+  igual(CAT.precioATexto(1200), "1.200,00");
+  igual(CAT.precioATexto(34000.5), "34.000,50");
+  igual(CAT.textoAPrecio("1.200,00"), 1200);
+  igual(CAT.textoAPrecio("1200,50"), 1200.5);
+  igual(CAT.textoAPrecio("Consultar"), null);
+});
+
+prueba("catálogo · a la web solo salen campos públicos (lista blanca)", () => {
+  const item = itemBase({
+    costo: 300, proveedor: "Proveedor secreto", nroSerie: "SERIE-PRIVADA",
+    codigoInterno: "COD-PRIV", notas: "nota privada", origenUrl: "https://ejemplo.invalid/x",
+    ubicacionFisica: "Estante 4",
+  });
+  const salida = JSON.stringify(CAT.aParts([item]));
+  for (const secreto of ["300", "Proveedor secreto", "SERIE-PRIVADA", "COD-PRIV",
+    "nota privada", "ejemplo.invalid", "Estante 4"]) {
+    cierto(!salida.includes(secreto), `se filtró a la web: ${secreto}`);
+  }
+  igual(Object.keys(CAT.aParte(item)).sort(), ["categoria", "descripcion", "disponibilidad",
+    "dotmed", "estado", "garantia", "imagen", "marca", "modalidad", "modelo_compatible",
+    "nombre", "nro_parte", "precio", "ref", "tipo", "ubicacion"], "campos publicados");
+});
+
+prueba("catálogo · solo se publica lo tildado y disponible", () => {
+  const items = [
+    itemBase({ id: "a", ref: "NX-AR-001" }),
+    itemBase({ id: "b", ref: "NX-AR-002", disponibilidad: "APedido" }),
+    itemBase({ id: "c", ref: "NX-AR-003", disponibilidad: "Vendido" }),
+    itemBase({ id: "d", ref: "NX-AR-004", disponibilidad: "Reservado" }),
+    itemBase({ id: "e", ref: "NX-AR-005", publicarWeb: false }),
+  ];
+  igual(CAT.aParts(items).map((p) => p.ref), ["NX-AR-001", "NX-AR-002"]);
+});
+
+prueba("catálogo · orden natural de referencias", () => {
+  const items = ["NX-AR-010", "NX-AR-002", "NX-AR-1000"].map((ref, i) => itemBase({ id: `x${i}`, ref }));
+  igual(CAT.aParts(items).map((p) => p.ref), ["NX-AR-002", "NX-AR-010", "NX-AR-1000"]);
+});
+
+prueba("catálogo · DOTmed apagado no publica ni borra nada", () => {
+  igual(CAT.aParte(itemBase()).dotmed, false, "por defecto apagado");
+  igual(CAT.aParte(itemBase({ canales: { dotmed: true } })).dotmed, true);
+});
+
+prueba("catálogo · ida y vuelta con el parts.json de SharePoint no cambia nada", () => {
+  const viejo = [parteVieja()];
+  const { nuevos } = CAT.importar(viejo, []);
+  const d = CAT.diferencias(viejo, CAT.aParts(nuevos));
+  igual([d.altas.length, d.bajas.length, d.cambios.length], [0, 0, 0],
+    "la primera publicación tiene que dejar la web igual: " + JSON.stringify(d.cambios));
+});
+
+prueba("catálogo · importación normaliza lo que SharePoint mezclaba", () => {
+  const { nuevos } = CAT.importar([
+    parteVieja({ ref: "NX-AR-001", estado: "Usado", garantia: null, precio: "Consultar", nro_parte: "-" }),
+    parteVieja({ ref: "NX-XX-002", estado: "For parts or not working", disponibilidad: "A pedido",
+      imagen: "https://i.ebayimg.com/images/g/ejemplo/s-l225.jpg" }),
+    parteVieja({ ref: "NX-AR-003", estado: "New", disponibilidad: "Sin stock" }),
+  ], []);
+  const [a, b, c] = nuevos;
+  igual([a.condicion, a.garantiaDias, a.precio, a.nroParte], ["Usado", null, null, ""]);
+  igual([b.condicion, b.disponibilidad, b.procedencia, b.proveedor], ["ParaPartes", "APedido", "Terceros", "eBay"]);
+  igual([c.condicion, c.disponibilidad], ["Nuevo", "SinStock"]);
+  cierto(nuevos.every((x) => x.auditoria.estado === "Pendiente"), "todo lo importado se audita");
+  cierto(nuevos.every((x) => x.fotos.every((f) => f.publicada)), "las fotos importadas ya están en la web");
+});
+
+prueba("catálogo · importar dos veces no duplica", () => {
+  const primera = CAT.importar([parteVieja()], []).nuevos;
+  const segunda = CAT.importar([parteVieja(), parteVieja({ ref: "NX-AR-902" })], primera);
+  igual(segunda.nuevos.map((x) => x.ref), ["NX-AR-902"]);
+  igual(segunda.omitidos, ["NX-AR-901"]);
+});
+
+prueba("catálogo · próxima referencia y nombre de foto", () => {
+  igual(CAT.proximaRef([{ ref: "NX-AR-040" }, { ref: "NX-AR-007" }, { ref: "NX-CL-099" }], "AR"), "NX-AR-041");
+  igual(CAT.proximaRef([], "CL"), "NX-CL-001");
+  igual(CAT.nombreFoto("NX-AR-001", [{ archivo: "NX-AR-001-1.jpg" }, { archivo: "NX-AR-001-9.jpeg" }]), "NX-AR-001-10.jpg");
+});
+
+prueba("catálogo · fotos por subir: solo las privadas de lo que se publica", () => {
+  const items = [
+    itemBase({ id: "a", ref: "NX-AR-001", fotos: [
+      { archivo: "NX-AR-001-1.jpg", publicada: true }, { archivo: "NX-AR-001-2.jpg", publicada: false }] }),
+    itemBase({ id: "b", ref: "NX-AR-002", publicarWeb: false, fotos: [{ archivo: "NX-AR-002-1.jpg", publicada: false }] }),
+  ];
+  igual(CAT.fotosPorSubir(items).map((x) => x.foto.archivo), ["NX-AR-001-2.jpg"]);
+});
+
+prueba("catálogo · auditar 'ya no está' da de baja y saca de la web", () => {
+  const item = CAT.importar([parteVieja()], []).nuevos[0];
+  const r = CAT.auditar(item, "baja", { usuario: "test", hoy: "2026-11-03" });
+  igual([r.disponibilidad, r.publicarWeb, r.auditoria.estado, r.auditoria.usuario],
+    ["Baja", false, "Confirmado", "test"]);
+  cierto(!CAT.esPublicable(r), "no puede seguir en la web");
+});
+
+prueba("catálogo · reglas: referencia única y con formato", () => {
+  const ctx = { ...ADMIN, catalogo: [itemBase({ id: "otro" })] };
+  rechaza("NX-080", () => R.validar("catalogo", "crear", itemBase({ id: "cat_2" }), null, ctx));
+  rechaza("NX-081", () => R.validar("catalogo", "crear", itemBase({ id: "cat_2", ref: "AR-1" }), null, ADMIN));
+  rechaza("NX-040", () => R.validar("catalogo", "crear", itemBase({ id: "cat_2", nombre: "" }), null, ADMIN));
+  R.validar("catalogo", "crear", itemBase({ id: "cat_2", ref: "NX-XX-002" }), null, ctx);
+});
+
+prueba("catálogo · una ref con fotos ya publicadas no se renombra", () => {
+  const anterior = itemBase();
+  rechaza("NX-082", () => R.validar("catalogo", "editar", itemBase({ ref: "NX-AR-950" }), anterior, ADMIN));
+  // Sin fotos en la web todavía, sí se puede corregir.
+  R.validar("catalogo", "editar", itemBase({ ref: "NX-AR-950", fotos: [] }), itemBase({ fotos: [] }), ADMIN);
+});
+
+prueba("catálogo · permisos: el vendedor consulta, no carga; publica dirección o admin", () => {
+  rechaza("NX-010", () => R.validar("catalogo", "crear", itemBase(), null, { rol: "vendedor", usuario: "v" }));
+  R.validar("catalogo", "crear", itemBase(), null, { rol: "gerente_comercial", usuario: "g" });
+  igual(["direccion", "admin", "gerente_comercial"].map((r) => P.capacidad(r, "publicar_catalogo")),
+    [true, true, false]);
 });
 
 // ===========================================================================
