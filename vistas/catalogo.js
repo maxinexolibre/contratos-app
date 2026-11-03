@@ -179,7 +179,8 @@
       <div class="page-head">
         <h1>Catá<span class="accent">logo</span></h1>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
-          ${puedeEditar() ? `<a class="btn primary" href="#catform/new">+ Nuevo ítem</a>` : ""}
+          ${puedeEditar() ? `<a class="btn primary" href="#catrapida">📷 Carga rápida</a>
+            <a class="btn" href="#catform/new">+ Ficha completa</a>` : ""}
           ${puedePublicar() ? `<a class="btn" href="#catpublicar">Publicar en la web</a>` : ""}
         </div>
       </div>
@@ -437,7 +438,7 @@
    * de importar) subía NX-AR-003-1.jpg y pisaba la foto de otra pieza.
    */
   let fotosEnWeb = null;
-  async function nombresOcupados() {
+  async function nombresOcupados(propias = borrador?.fotos || []) {
     if (!fotosEnWeb) {
       fotosEnWeb = [];
       try {
@@ -446,7 +447,26 @@
         if (r.ok) fotosEnWeb = (await r.json()).map((x) => x.name);
       } catch { /* sin la lista se usa solo lo que conoce el catálogo */ }
     }
-    return [...fotosEnWeb, ...items().flatMap((x) => x.fotos.map((f) => f.archivo)), ...borrador.fotos.map((f) => f.archivo)];
+    return [...fotosEnWeb, ...items().flatMap((x) => x.fotos.map((f) => f.archivo)), ...propias.map((f) => f.archivo)];
+  }
+
+  /**
+   * Achica y sube una foto al repo privado. Devuelve el nombre de archivo.
+   * La comparten la ficha completa y la carga rápida.
+   */
+  async function subirFoto(ref, file, propias) {
+    const dataUrl = await comprimir(file);
+    const archivo = CAT.nombreFoto(ref, await nombresOcupados(propias));
+    if (conectado()) {
+      await global.ghUploadFile(`${cfg().fotosCatalogoPath}/${archivo}`, dataUrl.split(",")[1],
+        `Foto ${archivo} (catálogo, sin publicar)`);
+    } else {
+      try { localStorage.setItem(LS_FOTO_DEMO + archivo, dataUrl); } catch {
+        throw new Error("El navegador no tiene lugar para más fotos de prueba");
+      }
+    }
+    cacheFotos.set(archivo, dataUrl);
+    return archivo;
   }
 
   async function catSubirFotos(files) {
@@ -457,17 +477,7 @@
     }
     for (const file of files) {
       try {
-        const dataUrl = await comprimir(file);
-        const archivo = CAT.nombreFoto(borrador.ref, await nombresOcupados());
-        if (conectado()) {
-          await global.ghUploadFile(`${cfg().fotosCatalogoPath}/${archivo}`, dataUrl.split(",")[1],
-            `Foto ${archivo} (catálogo, sin publicar)`);
-        } else {
-          try { localStorage.setItem(LS_FOTO_DEMO + archivo, dataUrl); } catch {
-            throw new Error("El navegador no tiene lugar para más fotos de prueba");
-          }
-        }
-        cacheFotos.set(archivo, dataUrl);
+        const archivo = await subirFoto(borrador.ref, file, borrador.fotos);
         borrador.fotos.push({ archivo, publicada: false });
         pintarFotos();
       } catch (e) {
@@ -497,6 +507,292 @@
       global.toast("Guardado. La web cambia recién cuando publiques.");
       global.go("catalogo");
     }
+  }
+
+
+  // ==========================================================================
+  // Carga rápida (celular)
+  // ==========================================================================
+  //
+  // Pensada para cargar parado frente al estante, con una mano: la cámara se
+  // abre directo, los datos con vocabulario cerrado son botones grandes y el
+  // PN/SN se leen de la etiqueta en vez de tipearse. Lo que no es
+  // imprescindible (precio, costo, descripción) se completa después desde la
+  // ficha, en la computadora.
+
+  const MARCAS = ["GE", "Philips", "Siemens", "Toshiba", "Canon", "Hitachi", "Esaote", "Fonar"];
+  const CATEGORIAS = ["Bobina", "Amplificador", "Placa", "Fuente", "Coldhead", "Compresor", "Cable", "Otro"];
+  const LS_RAPIDA = "nexo_cat_rapida";
+
+  /** Ítem en carga, fotos subiendo y lectura de etiqueta en curso. */
+  let rapida = null;
+  let subidas = Promise.resolve();
+  let pendientes = 0;
+  let asignarA = "nroParte";
+  let candidatos = [];
+
+  /** País, marca, modalidad y categoría se recuerdan: se carga por tandas. */
+  function recordado() {
+    try { return JSON.parse(localStorage.getItem(LS_RAPIDA) || "{}"); } catch { return {}; }
+  }
+
+  function nuevoRapido(base = recordado()) {
+    const pais = base.pais || "AR";
+    return E.ENTIDADES.catalogo.normalizar({
+      ref: CAT.proximaRef(items(), pais), pais,
+      marca: base.marca || "", modalidad: base.modalidad || "MRI",
+      categoria: base.categoria || "", tipo: base.tipo || "Parte",
+      condicion: "Usado", disponibilidad: "EnStock", procedencia: "Propia",
+      garantiaDias: 90, usuario: usuario(),
+    });
+  }
+
+  const chips = (campo, valores, actual, textos = {}) => `<div class="chips" data-campo="${campo}">${valores.map((v) =>
+    `<button type="button" class="chip${v === actual ? " on" : ""}" data-valor="${esc(v)}">${esc(textos[v] || v)}</button>`).join("")}</div>`;
+
+  function renderCatRapida() {
+    const el = document.getElementById("view-catrapida");
+    if (!puedeEditar()) {
+      el.innerHTML = `<div class="card"><h3>Sin permiso para cargar</h3><p class="muted">Cargan dirección, gerencia comercial y admin.</p></div>`;
+      return;
+    }
+    if (!rapida) rapida = nuevoRapido();
+    candidatos = [];
+    const d = rapida;
+    el.innerHTML = `
+      <div class="rapida">
+        <div class="rapida-cab">
+          <div><div class="kicker">Carga rápida</div><h2 id="rRef">${esc(d.ref)}</h2></div>
+          <a class="btn sm ghost" href="#catform/new">Ficha completa</a>
+        </div>
+
+        <section class="rapida-bloque">
+          <h3>1 · Fotos</h3>
+          <div class="rapida-botones">
+            <label class="btn primary grande">📷 Sacar foto
+              <input type="file" accept="image/*" capture="environment" hidden onchange="catRapidaFotos(this)"></label>
+            <label class="btn grande">🖼 Galería
+              <input type="file" accept="image/*" multiple hidden onchange="catRapidaFotos(this)"></label>
+          </div>
+          <div class="cat-fotos" id="rFotos"></div>
+          <p class="muted" style="font-size:12px">La primera es la que se ve en la web. Fondo liso y buena luz.</p>
+        </section>
+
+        <section class="rapida-bloque">
+          <h3>2 · Etiqueta</h3>
+          <label class="btn grande" style="width:100%">🔎 Leer etiqueta (PN / SN)
+            <input type="file" accept="image/*" capture="environment" hidden onchange="catLeerEtiqueta(this)"></label>
+          <p class="muted" style="font-size:12px" id="rEtiqEstado">Sacale una foto de cerca a la etiqueta: se completan solos. Esa foto no se publica.</p>
+          <div id="rCandidatos"></div>
+          <div class="field"><label for="rPN">N° de parte (PN)</label>
+            <input id="rPN" class="grande" value="${esc(d.nroParte)}" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" onfocus="catAsignarA('nroParte')"></div>
+          <div class="field"><label for="rSN">N° de serie (SN) <span class="pill-int">interno</span></label>
+            <input id="rSN" class="grande" value="${esc(d.nroSerie)}" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" onfocus="catAsignarA('nroSerie')"></div>
+        </section>
+
+        <section class="rapida-bloque">
+          <h3>3 · Datos</h3>
+          <label>Ubicación</label>${chips("pais", E.PAIS, d.pais)}
+          <label>Marca</label>${chips("marca", MARCAS, d.marca)}
+          <input id="rMarcaOtra" class="grande" placeholder="Otra marca…" value="${MARCAS.includes(d.marca) ? "" : esc(d.marca)}">
+          <label>Modalidad</label>${chips("modalidad", ["MRI", "CT"], d.modalidad)}
+          <label>Tipo</label>${chips("tipo", E.CATALOGO_TIPO, d.tipo)}
+          <label>Categoría</label>${chips("categoria", CATEGORIAS, d.categoria)}
+          <label>Condición</label>${chips("condicion", E.CATALOGO_CONDICION, d.condicion, CAT.CONDICION_TEXTO)}
+          <label>Disponibilidad</label>${chips("disponibilidad", ["EnStock", "Reservado"], d.disponibilidad, CAT.DISPONIBILIDAD_TEXTO)}
+          <div class="field"><label for="rModelo">Equipo compatible</label>
+            <input id="rModelo" class="grande" value="${esc(d.modeloCompatible)}" placeholder="Signa 1.5T, Achieva…"></div>
+          <div class="field"><label for="rNombre">Nombre</label>
+            <input id="rNombre" class="grande" value="${esc(d.nombre)}" placeholder="se arma solo si lo dejás vacío"></div>
+          <div class="field"><label for="rUbic">Ubicación física <span class="pill-int">interno</span></label>
+            <input id="rUbic" class="grande" value="${esc(d.ubicacionFisica)}" placeholder="Depósito, estante…"></div>
+          <div class="field"><label for="rPrecio">Precio USD (opcional)</label>
+            <input id="rPrecio" class="grande" type="number" inputmode="decimal" min="0" value="${d.precio ?? ""}" placeholder="vacío = Consultar"></div>
+          <div class="field"><label for="rNotas">Notas <span class="pill-int">interno</span></label>
+            <textarea id="rNotas" rows="2">${esc(d.notas)}</textarea></div>
+        </section>
+      </div>
+      <div class="rapida-pie">
+        <button class="btn grande" onclick="catRapidaGuardar(true)">Guardar y otro</button>
+        <button class="btn primary grande" onclick="catRapidaGuardar(false)">Guardar</button>
+      </div>`;
+
+    el.querySelectorAll(".chips").forEach((c) => c.addEventListener("click", (ev) => {
+      const b = ev.target.closest(".chip");
+      if (!b) return;
+      leerRapida();
+      const campo = c.dataset.campo;
+      rapida[campo] = rapida[campo] === b.dataset.valor && campo === "categoria" ? "" : b.dataset.valor;
+      if (campo === "marca") document.getElementById("rMarcaOtra").value = "";
+      if (campo === "pais" && !rapida.fotos.length) {
+        rapida.ref = CAT.proximaRef(items(), rapida.pais);
+        document.getElementById("rRef").textContent = rapida.ref;
+      }
+      c.querySelectorAll(".chip").forEach((x) => x.classList.toggle("on", x.dataset.valor === rapida[campo]));
+      actualizarNombre();
+    }));
+    ["rPN", "rModelo", "rMarcaOtra"].forEach((id) => document.getElementById(id).addEventListener("input", () => { leerRapida(); actualizarNombre(); }));
+    pintarFotosRapida();
+    actualizarNombre();
+  }
+
+  function actualizarNombre() {
+    const n = document.getElementById("rNombre");
+    if (n) n.placeholder = CAT.nombreSugerido(rapida) || "se arma solo si lo dejás vacío";
+  }
+
+  function leerRapida() {
+    const v = (id) => (document.getElementById(id)?.value || "").trim();
+    const otra = v("rMarcaOtra");
+    Object.assign(rapida, {
+      nroParte: v("rPN").toUpperCase(), nroSerie: v("rSN").toUpperCase(),
+      modeloCompatible: v("rModelo"), nombre: v("rNombre"), ubicacionFisica: v("rUbic"),
+      precio: v("rPrecio"), notas: v("rNotas"),
+      ...(otra ? { marca: otra } : {}),
+    });
+    return rapida;
+  }
+
+  function pintarFotosRapida() {
+    const cont = document.getElementById("rFotos");
+    if (!cont) return;
+    cont.innerHTML = rapida.fotos.map((f, i) => `<div class="cat-foto">
+        ${imgFoto(f, "cat-foto-img")}
+        <div class="cat-foto-pie">${i === 0 ? "<b>Principal</b>" : `<button class="btn sm ghost" onclick="catRapidaPrincipal(${i})">Principal</button>`}
+          <button class="btn sm ghost" aria-label="Quitar" onclick="catRapidaQuitar(${i})">✕</button></div>
+      </div>`).join("") + (pendientes ? `<div class="cat-foto"><div class="cat-foto-img rapida-subiendo">Subiendo ${pendientes}…</div></div>` : "");
+    hidratarFotos(cont);
+  }
+
+  /**
+   * Las fotos se suben en cola, una detrás de otra, mientras se siguen
+   * cargando datos: en el depósito la señal es mala y esperar cada subida
+   * antes de poder tocar otra cosa hacía eterna la carga.
+   */
+  function catRapidaFotos(input) {
+    const files = [...(input.files || [])];
+    input.value = "";
+    leerRapida();
+    for (const file of files) {
+      pendientes++;
+      subidas = subidas.then(async () => {
+        try {
+          const archivo = await subirFoto(rapida.ref, file, rapida.fotos);
+          rapida.fotos.push({ archivo, publicada: false });
+        } catch (e) {
+          global.toast(`No se subió una foto: ${e.message}`, true, true);
+        } finally {
+          pendientes--;
+          pintarFotosRapida();
+        }
+      });
+    }
+    pintarFotosRapida();
+  }
+
+  function catRapidaQuitar(i) { rapida.fotos.splice(i, 1); pintarFotosRapida(); }
+  function catRapidaPrincipal(i) { const [f] = rapida.fotos.splice(i, 1); rapida.fotos.unshift(f); pintarFotosRapida(); }
+
+  function catAsignarA(campo) {
+    asignarA = campo;
+    pintarCandidatos();
+  }
+
+  function pintarCandidatos() {
+    const c = document.getElementById("rCandidatos");
+    if (!c) return;
+    c.innerHTML = candidatos.length ? `<p class="muted" style="font-size:12px; margin:6px 0">
+        Tocá un código para ponerlo en <b>${asignarA === "nroSerie" ? "SN" : "PN"}</b>
+        (tocá el campo de abajo para cambiar):</p>
+      <div class="chips">${candidatos.map((t) =>
+        `<button type="button" class="chip" onclick="catUsarCandidato('${esc(t)}')">${esc(t)}</button>`).join("")}</div>` : "";
+  }
+
+  function catUsarCandidato(t) {
+    const id = asignarA === "nroSerie" ? "rSN" : "rPN";
+    document.getElementById(id).value = t;
+    leerRapida();
+    actualizarNombre();
+    // Después del PN lo natural es el SN.
+    if (asignarA === "nroParte") asignarA = "nroSerie";
+    pintarCandidatos();
+  }
+
+  /** Tesseract (OCR) pesa varios MB: se baja recién la primera vez que se usa. */
+  let tesseract = null;
+  function cargarTesseract() {
+    if (global.Tesseract) return Promise.resolve(global.Tesseract);
+    if (!tesseract) {
+      tesseract = new Promise((ok, mal) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+        s.onload = () => ok(global.Tesseract);
+        s.onerror = () => { tesseract = null; mal(new Error("No se pudo cargar el lector de etiquetas")); };
+        document.head.appendChild(s);
+      });
+    }
+    return tesseract;
+  }
+
+  /**
+   * Lee la etiqueta: primero códigos de barras/QR (instantáneo en Android),
+   * después OCR del texto. Lo que encuentra con rótulo (P/N, S/N) se completa
+   * solo; el resto queda como botones para asignar con un toque.
+   */
+  async function catLeerEtiqueta(input) {
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    const estado = document.getElementById("rEtiqEstado");
+    const avisar = (t) => { if (estado) estado.textContent = t; };
+    let texto = "";
+    try {
+      if ("BarcodeDetector" in global) {
+        avisar("Buscando códigos de barras…");
+        try {
+          const bmp = await createImageBitmap(file);
+          const det = new global.BarcodeDetector();
+          texto += (await det.detect(bmp)).map((c) => c.rawValue).join("\n") + "\n";
+        } catch { /* sin códigos de barras: se sigue con el texto */ }
+      }
+      avisar("Leyendo el texto de la etiqueta… (la primera vez tarda un poco más)");
+      const T = await cargarTesseract();
+      const img = await comprimir(file);
+      const { data } = await T.recognize(img, "eng");
+      texto += data.text || "";
+    } catch (e) {
+      avisar(`${e.message}. Podés tipear el PN y el SN.`);
+      if (!texto.trim()) return;
+    }
+    const r = CAT.leerEtiqueta(texto);
+    leerRapida();
+    if (r.pn && !rapida.nroParte) document.getElementById("rPN").value = r.pn;
+    if (r.sn && !rapida.nroSerie) document.getElementById("rSN").value = r.sn;
+    leerRapida();
+    actualizarNombre();
+    candidatos = r.candidatos.filter((t) => t !== rapida.nroParte && t !== rapida.nroSerie);
+    asignarA = !rapida.nroParte ? "nroParte" : "nroSerie";
+    avisar(r.pn || r.sn
+      ? `Encontré ${[r.pn && "PN", r.sn && "SN"].filter(Boolean).join(" y ")}. Revisá que estén bien.`
+      : candidatos.length ? "No vi rótulos P/N o S/N: elegí el código correcto." : "No pude leer códigos. Probá más cerca y con luz.");
+    pintarCandidatos();
+  }
+
+  async function catRapidaGuardar(otro) {
+    leerRapida();
+    if (pendientes) {
+      global.toast(`Esperando ${pendientes} foto(s)…`);
+      await subidas;
+    }
+    const reg = { ...rapida, nombre: rapida.nombre || CAT.nombreSugerido(rapida) };
+    if (!reg.nombre) { global.toast("Poné al menos la marca, la categoría o el PN", true, true); return; }
+    const ok = await guardarItem(reg, `Catálogo ${reg.ref} · ${reg.nombre} (carga rápida)`);
+    if (!ok) return;
+    const recordar = { pais: ok.pais, marca: ok.marca, modalidad: ok.modalidad, categoria: ok.categoria, tipo: ok.tipo };
+    try { localStorage.setItem(LS_RAPIDA, JSON.stringify(recordar)); } catch { /* es solo comodidad */ }
+    global.toast(`${ok.ref} guardado${ok.fotos.length ? ` con ${ok.fotos.length} foto(s)` : " sin fotos"}`);
+    rapida = otro ? nuevoRapido(recordar) : null;
+    if (otro) { renderCatRapida(); global.scrollTo(0, 0); } else global.go("catalogo");
   }
 
   // ==========================================================================
@@ -872,10 +1168,13 @@
     catform: () => renderCatForm(location.hash.split("/")[1]),
     catauditoria: renderCatAuditoria,
     catpublicar: renderCatPublicar,
+    catrapida: renderCatRapida,
   });
 
   Object.assign(global, {
     catImportarDesdeWeb, catGuardar, catSubirFotos, catQuitarFoto, catFotoPrincipal, catSugerirRef,
-    catDecidir, catGuardarAuditoria, catCargarAuditoria, catPublicar, catDescargarParts,
+    catDecidir, catGuardarAuditoria, catCargarAuditoria,
+    catRapidaFotos, catRapidaQuitar, catRapidaPrincipal, catAsignarA, catUsarCandidato,
+    catLeerEtiqueta, catRapidaGuardar, catPublicar, catDescargarParts,
   });
 })(typeof window !== "undefined" ? window : globalThis);

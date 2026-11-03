@@ -418,11 +418,65 @@
     return { plan, omitidas };
   }
 
+  // --------------------------------------------------------------------------
+  // Lectura de etiquetas (carga desde el celular)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Rótulos con los que los fabricantes marcan cada dato en la etiqueta.
+   * El OCR confunde a menudo la barra: "P/N" sale "PIN" o "P N", por eso se
+   * aceptan esas variantes.
+   */
+  const ROTULO_PN = /\b(?:P\s*[\/.\-]?\s*N|PIN|PART\s*(?:NO|NUMBER|#)|REF(?:ERENCE)?|MODEL(?:\s*NO)?|CAT(?:\s*NO)?|12NC)\b\s*[:#.\-]?\s*/i;
+  const ROTULO_SN = /\b(?:S\s*[\/.\-]?\s*N|SER(?:IAL)?(?:\s*(?:NO|NUMBER|#))?)\b\s*[:#.\-]?\s*/i;
+  const TOKEN = /[A-Z0-9][A-Z0-9\-\/.]{2,}[A-Z0-9]/gi;
+
+  const limpiarToken = (t) => String(t || "").replace(/^[\-\/.]+|[\-\/.]+$/g, "").toUpperCase();
+  const pareceCodigo = (t) => /\d/.test(t) && t.length >= 4 && t.length <= 30;
+
+  /** Primer código que sigue a un rótulo en el texto, o "" si no hay. */
+  function trasRotulo(texto, rotulo) {
+    for (const linea of String(texto || "").split(/\r?\n/)) {
+      const m = linea.match(rotulo);
+      if (!m) continue;
+      const resto = linea.slice(m.index + m[0].length);
+      const tok = (resto.match(TOKEN) || []).map(limpiarToken).find(pareceCodigo);
+      if (tok) return tok;
+    }
+    return "";
+  }
+
+  /**
+   * Del texto de una etiqueta (OCR o código de barras) saca el N° de parte,
+   * el N° de serie y la lista de códigos candidatos, para que en el celular
+   * se asignen con un toque en vez de tipear 12 caracteres.
+   */
+  function leerEtiqueta(texto) {
+    const t = String(texto || "");
+    const pn = trasRotulo(t, ROTULO_PN);
+    const sn = trasRotulo(t, ROTULO_SN);
+    const vistos = new Set();
+    const candidatos = [];
+    for (const tok of (t.match(TOKEN) || []).map(limpiarToken)) {
+      if (!pareceCodigo(tok) || vistos.has(tok)) continue;
+      vistos.add(tok);
+      candidatos.push(tok);
+    }
+    return { pn, sn, candidatos };
+  }
+
+  /** Nombre por defecto para no tener que escribirlo: "GE Bobina MRI · 2217680". */
+  function nombreSugerido(x) {
+    const base = [x.marca, x.categoria, x.modalidad].filter(Boolean).join(" ");
+    const cod = x.modeloCompatible || x.nroParte;
+    return [base, cod].filter(Boolean).join(" · ");
+  }
+
   global.NEXO_CATALOGO_PARTES = {
     PUBLICABLES, CONDICION_TEXTO, DISPONIBILIDAD_TEXTO,
     textoAPrecio, precioATexto, proximaRef, nombreFoto, esUrl,
     esPublicable, aParte, aParts, fotosPorSubir, diferencias,
     desdeParte, importar, resumen, filtrar, auditar,
-    leerCsv, planDesdeAuditoria,
+    leerCsv, planDesdeAuditoria, leerEtiqueta, nombreSugerido,
   };
 })(typeof window !== "undefined" ? window : globalThis);

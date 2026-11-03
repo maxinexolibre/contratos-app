@@ -95,6 +95,10 @@ fotos nuevas en el repo **público** `nexolibre/nexolibre`, en un solo commit.
 - `parts.json` conserva la forma que escribía SharePoint: de ella dependen
   `catalog.js`, `pseo_build.py`, el PDF y el bot de DOTmed.
 - Las fotos sin publicar quedan en `data/v3/catalogo-fotos/` del repo privado.
+- **Carga rápida** (`#catrapida`) es la pantalla para el celular: cámara directa,
+  botones en vez de selects y lectura de etiqueta (BarcodeDetector + tesseract.js
+  cargado bajo demanda) que pasa el texto por `leerEtiqueta()`. La foto de la
+  etiqueta no se guarda: tiene el SN, que es interno.
 - `NEXO_CATALOGO` (planes.js) es el catálogo comercial de planes; el de partes
   es `NEXO_CATALOGO_PARTES`.
 
