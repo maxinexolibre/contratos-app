@@ -307,7 +307,9 @@
         </div>
         <div class="form-grid">
           <div class="field"><label for="cModalidad">Modalidad</label>
-            <select id="cModalidad">${opciones(["", "MRI", "CT"], d.modalidad, { "": "—" })}</select></div>
+            <input id="cModalidad" value="${esc(d.modalidad)}" list="catModalidades" placeholder="MRI, CT, Rayos X…" />
+            <datalist id="catModalidades">${[...new Set([...CAT.MODALIDADES, ...items().map((x) => x.modalidad).filter(Boolean)])]
+              .map((m) => `<option value="${esc(m)}">`).join("")}</datalist></div>
           <div class="field"><label for="cMarca">Marca</label>
             <input id="cMarca" value="${esc(d.marca)}" placeholder="GE, Philips, Siemens…" /></div>
         </div>
@@ -595,7 +597,8 @@
           <label>Ubicación</label>${chips("pais", E.PAIS, d.pais)}
           <label>Marca</label>${chips("marca", MARCAS, d.marca)}
           <input id="rMarcaOtra" class="grande" placeholder="Otra marca…" value="${MARCAS.includes(d.marca) ? "" : esc(d.marca)}">
-          <label>Modalidad</label>${chips("modalidad", ["MRI", "CT"], d.modalidad)}
+          <label>Modalidad</label>${chips("modalidad", CAT.MODALIDADES, d.modalidad)}
+          <input id="rModOtra" class="grande" placeholder="Otra modalidad…" value="${!d.modalidad || CAT.MODALIDADES.includes(d.modalidad) ? "" : esc(d.modalidad)}">
           <label>Tipo</label>${chips("tipo", E.CATALOGO_TIPO, d.tipo)}
           <label>Categoría</label>${chips("categoria", CATEGORIAS, d.categoria)}
           <label>Condición</label>${chips("condicion", E.CATALOGO_CONDICION, d.condicion, CAT.CONDICION_TEXTO)}
@@ -622,8 +625,9 @@
       if (!b) return;
       leerRapida();
       const campo = c.dataset.campo;
-      rapida[campo] = rapida[campo] === b.dataset.valor && campo === "categoria" ? "" : b.dataset.valor;
+      rapida[campo] = rapida[campo] === b.dataset.valor && (campo === "categoria" || campo === "modalidad") ? "" : b.dataset.valor;
       if (campo === "marca") document.getElementById("rMarcaOtra").value = "";
+      if (campo === "modalidad") document.getElementById("rModOtra").value = "";
       if (campo === "pais" && !rapida.fotos.length) {
         rapida.ref = CAT.proximaRef(items(), rapida.pais);
         document.getElementById("rRef").textContent = rapida.ref;
@@ -631,7 +635,13 @@
       c.querySelectorAll(".chip").forEach((x) => x.classList.toggle("on", x.dataset.valor === rapida[campo]));
       actualizarNombre();
     }));
-    ["rPN", "rModelo", "rMarcaOtra"].forEach((id) => document.getElementById(id).addEventListener("input", () => { leerRapida(); actualizarNombre(); }));
+    ["rPN", "rModelo", "rMarcaOtra", "rModOtra"].forEach((id) => document.getElementById(id).addEventListener("input", () => {
+      leerRapida();
+      actualizarNombre();
+      // Al tipear "otra" se apaga el botón que estuviera elegido.
+      el.querySelectorAll(".chips[data-campo]").forEach((c) => c.querySelectorAll(".chip")
+        .forEach((x) => x.classList.toggle("on", x.dataset.valor === rapida[c.dataset.campo])));
+    }));
     pintarFotosRapida();
     actualizarNombre();
   }
@@ -644,11 +654,13 @@
   function leerRapida() {
     const v = (id) => (document.getElementById(id)?.value || "").trim();
     const otra = v("rMarcaOtra");
+    const modOtra = v("rModOtra");
     Object.assign(rapida, {
       nroParte: v("rPN").toUpperCase(), nroSerie: v("rSN").toUpperCase(),
       modeloCompatible: v("rModelo"), nombre: v("rNombre"), ubicacionFisica: v("rUbic"),
       precio: v("rPrecio"), notas: v("rNotas"),
       ...(otra ? { marca: otra } : {}),
+      ...(modOtra ? { modalidad: modOtra } : {}),
     });
     return rapida;
   }

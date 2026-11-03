@@ -1590,6 +1590,13 @@ prueba("catálogo · nombre sugerido", () => {
   igual(CAT.nombreSugerido({}), "");
 });
 
+prueba("catálogo · modalidad libre: una que no está en la lista se conserva", () => {
+  for (const m of ["MRI", "CT"]) cierto(CAT.MODALIDADES.includes(m), m);
+  const n = E.ENTIDADES.catalogo.normalizar({ ref: "NX-AR-900", nombre: "Tubo", modalidad: "Litotricia" });
+  igual(n.modalidad, "Litotricia");
+  igual(CAT.aParte({ ...n, disponibilidad: "EnStock", publicarWeb: true }).modalidad, "Litotricia");
+});
+
 // ===========================================================================
 
 console.log(`\n  ${pasadas} pasadas · ${fallidas} fallidas\n`);
