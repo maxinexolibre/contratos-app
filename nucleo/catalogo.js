@@ -28,6 +28,13 @@
   /** Lo único que se ofrece en la web. Reservado, vendido o sin stock no se muestran. */
   const PUBLICABLES = ["EnStock", "APedido"];
 
+  /**
+   * Modalidades sugeridas en las pantallas. No es un vocabulario cerrado: el
+   * campo es texto libre y el filtro de la web se arma con lo que haya en
+   * parts.json, así que una modalidad nueva aparece sola sin tocar el sitio.
+   */
+  const MODALIDADES = ["MRI", "CT", "PET/CT", "SPECT", "Rayos X", "Mamografía", "Angiografía", "Arco en C", "Ecografía"];
+
   const CONDICION_TEXTO = {
     Nuevo: "Nuevo", Reacondicionado: "Reacondicionado", Usado: "Usado", ParaPartes: "Para partes",
   };
@@ -473,7 +480,7 @@
   }
 
   global.NEXO_CATALOGO_PARTES = {
-    PUBLICABLES, CONDICION_TEXTO, DISPONIBILIDAD_TEXTO,
+    PUBLICABLES, MODALIDADES, CONDICION_TEXTO, DISPONIBILIDAD_TEXTO,
     textoAPrecio, precioATexto, proximaRef, nombreFoto, esUrl,
     esPublicable, aParte, aParts, fotosPorSubir, diferencias,
     desdeParte, importar, resumen, filtrar, auditar,
