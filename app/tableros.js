@@ -334,7 +334,7 @@ function renderReportes() {
       </tbody>
       <tfoot><tr><th>Total</th><th>${totN}</th><th>${textoMonedas(totUna)}</th><th>${textoMonedas(totMen)}</th><th>${textoMonedas(totAnu)}</th></tr></tfoot>
     </table></div>`;
-  const bind = (id, key) => { const e = document.getElementById(id); e.oninput = e.onchange = () => { REP[key] = e.value; renderReportes(); }; };
+  const bind = (id, key) => { const e = document.getElementById(id); e.oninput = e.onchange = () => { REP[key] = e.value; redibujarConFoco(renderReportes); }; };
   bind("rDesde", "desde"); bind("rHasta", "hasta"); bind("rTipo", "tipo"); bind("rEstado", "estado");
   bind("rMoneda", "moneda"); bind("rCliente", "cliente"); bind("rAgrupar", "agrupar");
 }

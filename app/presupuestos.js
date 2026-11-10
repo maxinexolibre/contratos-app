@@ -99,7 +99,7 @@ function renderPresupuestos() {
     const e = document.getElementById(id);
     if (!e) return;
     const ev = e.tagName === "INPUT" ? "oninput" : "onchange";
-    e[ev] = (x) => { state.filtroPre[campo] = x.target.value; state.filtroPre.pagina = 1; renderPresupuestos(); };
+    e[ev] = (x) => { state.filtroPre[campo] = x.target.value; state.filtroPre.pagina = 1; redibujarConFoco(renderPresupuestos); };
   };
   cambia("pq", "q"); cambia("pfe", "estado"); cambia("pft", "tipo");
   cambia("pfp", "pais"); cambia("pfm", "mes");

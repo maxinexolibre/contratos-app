@@ -179,7 +179,7 @@
       const el = document.getElementById(id);
       if (!el) return;
       el[id === "propQ" ? "oninput" : "onchange"] = (e) => {
-        f[campo] = e.target.value; f.pagina = 1; renderPropuestas();
+        f[campo] = e.target.value; f.pagina = 1; global.redibujarConFoco(renderPropuestas);
       };
     };
     bind("propQ", "q"); bind("propEstado", "estado");
