@@ -1264,6 +1264,7 @@ prueba("planilla: estados y fecha de envío", () => {
   igual(r.presupuesto.fechaEnvio, "2026-09-03", "el año mal tipeado se corrige al del número");
   cierto(r.avisos.length === 1);
   igual(PL.filaARegistro({ ID: 20260909, Mes: "Septiembre", Tipo: "-", "Título": "-", Cliente: "-" }), null, "fila vacía");
+  igual(PL.filaARegistro(filaPl({ Tipo: "Contrato" })), null, "una propuesta de mantenimiento no es presupuesto");
 });
 
 prueba("planilla: pesos, IVA cero y subtipo de venta", () => {

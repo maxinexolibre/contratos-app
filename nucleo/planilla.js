@@ -106,6 +106,11 @@
     const titulo = String(campo(fila, "Título", "Titulo") || "").trim();
     const cliente = String(campo(fila, "Cliente") || "").trim();
     if ((!titulo || titulo === "-") && (!cliente || cliente === "-")) return null;
+    // Las propuestas de mantenimiento y Continuidad Operativa van por
+    // Propuestas → Contrato, no por presupuesto. La planilla de faltantes las
+    // traía en una hoja aparte y el lector lee todas las hojas: entraron 16
+    // como presupuestos en cero.
+    if (/^contrato|^propuesta/i.test(String(campo(fila, "Tipo") || "").trim())) return null;
 
     const avisos = [];
     const pais = /CL$/i.test(id) || String(campo(fila, "País", "Pais") || "").toUpperCase() === "CL" ? "CL" : "AR";
