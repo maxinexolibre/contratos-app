@@ -34,7 +34,7 @@ contexto.window = contexto;
 contexto.globalThis = contexto;
 vm.createContext(contexto);
 
-for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones", "catalogo", "planilla"]) {
+for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones", "catalogo", "planilla", "clientes"]) {
   vm.runInContext(readFileSync(resolve(RAIZ, `nucleo/${f}.js`), "utf8"), contexto, { filename: f });
 }
 
@@ -1346,6 +1346,48 @@ prueba("planilla: los acuerdos de mantenimiento pasan a Propuestas sin perder la
 
   const otraVez = PL.planAcuerdos(plan.acuerdos, { propuestas: r.propuestas, hoy: "2026-11-10" });
   igual(otraVez.propuestas.length, 0, "correrlo dos veces no duplica");
+});
+
+prueba("clientes: grupos, parecidos y fusión (datos ficticios)", () => {
+  const CL = contexto.NEXO_CLIENTES;
+  const cli = (id, nombreComercial, extra = {}) => E.ENTIDADES.clientes.normalizar({ id, nombreComercial, ...extra });
+  const a = cli("cli_a", "Imágenes Ficticias", { grupo: "Red Ficticia", sede: "Norte" });
+  const b = cli("cli_b", "Imágenes Ficticias Sur", { grupo: "Red Ficticia", sede: "Sur" });
+  const c = cli("cli_c", "Sanatorio Inventado", { cuit: "30-00000000-0" });
+  const d = cli("cli_d", "Inventado", { localidad: "Ciudad Ejemplo" });
+  const e = cli("cli_e", "Tolmo Salud");
+  const f = cli("cli_f", "Rolmo Salud");
+  const g = cli("cli_g", "Sanatorio Otro");
+
+  const grupos = CL.agrupar([a, b, c]);
+  igual(grupos.map((x) => [x.nombre, x.clientes.length]), [["Red Ficticia", 2], ["Sanatorio Inventado", 1]]);
+  igual(CL.nombresDeGrupo([a, b, c]), ["Red Ficticia"]);
+
+  const pares = CL.parecidos([a, b, c, d, e, f, g]).map((p) => [p.a.id, p.b.id]);
+  cierto(pares.some(([x, y]) => x === "cli_c" && y === "cli_d"), "sin la palabra Sanatorio son iguales");
+  cierto(pares.some(([x, y]) => x === "cli_e" && y === "cli_f"), "error de tipeo");
+  cierto(!pares.some(([x, y]) => x === "cli_a" && y === "cli_b"), "ya están en el mismo grupo");
+  cierto(!pares.some(([x, y]) => [x, y].includes("cli_g") && [x, y].includes("cli_c")), "dos sanatorios no se parecen por ser sanatorios");
+
+  const estado = {
+    presupuestos: [{ id: "p1", cliente: { nombreComercial: "Inventado" } }, { id: "p2", cliente: { nombreComercial: "Otro" } }],
+    tickets: [{ id: "t1", cliente: { nombreComercial: "inventado" } }],
+    data: [],
+    propuestas: [{ id: "pr1", clienteId: "cli_d" }, { id: "pr2", clienteId: "cli_c" }],
+  };
+  const plan = CL.planFusion(d, c, estado);
+  igual(plan.quitar, "cli_d");
+  igual(plan.cuenta, { presupuestos: 1, tickets: 1, propuestas: 1 });
+  igual(plan.cambios.presupuestos[0].cliente.nombreComercial, "Sanatorio Inventado");
+  igual(plan.cambios.propuestas[0].clienteId, "cli_c");
+  cierto(plan.destino.alias.includes("Inventado"), "el nombre viejo queda como alias");
+  igual(plan.destino.localidad, "Ciudad Ejemplo", "completa lo que faltaba");
+  igual(plan.destino.cuit, "30-00000000-0", "no pisa lo que tenía");
+  const idx = AD.indiceClientes([plan.destino]);
+  igual(idx.get(E.claveCliente("Inventado")), "cli_c", "un documento viejo con el nombre anterior cae en el destino");
+  let fallo = false;
+  try { CL.planFusion(c, c, estado); } catch { fallo = true; }
+  cierto(fallo, "no se fusiona un cliente consigo mismo");
 });
 
 prueba("ticket: ida y vuelta estable", () => {

@@ -26,6 +26,7 @@ contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
 | Filtros, paginación, CSV, selector de país | `nucleo/tabla.js` | 2k |
 | Catálogo de partes/equipos: parts.json, importación, auditoría | `nucleo/catalogo.js` | 4k |
 | Importación de la planilla de presupuestos (Excel) | `nucleo/planilla.js` | 3k |
+| Padrón de clientes: grupos y sedes, parecidos, fusión | `nucleo/clientes.js` · `vistas/clientes.js` | 2k · 4k |
 | Estado global, constantes, fechas, migraciones | `app/base.js` | 4k |
 | API de GitHub, stores, persistencia, demo | `app/datos.js` | 4k |
 | Arranque, router, navegación, tema | `app/chrome.js` | 2k |

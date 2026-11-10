@@ -63,7 +63,7 @@ function refreshWho() {
 const SUBNAV = {
   contratos: [["dashboard", "Tablero"], ["pipeline", "Pipeline"], ["propuestas", "Propuestas"],
     ["listado", "Contratos"], ["agenda", "Vencimientos"]],
-  presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["facturacion", "Facturación"], ["reportes", "Reportes"]],
+  presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["clientes", "Clientes"], ["facturacion", "Facturación"], ["reportes", "Reportes"]],
   marketing: [["mktablero", "Tablero"], ["campanas", "Campañas"], ["leads", "Leads"], ["canales", "Canales"]],
   equipo: [["vendedores", "Vendedores"], ["comisiones", "Comisiones"]],
   catalogo: [["catalogo", "Catálogo"], ["catrapida", "Carga rápida"], ["catauditoria", "Auditoría"], ["catpublicar", "Publicar en la web"]],
@@ -74,7 +74,7 @@ const VIEW_WS = {
   propuestas: "contratos", propdetalle: "contratos", propform: "contratos",
   ptablero: "presupuestos", presupuestos: "presupuestos", presudetalle: "presupuestos", presuform: "presupuestos", presuimportar: "presupuestos",
   tickets: "presupuestos", tkdetalle: "presupuestos", tkform: "presupuestos", reportes: "presupuestos", direccion: "presupuestos",
-  facturacion: "presupuestos", cambio: "presupuestos",
+  facturacion: "presupuestos", cambio: "presupuestos", clientes: "presupuestos", cliform: "presupuestos",
   mktablero: "marketing", campanas: "marketing", campdetalle: "marketing", campform: "marketing",
   leads: "marketing", leadform: "marketing", canales: "marketing",
   vendedores: "equipo", vnddetalle: "equipo", vndform: "equipo", comisiones: "equipo",
