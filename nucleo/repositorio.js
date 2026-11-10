@@ -256,6 +256,11 @@
       return registros.length;
     }
 
+    /** Quita registros por id del almacén (el estado en memoria lo filtra quien llama). */
+    async eliminarLote(entidad, ids, mensaje) {
+      return this.almacen.eliminarLote(entidad, ids, mensaje);
+    }
+
     /** Como `_asegurarCliente`, pero escribe el padrón una sola vez. */
     async _asegurarClientesEnLote(bloques) {
       const nuevos = [];

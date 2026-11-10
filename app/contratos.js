@@ -189,7 +189,7 @@ function renderListado() {
       </tr></thead>
       <tbody>${rows.map(trContrato).join("") || `<tr><td colspan="8" class="empty">Sin resultados</td></tr>`}</tbody>
     </table></div>`;
-  document.getElementById("fq").oninput = (e) => { state.filtro.q = e.target.value; renderListado(); };
+  document.getElementById("fq").oninput = (e) => { state.filtro.q = e.target.value; redibujarConFoco(renderListado); };
   document.getElementById("festado").onchange = (e) => { state.filtro.estado = e.target.value; renderListado(); };
   document.getElementById("fmod").onchange = (e) => { state.filtro.modalidad = e.target.value; renderListado(); };
   document.getElementById("selAll").onclick = (e) => {

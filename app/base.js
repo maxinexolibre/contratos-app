@@ -130,6 +130,21 @@ const hoy = () => {
   d.setHours(0, 0, 0, 0);
   return d;
 };
+// Los listados se redibujan enteros al filtrar, y el buscador se reemplaza por
+// uno nuevo: perdía el foco y había que hacer clic después de cada letra. Esto
+// devuelve el foco y el cursor al campo con el mismo id en el HTML nuevo.
+function redibujarConFoco(render) {
+  const a = document.activeElement;
+  const id = a && a.id;
+  const ini = a?.selectionStart, fin = a?.selectionEnd;
+  render();
+  if (!id) return;
+  const n = document.getElementById(id);
+  if (!n || n === a) return;
+  n.focus();
+  try { if (ini != null) n.setSelectionRange(ini, fin); } catch { /* selects no tienen cursor */ }
+}
+
 function parseDate(s) {
   if (!s) return null;
   const d = new Date(s + "T00:00:00");

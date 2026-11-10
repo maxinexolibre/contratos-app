@@ -196,6 +196,16 @@ async function persist(msg, store = "contratos", registro = null) {
   }
 }
 
+// Quita registros. `persist` no alcanza: guarda fusionando por id, así que un
+// registro sacado del estado seguiría vivo en el repo particionado. Quien llama
+// ya los sacó de state; acá se borran del almacén.
+async function eliminarRegistros(store, ids, msg) {
+  if (!ids.length) return;
+  if (state.soloLectura) throw new Error("Tu acceso es de solo lectura: podés consultar y descargar, no modificar.");
+  if (state.mode === "connected" && repo) await repo.eliminarLote(store, ids, msg);
+  else await persist(msg, store);
+}
+
 // Dataset demo embebido: clientes FICTICIOS, a propósito.
 // Este archivo vive en un repo público. Nunca poner acá datos reales de
 // clientes (nombres, contactos, canones): los datos reales viven solo en

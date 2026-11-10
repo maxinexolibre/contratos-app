@@ -64,6 +64,12 @@ arranca la aplicación. Ese orden está en `index.html` y hay que respetarlo.
 Ticket → Presupuesto → Contrato para trabajos puntuales.
 Propuesta comercial → Contrato para acuerdos de mantenimiento (dos etapas).
 
+Hasta noviembre de 2026 los acuerdos de mantenimiento se numeraron como
+presupuestos (P2026…). Se pasan a Propuestas con `planAcuerdos()` en
+`nucleo/planilla.js`: la propuesta guarda el número viejo en `numeroLegado` y el
+contrato que colgaba del presupuesto pasa a colgar de la propuesta.
+"Mantenimiento preventivo" a secas es un servicio puntual: sigue siendo presupuesto.
+
 Tipos de presupuesto: **servicio** y **venta** (subtipo partes / intercambio /
 equipo). El SaaS de Gestión y Monitoreo Cryo **no se cotiza por presupuesto**:
 tiene documento propio. Como cobertura de un contrato sí existe

@@ -48,7 +48,7 @@ function renderTickets() {
     const e = document.getElementById(id);
     if (!e) return;
     const ev = e.tagName === "INPUT" ? "oninput" : "onchange";
-    e[ev] = (x) => { state.filtroTk[campo] = x.target.value; state.filtroTk.pagina = 1; renderTickets(); };
+    e[ev] = (x) => { state.filtroTk[campo] = x.target.value; state.filtroTk.pagina = 1; redibujarConFoco(renderTickets); };
   };
   cambia("tkq", "q"); cambia("tkfe", "estado"); cambia("tkfp", "pais"); cambia("tkfm", "mes");
 }
