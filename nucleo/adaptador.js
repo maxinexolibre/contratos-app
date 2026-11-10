@@ -38,17 +38,23 @@
     Perdido: "perdido",
   };
 
+  // "negociacion" no tiene par en v3 y caía al default "Borrador": un
+  // presupuesto en negociación volvía como borrador al recargar. Es un
+  // presupuesto que ya salió, así que va a "Enviado".
   const PRESU_ESTADO_A_NUEVO = {
     borrador: "Borrador",
     enviado: "Enviado",
+    negociacion: "Enviado",
     ganado: "Aprobado",
     perdido: "Rechazado",
+    anulado: "Anulado",
   };
   const PRESU_ESTADO_A_VIEJO = {
     Borrador: "borrador",
     Enviado: "enviado",
     Aprobado: "ganado",
     Rechazado: "perdido",
+    Anulado: "anulado",
   };
 
   const TIPO_PEDIDO_A_NUEVO = {
@@ -166,6 +172,9 @@
       condicionIVA: p.condicionIVA,
       estado: PRESU_ESTADO_A_NUEVO[p.estado] || "Borrador",
       estadoOrigen: p.estadoOrigen,
+      vendedorId: p.vendedorId,
+      motivoAnulacion: p.motivoAnulacion,
+      fechaEnvio: p.fechaEnvio,
       items: p.items || [],
       // La garantía va entera: si se pierde, el presupuesto vuelve al default
       // de 90 días y se promete una cobertura que no es la que se acordó.
@@ -268,6 +277,9 @@
       titulo: p.titulo,
       estado: PRESU_ESTADO_A_VIEJO[p.estado] || "borrador",
       estadoOrigen: p.estadoOrigen,
+      vendedorId: p.vendedorId,
+      motivoAnulacion: p.motivoAnulacion,
+      fechaEnvio: p.fechaEnvio,
       pais: p.pais,
       condicionIVA: p.condicionIVA,
       fecha: p.fecha,

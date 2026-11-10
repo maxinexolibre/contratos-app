@@ -323,6 +323,11 @@ function proxSecuenciaMes() {
   return { ym, n: String(max + 1).padStart(2, "0") };
 }
 function proxNumeroPresu() { const { ym, n } = proxSecuenciaMes(); return `P${ym}${n}`; }
+/** Chile lleva sufijo CL (P2026MMNNCL); el resto de los países, no. */
+function numeroConPais(numero, pais) {
+  const base = String(numero || "").replace(/CL$/, "");
+  return pais === "CL" ? base + "CL" : base;
+}
 function proxNumeroTicket() { const { ym, n } = proxSecuenciaMes(); return `TK-${ym}${n}`; }
 
 // ============================================================

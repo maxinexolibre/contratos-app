@@ -34,7 +34,7 @@ contexto.window = contexto;
 contexto.globalThis = contexto;
 vm.createContext(contexto);
 
-for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones", "catalogo"]) {
+for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones", "catalogo", "planilla"]) {
   vm.runInContext(readFileSync(resolve(RAIZ, `nucleo/${f}.js`), "utf8"), contexto, { filename: f });
 }
 
@@ -114,9 +114,37 @@ prueba("calcula el vencimiento desde emisión + validez", () => {
   igual(presuBase().vence, "2026-08-16", "vencimiento");
 });
 
-prueba("marca legado lo que no está cotizado en USD ni UF", () => {
-  cierto(presuBase({ economico: { moneda: "ARS", recurrencia: "mensual", validezDias: 15, descuentoPct: 0 } }).esLegado);
+prueba("marca legado lo que no está cotizado en USD, UF o ARS", () => {
+  // ARS es una excepción real (clientes que contratan en pesos), no un resto heredado.
+  cierto(!presuBase({ economico: { moneda: "ARS", recurrencia: "mensual", validezDias: 15, descuentoPct: 0 } }).esLegado);
+  cierto(presuBase({ economico: { moneda: "CLP", recurrencia: "unica", validezDias: 15, descuentoPct: 0 } }).esLegado);
   cierto(!presuBase().esLegado);
+});
+
+prueba("presupuesto anulado: estado propio, con motivo, sin contar como rechazo", () => {
+  const p = presuBase({ estado: "Anulado", motivoAnulacion: "Reemplazado por otra versión" });
+  igual(p.estado, "Anulado");
+  igual(p.motivoAnulacion, "Reemplazado por otra versión");
+  igual(presuBase({ estado: "Enviado", motivoAnulacion: "x" }).motivoAnulacion, "", "solo un anulado lleva motivo");
+  const k = K.presupuestos([presuBase({ estado: "Aprobado" }), presuBase({ estado: "Rechazado" }), p]);
+  igual(k.porEstado.Anulado, 1);
+  igual(k.tasaAprobacion, 50, "el anulado no entra en la tasa");
+});
+
+prueba("se anula desde borrador o enviado; un anulado no se reabre", () => {
+  const ctx = { tickets: [ticketBase({ id: "tk1" })], presupuestos: [], rol: "admin" };
+  const env = presuBase({ id: "p1", ticketId: "tk1", estado: "Enviado" });
+  cierto(R.validar("presupuestos", "editar", { ...env, estado: "Anulado" }, env, ctx) !== false);
+  const anu = { ...env, estado: "Anulado" };
+  rechaza("NX-020", () => R.validar("presupuestos", "editar", { ...anu, estado: "Enviado" }, anu, ctx));
+});
+
+prueba("seguimiento: 30 días para reparaciones y partes, 180 para equipos", () => {
+  const s = K.seguimiento({ estado: "enviado", fechaEnvio: "2026-09-01", subtipo: "" }, "2026-10-15");
+  igual(s.dias, 44); igual(s.plazo, 30); cierto(s.atrasado);
+  const eq = K.seguimiento({ estado: "Enviado", fechaEnvio: "2026-09-01", subtipo: "equipo" }, "2026-10-15");
+  cierto(!eq.atrasado, "un equipo todavía está en plazo");
+  igual(K.seguimiento({ estado: "ganado", fechaEnvio: "2026-01-01" }, "2026-10-15"), null, "lo resuelto no se sigue");
 });
 
 prueba("ticket abierto no lleva fecha de cierre; terminal sí", () => {
@@ -1191,6 +1219,78 @@ prueba("presupuesto: ida y vuelta sin pérdida", () => {
                          intercambio: false, unitarioIntercambio: null }]);
   igual(vuelta.economico.moneda, "USD");
   igual(vuelta.garantia.dias, 90, "la garantía sobrevive la vuelta");
+});
+
+prueba("presupuesto: vendedor, envío y anulación sobreviven la ida y vuelta", () => {
+  const clientes = AD.clientesDesde({ presupuestos: [presuViejo()] });
+  const ctx = { indiceClientes: AD.indiceClientes(clientes) };
+  const viejo = presuViejo({ estado: "anulado", vendedorId: "vnd_x", fechaEnvio: "2026-09-02",
+    motivoAnulacion: "Reemplazado por P20260999" });
+  const nuevo = AD.presupuestoANuevo(viejo, ctx);
+  igual(nuevo.estado, "Anulado");
+  const vuelta = AD.presupuestoAViejo(nuevo, { clientes });
+  igual(vuelta.estado, "anulado");
+  igual(vuelta.vendedorId, "vnd_x");
+  igual(vuelta.fechaEnvio, "2026-09-02");
+  igual(vuelta.motivoAnulacion, "Reemplazado por P20260999");
+  igual(AD.presupuestoANuevo(vuelta, ctx), nuevo, "estable en la segunda vuelta");
+  // En negociación ya salió al cliente: antes volvía como borrador.
+  igual(AD.presupuestoANuevo(presuViejo({ estado: "negociacion" }), ctx).estado, "Enviado");
+});
+
+// ===========================================================================
+// PLANILLA DE PRESUPUESTOS (datos ficticios)
+// ===========================================================================
+
+const filaPl = (extra = {}) => ({
+  ID: 20260901, Mes: "Septiembre", Tipo: "Servicio", "Título": "Reparación de bobina",
+  Cliente: "Clínica Ficticia", "Monto s/iva": 1900, IVA: 399, Total: 2299,
+  "Fecha de envío": "2026-09-03", "Última nota": "Pendiente de aprobación del cliente.",
+  Estado: "Pendiente", ...extra,
+});
+
+prueba("planilla: estados y fecha de envío", () => {
+  const PL = contexto.NEXO_PLANILLA;
+  igual(PL.filaARegistro(filaPl()).presupuesto.estado, "enviado");
+  igual(PL.filaARegistro(filaPl({ Estado: "Aprobado" })).presupuesto.estado, "ganado");
+  igual(PL.filaARegistro(filaPl({ Estado: "Anulado" })).presupuesto.estado, "anulado");
+  igual(PL.filaARegistro(filaPl({ "Fecha de envío": null, "Última nota": "Pendiente de enviar al cliente." })).presupuesto.estado,
+    "borrador", "sin fecha y con 'enviar' en la nota es borrador");
+  igual(PL.filaARegistro(filaPl({ "Fecha de envío": null })).presupuesto.estado,
+    "enviado", "pendiente de respuesta sin fecha: salió, falta la fecha");
+  const r = PL.filaARegistro(filaPl({ "Fecha de envío": "2016-09-03" }));
+  igual(r.presupuesto.fechaEnvio, "2026-09-03", "el año mal tipeado se corrige al del número");
+  cierto(r.avisos.length === 1);
+  igual(PL.filaARegistro({ ID: 20260909, Mes: "Septiembre", Tipo: "-", "Título": "-", Cliente: "-" }), null, "fila vacía");
+});
+
+prueba("planilla: pesos, IVA cero y subtipo de venta", () => {
+  const PL = contexto.NEXO_PLANILLA;
+  const ars = PL.filaARegistro(filaPl({ "Monto s/iva": 6000000, IVA: 1260000, Total: 7260000 }));
+  igual(ars.presupuesto.economico.moneda, "ARS");
+  igual(PL.filaARegistro(filaPl({ IVA: 0, Total: 1900 })).presupuesto.condicionIVA, "NoGravado");
+  igual(PL.filaARegistro(filaPl({ Tipo: "Venta", "Título": "Venta de equipo Achieva 1.5T" })).presupuesto.subtipo, "equipo");
+  igual(PL.filaARegistro(filaPl({ Tipo: "Venta", "Título": "Provisión por intercambio de AMP" })).presupuesto.subtipo, "intercambio");
+  igual(PL.filaARegistro(filaPl({ ID: "20260901CL" })).presupuesto.numero, "P20260901CL");
+  igual(PL.filaARegistro(filaPl({ ID: "20260901CL" })).presupuesto.economico.ivaPct, 19, "Chile al 19 %");
+});
+
+prueba("planilla: el plan crea lo nuevo y actualiza solo lo que cambió", () => {
+  const PL = contexto.NEXO_PLANILLA;
+  const ya = PL.filaARegistro(filaPl()).presupuesto;
+  ya.items = [{ detalle: "Detalle cargado en la app", sku: "", cantidad: 1, unitario: 490, intercambio: false, unitarioIntercambio: null }];
+  const plan = PL.planImportacion([filaPl({ Estado: "Rechazado", "Monto s/iva": 1900 }), filaPl({ ID: 20260902 }), filaPl({ ID: 20260903 })], [ya]);
+  igual(plan.crear.length, 2);
+  igual(plan.actualizar.length, 1);
+  igual(plan.actualizar[0].cambios.map((c) => c.campo).sort(), ["estado", "estadoOrigen", "neto"]);
+  const p = PL.aplicarActualizacion(ya, plan.actualizar[0], { hoy: "2026-11-10" });
+  igual(p.estado, "perdido");
+  igual(p.items[0].unitario, 1900);
+  igual(p.items[0].detalle, "Detalle cargado en la app", "el detalle de la app se respeta");
+  const sinCambio = PL.planImportacion([filaPl()], [PL.filaARegistro(filaPl()).presupuesto]);
+  igual(sinCambio.iguales, 1);
+  const rep = PL.planImportacion([filaPl(), filaPl()], []);
+  igual(rep.crear.length, 1, "número repetido: se toma la primera fila");
 });
 
 prueba("ticket: ida y vuelta estable", () => {

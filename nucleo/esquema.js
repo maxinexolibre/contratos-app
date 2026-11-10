@@ -25,7 +25,13 @@
   const TICKET_ESTADO = ["Nuevo", "EnPresupuesto", "EnNegociacion", "Cerrado", "Perdido"];
   const TICKET_TIPO = ["Servicio", "Producto", "Mixto"];
   const PRIORIDAD = ["Baja", "Media", "Alta", "Critica"];
-  const PRESUPUESTO_ESTADO = ["Borrador", "Enviado", "Aprobado", "Rechazado"];
+  /**
+   * "Anulado" no es "Rechazado": el rechazo lo decide el cliente y cuenta en la
+   * tasa de aprobación; la anulación es nuestra (se reemplazó por otra versión,
+   * el equipo se dio de baja, se cargó por error) y no habla de cómo vendemos.
+   * Antes se registraban como rechazados y la tasa de aprobación daba peor.
+   */
+  const PRESUPUESTO_ESTADO = ["Borrador", "Enviado", "Aprobado", "Rechazado", "Anulado"];
   const CONTRATO_ESTADO = ["Borrador", "EnRevision", "Firmado", "Activo", "Finalizado", "Anulado"];
 
   /**
@@ -105,6 +111,12 @@
 
   /** Monedas de cotización. ARS/CLP solo se toleran en registros heredados. */
   const MONEDA_COTIZACION = ["USD", "UF"];
+  /**
+   * Un presupuesto puede salir en pesos: hay clientes que contratan y pagan en
+   * ARS (mantenimientos grandes de hospitales). Es una excepción real, no un
+   * resto heredado, así que no se marca como legado. Nunca se suma con USD.
+   */
+  const MONEDA_PRESUPUESTO = ["USD", "UF", "ARS"];
   const MONEDA_LIQUIDACION = ["ARS", "CLP", "USD"];
 
   /** Probabilidad de cierre por etapa. Alimenta el pipeline ponderado. */
@@ -283,6 +295,7 @@
         const neto = incluyeIVA ? money(total / (1 + ivaPct / 100)) : total;
         const validezDias = esNumero(eco.validezDias, 15);
         const f = fecha(r.fecha) || hoy();
+        const estado = enumerado(r.estado, PRESUPUESTO_ESTADO, "Borrador");
 
         return {
           id: esTexto(r.id) || nuevoId("pre_"),
@@ -303,7 +316,7 @@
           // todos factura de más a unos y de menos a otros.
           condicionIVA: enumerado(r.condicionIVA, CONDICION_IVA,
             esBool(r.economico?.incluyeIVA) ? "IncluidoEnPrecio" : "Gravado"),
-          estado: enumerado(r.estado, PRESUPUESTO_ESTADO, "Borrador"),
+          estado,
           // Se conserva el estado tal como lo llevaba el usuario en su planilla.
           estadoOrigen: esTexto(r.estadoOrigen),
           items,
@@ -322,7 +335,16 @@
           neto,
           // Los importes se guardan calculados, no se recalculan al leer:
           // un presupuesto aprobado no puede cambiar de monto solo.
-          esLegado: !MONEDA_COTIZACION.includes(moneda),
+          esLegado: !MONEDA_PRESUPUESTO.includes(moneda),
+          // Quién lo vendió. Vacío = venta directa de la dirección: no paga
+          // comisión de vendedor (sí la del área comercial, según el cliente).
+          vendedorId: esTexto(r.vendedorId),
+          // Por qué se anuló: sin esto, un anulado y un rechazado vuelven a
+          // verse iguales a los seis meses.
+          motivoAnulacion: estado === "Anulado" ? esTexto(r.motivoAnulacion) : "",
+          // Fecha en que salió al cliente. Distinta de `fecha` (emisión): el
+          // seguimiento se mide desde el envío.
+          fechaEnvio: fecha(r.fechaEnvio),
           hash: esTexto(r.hash),
           notas: esTexto(r.notas),
           archivos: esLista(r.archivos),
@@ -872,7 +894,7 @@
     TICKET_ESTADO, TICKET_TIPO, PRIORIDAD, PRESUPUESTO_ESTADO, CONTRATO_ESTADO,
     CAMPANA_ESTADO, ESTRATEGIA_ESTADO, ESTRATEGIA_TIPO, CANAL, LEAD_ESTADO,
     PROPUESTA_ESTADO,
-    RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_LIQUIDACION, PESO_ETAPA,
+    RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_PRESUPUESTO, MONEDA_LIQUIDACION, PESO_ETAPA,
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
     COMISION_ORIGEN, COMISION_ESTADO, COMISION_ALCANCE, AREAS_COMISION,
     PAIS, PAIS_NOMBRE, COMPROBANTE_TIPO, CONDICION_IVA,

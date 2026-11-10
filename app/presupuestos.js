@@ -40,9 +40,18 @@ function totalesPorMoneda(lista, campo = "anual") {
 // Texto de un mapa {moneda: monto} para mostrar sin mezclar.
 const textoMonedas = (m) => Object.entries(m).filter(([, v]) => v).map(([mon, v]) => money(v, mon)).join(" · ") || money(0);
 
+/** Días desde el envío de un presupuesto que espera respuesta, o null. */
+const diasSinRespuesta = (p) => NEXO_KPI.seguimiento(p)?.dias ?? null;
+const requiereSeguimiento = (p) => !!NEXO_KPI.seguimiento(p)?.atrasado;
+
 /** Filas de presupuestos que pasan el filtro activo, ya ordenadas. */
 function presupuestosFiltrados() {
-  return NEXO_TABLA.filtrar(state.presupuestos, state.filtroPre, {
+  // "Seguimiento" no es un estado: son los enviados que pasaron el plazo en
+  // que el cliente suele decidir. Se filtra aparte y el resto del filtro sigue.
+  const f = { ...state.filtroPre };
+  let base = state.presupuestos;
+  if (f.estado === "seguimiento") { base = base.filter(requiereSeguimiento); f.estado = ""; }
+  return NEXO_TABLA.filtrar(base, f, {
     texto: (p) => `${p.numero} ${p.cliente?.nombreComercial || ""} ${p.titulo || ""} ` +
       (p.cliente?.razonesSociales || []).map((r) => r.razonSocial).join(" "),
     pais: (p) => p.pais || "AR",
@@ -66,17 +75,18 @@ function renderPresupuestos() {
       <h1>Todos los <span class="accent">presupuestos</span></h1>
       <div style="display:flex;gap:8px">
         <button class="btn sm" onclick="exportarPresuCSV()">⬇ CSV</button>
+        ${state.soloLectura ? "" : `<button class="btn sm" onclick="location.hash='presuimportar'" title="Trae la planilla de Excel del área comercial">⬆ Importar planilla</button>`}
         ${state.soloLectura ? "" : `<button class="btn primary sm" onclick="location.hash='presuform/new'">+ Nuevo</button>`}
       </div>
     </div>
     <div class="table-tools">
       <input type="search" id="pq" placeholder="Buscar cliente, N° o título…" value="${esc(state.filtroPre.q)}" />
-      <select id="pfe"><option value="">Todos los estados</option>${PRE_ESTADOS.map((e) => `<option value="${e.id}" ${state.filtroPre.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
+      <select id="pfe"><option value="">Todos los estados</option><option value="seguimiento" ${state.filtroPre.estado === "seguimiento" ? "selected" : ""}>⚠ Requieren seguimiento</option>${PRE_ESTADOS.filter((e) => e.id !== "negociacion" || state.presupuestos.some((p) => p.estado === "negociacion")).map((e) => `<option value="${e.id}" ${state.filtroPre.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
       <select id="pft"><option value="">Todo tipo</option>${Object.entries(PRE_TIPOS).map(([k, v]) => `<option value="${k}" ${state.filtroPre.tipo === k ? "selected" : ""}>${v.label}</option>`).join("")}</select>
       <select id="pfp"><option value="">Todos los países</option>${NEXO_ESQUEMA.PAIS.map((c) => `<option value="${c}" ${state.filtroPre.pais === c ? "selected" : ""}>${NEXO_ESQUEMA.PAIS_NOMBRE[c]}</option>`).join("")}</select>
       <select id="pfm"><option value="">Todos los meses</option>${meses.map((m) => `<option value="${m}" ${state.filtroPre.mes === m ? "selected" : ""}>${NEXO_TABLA.etiquetaMes(m)}</option>`).join("")}</select>
       ${NEXO_TABLA.hayFiltro(state.filtroPre) ? `<button class="btn sm ghost" onclick="limpiarFiltroPre()">✕ Limpiar</button>` : ""}
-      <span class="muted" style="font-size:13px">${abiertos.length} abiertos · ${pipe} anualizado en juego</span>
+      <span class="muted" style="font-size:13px">${abiertos.length} abiertos · ${pipe} anualizado en juego${(() => { const n = state.presupuestos.filter(requiereSeguimiento).length; return n ? ` · <a href="#" onclick="state.filtroPre.estado='seguimiento';state.filtroPre.pagina=1;renderPresupuestos();return false">${n} requieren seguimiento</a>` : ""; })()}</span>
     </div>
     <div class="overflow"><table class="data">
       <thead><tr><th>N°</th><th>Fecha</th><th>País</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th>Total</th></tr></thead>
@@ -107,7 +117,7 @@ function presuRow(p) {
     <td><span class="pill">${esc(p.pais || "AR")}</span></td>
     <td><b>${esc(p.cliente?.nombreComercial || "—")}</b>${p.titulo ? `<br><span class="muted" style="font-size:12px">${esc(p.titulo.slice(0, 62))}${p.titulo.length > 62 ? "…" : ""}</span>` : ""}</td>
     <td>${esc((PRE_TIPOS[p.tipo] || {}).label || p.tipo)}${p.subtipo ? `<br><span class="muted" style="font-size:12px">${esc(PRE_SUBTIPOS[p.subtipo] || p.subtipo)}</span>` : ""}</td>
-    <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span>${presuVencido(p) ? ' <span class="badge vencida" title="La validez de la oferta ya venció">validez vencida</span>' : ""}</td>
+    <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span>${requiereSeguimiento(p) ? ` <span class="badge vencida" title="Pasó el plazo en que el cliente suele decidir">${diasSinRespuesta(p)} días sin respuesta</span>` : ""}</td>
     <td>${totalTxt}</td></tr>`;
 }
 function renderPresuDetalle(id) {
@@ -154,6 +164,9 @@ function renderPresuDetalle(id) {
             <dt>Forma de pago</dt><dd>${esc(p.economico?.formaPago || "—")}</dd>
             <dt>Validez</dt><dd>${p.economico?.validezDias ? `${p.economico.validezDias} días${vencePresu(p) ? ` · vence ${fmt(vencePresu(p))}` : ""}` : "—"}${presuVencido(p) ? ' <span class="badge vencida">vencida</span>' : ""}</dd>
             <dt>Moneda</dt><dd>${p.economico?.moneda || "USD"}</dd>
+            <dt>Vendedor</dt><dd>${esc(nombreVendedor(p.vendedorId) || "Venta directa")}</dd>
+            <dt>Enviado</dt><dd>${p.fechaEnvio ? fmt(p.fechaEnvio) : "—"}${diasSinRespuesta(p) != null ? ` · ${diasSinRespuesta(p)} días sin respuesta` : ""}</dd>
+            ${p.estado === "anulado" ? `<dt>Motivo de anulación</dt><dd>${esc(p.motivoAnulacion || "—")}</dd>` : ""}
           </dl>
         </div>
         <div class="card"><h3>Trazabilidad</h3>
@@ -181,16 +194,25 @@ function renderPresuItemsTabla(p) {
   return html;
 }
 function estadoPresuBtns(p) {
-  const flujo = ["borrador", "enviado", "negociacion", "ganado"];
+  // El área no usa la etapa "negociación": un presupuesto sale y se aprueba,
+  // se rechaza o se anula. Los viejos en negociación siguen pudiendo cerrarse.
   const b = [];
-  const i = flujo.indexOf(p.estado);
-  if (i >= 0 && i < flujo.length - 1) b.push(`<button class="btn primary sm" onclick="cambiarEstadoPresu('${p.id}','${flujo[i + 1]}')">→ ${PRE_ESTADO_LABEL[flujo[i + 1]]}</button>`);
-  if (PRE_ABIERTOS.has(p.estado)) b.push(`<button class="btn sm danger" onclick="cambiarEstadoPresu('${p.id}','perdido')">✕ Perdido</button>`);
+  if (p.estado === "borrador") b.push(`<button class="btn primary sm" onclick="cambiarEstadoPresu('${p.id}','enviado')">→ Enviado</button>`);
+  if (p.estado === "enviado" || p.estado === "negociacion") {
+    b.push(`<button class="btn primary sm" onclick="cambiarEstadoPresu('${p.id}','ganado')">✓ Aprobado</button>`);
+    b.push(`<button class="btn sm danger" onclick="cambiarEstadoPresu('${p.id}','perdido')">✕ Rechazado</button>`);
+  }
+  if (PRE_ABIERTOS.has(p.estado)) b.push(`<button class="btn sm ghost" onclick="cambiarEstadoPresu('${p.id}','anulado')" title="Reemplazado por otra versión, equipo dado de baja o cargado por error">⊘ Anular</button>`);
   return b.join("");
 }
 async function cambiarEstadoPresu(id, nuevo) {
   const p = presuPorId(id);
   if (!p) return;
+  let motivo = "";
+  if (nuevo === "anulado") {
+    motivo = (prompt("¿Por qué se anula? (ej.: reemplazado por P2026…, equipo dado de baja)") || "").trim();
+    if (!motivo) return;
+  }
   const antes = structuredClone(p);
   const propuesto = { ...structuredClone(p), estado: nuevo };
 
@@ -204,6 +226,9 @@ async function cambiarEstadoPresu(id, nuevo) {
   }
 
   p.estado = nuevo;
+  if (nuevo === "anulado") p.motivoAnulacion = motivo;
+  // El seguimiento se mide desde el envío, no desde la emisión.
+  if (nuevo === "enviado" && !p.fechaEnvio) p.fechaEnvio = new Date().toISOString().slice(0, 10);
   p.historialEstados = p.historialEstados || [];
   p.historialEstados.push({ estado: nuevo, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
   try {
@@ -255,6 +280,13 @@ function nuevoPresupuesto(ticketId) {
     notas: "", archivos: [], usuario: state.user || "—", historialEstados: [{ estado: "borrador", fecha: d, usuario: state.user || "—" }],
   };
 }
+/** Opciones del selector de vendedor: vacío = venta directa de la dirección. */
+function opcionesVendedor(actual) {
+  const activos = (state.vendedores || []).filter((v) => v.estado !== "Inactivo" || v.id === actual);
+  return [["", "— Venta directa (sin vendedor) —"], ...activos.map((v) => [v.id, `${v.nombre}${v.pais ? " · " + v.pais : ""}`])];
+}
+const nombreVendedor = (id) => (state.vendedores || []).find((v) => v.id === id)?.nombre || "";
+
 function renderPresuForm(id, ticketId) {
   const el = document.getElementById("view-presuform");
   const isNew = !id || id === "new";
@@ -274,6 +306,8 @@ function renderPresuForm(id, ticketId) {
         <div class="field"><label>Ticket vinculado <span class="hint">(pedido del cliente)</span></label>
           <select data-path="ticketId" id="preTicket"><option value="">— sin ticket —</option>${ticketsAbiertos.map((t) => `<option value="${t.id}" ${p.ticketId === t.id ? "selected" : ""}>${esc(t.numero)} · ${esc(t.cliente?.nombreComercial || "")}</option>`).join("")}</select></div>
         ${!isNew ? sel("Estado", "estado", p.estado, PRE_ESTADOS.map((e) => [e.id, e.label])) : ""}
+        ${sel("Vendedor", "vendedorId", p.vendedorId || "", opcionesVendedor(p.vendedorId))}
+        ${inp("Fecha de envío al cliente", "fechaEnvio", p.fechaEnvio || "", "", "date")}
       </div>
       ${inp("Título del presupuesto", "titulo", p.titulo, "full")}
       ${sel("País de la operación", "pais", p.pais || "AR", Object.entries(NEXO_ESQUEMA.PAIS_NOMBRE))}
@@ -297,7 +331,7 @@ function renderPresuForm(id, ticketId) {
       <div id="itemsSection">${renderPresuItemsSection()}</div>
 
       <fieldset><legend>Condiciones económicas</legend><div class="form-grid">
-        ${sel("Moneda", "economico.moneda", eco.moneda, [["USD", "USD"], ["ARS", "ARS"]])}
+        ${sel("Moneda", "economico.moneda", eco.moneda, [["USD", "USD"], ["UF", "UF (Chile)"], ["ARS", "ARS (excepción)"]])}
         ${sel("Cobro", "economico.recurrencia", eco.recurrencia || "unica", [["unica", "Pago único"], ["mensual", "Abono mensual"]])}
         ${inp("IVA %", "economico.ivaPct", eco.ivaPct, "", "number")}
         ${inp("Descuento % (única vez)", "economico.descuentoPct", eco.descuentoPct || 0, "", "number")}
@@ -447,6 +481,9 @@ async function guardarPresu(isNew, id) {
   if (!p.cliente.nombreComercial && !p.cliente.razonesSociales.length) { toast("Falta el cliente", true, true); return; }
   if (!p.cliente.nombreComercial && p.cliente.razonesSociales.length) p.cliente.nombreComercial = p.cliente.razonesSociales[0].razonSocial;
   if (!isNew && prev !== p.estado) p.historialEstados.push({ estado: p.estado, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });
+  // Chile numera con sufijo: sin él, P20260709 de Chile y de Argentina eran
+  // dos presupuestos distintos con el mismo número (pasó entre julio y octubre de 2026).
+  if (isNew) p.numero = numeroConPais(p.numero, p.pais);
   if (isNew) state.presupuestos.push(p);
   else { const i = state.presupuestos.findIndex((x) => x.id === id); state.presupuestos[i] = p; }
   try {
@@ -560,3 +597,141 @@ function exportarPresuCSV() {
  * Recorta una lista al país activo. Sin país seleccionado devuelve todo:
  * la mirada consolidada sigue siendo la principal.
  */
+
+// ============================================================
+//  Importación de la planilla de Excel
+// ============================================================
+// La planilla se lee en el navegador: el archivo no se sube a ningún lado
+// más que al repo privado de datos, ya traducido a registros. La lógica de
+// qué se crea y qué se actualiza vive en nucleo/planilla.js (probada).
+
+/** SheetJS pesa ~1 MB: se baja recién cuando alguien importa. */
+let _sheetjs = null;
+function cargarSheetJS() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!_sheetjs) {
+    _sheetjs = new Promise((ok, mal) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+      s.onload = () => ok(window.XLSX);
+      s.onerror = () => { _sheetjs = null; mal(new Error("No se pudo cargar el lector de Excel")); };
+      document.head.appendChild(s);
+    });
+  }
+  return _sheetjs;
+}
+
+/**
+ * Filas de la planilla como objetos. Busca en cada hoja la fila de
+ * encabezados (la que tiene "ID" y "Estado"): la planilla real arranca en la
+ * fila 2 y tiene hojas de tablero que no son datos.
+ */
+async function leerPlanilla(file) {
+  const XLSX = await cargarSheetJS();
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const filas = [];
+  for (const nombre of wb.SheetNames) {
+    const matriz = XLSX.utils.sheet_to_json(wb.Sheets[nombre], { header: 1, raw: true, defval: null });
+    const iCab = matriz.findIndex((r) => r && r.some((c) => String(c).trim() === "ID") && r.some((c) => String(c).trim() === "Estado"));
+    if (iCab < 0) continue;
+    const cab = matriz[iCab].map((c) => (c == null ? "" : String(c).trim()));
+    for (const r of matriz.slice(iCab + 1)) {
+      const o = {};
+      cab.forEach((h, i) => { if (h) o[h] = r[i] instanceof Date ? r[i].toISOString().slice(0, 10) : r[i]; });
+      filas.push(o);
+    }
+  }
+  return filas;
+}
+
+function renderPresuImportar() {
+  const el = document.getElementById("view-presuimportar");
+  const plan = window._planImport;
+  el.innerHTML = `
+    <div class="kicker">Presupuestos</div>
+    <div class="page-head"><h1>Importar <span class="accent">planilla</span></h1></div>
+    <div class="card">
+      <p style="margin-top:0">Elegí la planilla de presupuestos (.xlsx o .csv) con las columnas
+      <b>ID, Tipo, Título, Cliente, Monto s/iva, IVA, Total, Fecha de envío, Última nota, Estado</b>.
+      Antes de guardar vas a ver qué se crea, qué cambia y qué conviene revisar. Lo que diga la planilla
+      reemplaza estado, fecha de envío, notas e importe de lo ya cargado; ítems detallados, garantía y archivos no se tocan.</p>
+      <input type="file" id="impArchivo" accept=".xlsx,.xls,.csv" />
+      <span class="muted" id="impEstado" style="margin-left:8px"></span>
+    </div>
+    ${plan ? renderPlanImport(plan) : ""}
+    <p style="margin-top:14px"><a href="#presupuestos">← Volver a presupuestos</a></p>`;
+  document.getElementById("impArchivo").onchange = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const st = document.getElementById("impEstado");
+    st.textContent = "Leyendo…";
+    try {
+      const filas = await leerPlanilla(f);
+      window._planImport = NEXO_PLANILLA.planImportacion(filas, state.presupuestos, { usuario: state.user || "importación" });
+      window._planImport.archivo = f.name;
+      renderPresuImportar();
+    } catch (err) { st.textContent = ""; toast("No se pudo leer: " + err.message, true, true); }
+  };
+}
+
+function renderPlanImport(plan) {
+  const fila = (n, txt) => `<tr><td><b>${esc(n)}</b></td><td>${txt}</td></tr>`;
+  const lbl = { estado: "Estado", estadoOrigen: "Estado en planilla", fechaEnvio: "Enviado", notas: "Notas", moneda: "Moneda", neto: "Neto" };
+  const val = (c, v) => c === "estado" ? (PRE_ESTADO_LABEL[v] || v || "—") : esc(String(v ?? "").slice(0, 80) || "—");
+  return `
+    <div class="grid-kpi" style="margin:14px 0">
+      ${kpi("Nuevos", plan.crear.length)}${kpi("Con cambios", plan.actualizar.length)}
+      ${kpi("Sin cambios", plan.iguales)}${kpi("Para revisar", plan.avisos.length, "", plan.avisos.length ? "warn" : "")}
+    </div>
+    ${plan.avisos.length ? `<div class="card"><h3>Para revisar después de importar</h3><div class="overflow"><table class="data"><tbody>
+      ${plan.avisos.map((a) => fila(a.numero, esc(a.texto))).join("")}</tbody></table></div></div>` : ""}
+    ${plan.crear.length ? `<div class="card"><h3>Se crean</h3><div class="overflow"><table class="data">
+      <thead><tr><th>N°</th><th>Cliente</th><th>Título</th><th>Estado</th><th>Neto</th></tr></thead><tbody>
+      ${plan.crear.map(({ presupuesto: p }) => `<tr><td><b>${esc(p.numero)}</b></td><td>${esc(p.cliente.nombreComercial)}</td><td>${esc(p.titulo)}</td>
+        <td><span class="badge ${p.estado}">${PRE_ESTADO_LABEL[p.estado]}</span></td><td>${money(p.items[0].unitario, p.economico.moneda)}</td></tr>`).join("")}
+      </tbody></table></div></div>` : ""}
+    ${plan.actualizar.length ? `<div class="card"><h3>Se actualizan</h3><div class="overflow"><table class="data">
+      <thead><tr><th>N°</th><th>Qué cambia</th></tr></thead><tbody>
+      ${plan.actualizar.map((a) => fila(a.numero, a.cambios.map((c) => `${lbl[c.campo] || c.campo}: <span class="muted">${val(c.campo, c.antes)}</span> → ${val(c.campo, c.despues)}`).join("<br>"))).join("")}
+      </tbody></table></div></div>` : ""}
+    ${plan.crear.length || plan.actualizar.length ? `<div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="window._planImport=null;renderPresuImportar()">Descartar</button>
+      <button class="btn primary" id="impAplicar" onclick="aplicarImportacion()">Importar ${plan.crear.length + plan.actualizar.length} presupuestos</button></div>`
+      : `<p class="muted">La planilla no trae nada nuevo.</p>`}`;
+}
+
+async function aplicarImportacion() {
+  const plan = window._planImport;
+  if (!plan) return;
+  const btn = document.getElementById("impAplicar");
+  if (btn) { btn.disabled = true; btn.textContent = "Guardando…"; }
+  const usuario = state.user || "importación";
+  for (const { presupuesto, ticket } of plan.crear) {
+    state.presupuestos.push(presupuesto);
+    if (!ticketPorId(ticket.id)) state.tickets.push(ticket);
+  }
+  for (const a of plan.actualizar) {
+    const i = state.presupuestos.findIndex((p) => p.id === a.id);
+    if (i < 0) continue;
+    const nuevo = NEXO_PLANILLA.aplicarActualizacion(state.presupuestos[i], a, { usuario });
+    state.presupuestos[i] = nuevo;
+    // El ticket acompaña al presupuesto: si se resolvió, se cierra igual.
+    const tk = nuevo.ticketId ? ticketPorId(nuevo.ticketId) : null;
+    const estTk = { ganado: "ganado", perdido: "perdido", anulado: "perdido" }[nuevo.estado];
+    if (tk && estTk && tk.estado !== estTk) {
+      tk.estado = estTk;
+      tk.historial = [...(tk.historial || []), { estado: estTk, fecha: new Date().toISOString().slice(0, 10), usuario }];
+    }
+  }
+  try {
+    // Una escritura por colección: importar 100 filas de a una serían 100 commits.
+    await persist(`Importación de planilla · ${plan.archivo || ""} · tickets`, "tickets");
+    await persist(`Importación de planilla · ${plan.archivo || ""} · ${plan.crear.length} nuevos, ${plan.actualizar.length} actualizados`, "presupuestos");
+    toast(`Importados: ${plan.crear.length} nuevos y ${plan.actualizar.length} actualizados`);
+    window._planImport = null;
+    go("presupuestos");
+  } catch (e) {
+    toast("Error al guardar: " + e.message + " — recargá la página antes de reintentar", true, true);
+    if (btn) { btn.disabled = false; btn.textContent = "Reintentar"; }
+  }
+}

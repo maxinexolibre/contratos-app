@@ -505,7 +505,40 @@
     return out;
   }
 
+  // --------------------------------------------------------------------------
+  // Seguimiento de presupuestos enviados
+  // --------------------------------------------------------------------------
+
+  /**
+   * Plazo en que una oportunidad suele definirse, en días desde el envío.
+   *
+   * No es la validez de la oferta (10 a 15 días, impresa en el documento):
+   * es cuánto tarda el cliente en decidir. Reparaciones y partes se definen
+   * dentro del mes; un equipo puede llevar meses. Con un solo umbral para
+   * todo, o se perseguía de más a un equipo o se dejaba enfriar una reparación.
+   */
+  const PLAZO_DEFINICION = { servicio: 30, partes: 30, intercambio: 30, equipo: 180 };
+
+  /**
+   * Situación de seguimiento de un presupuesto. Acepta la forma vieja
+   * (estado "enviado") y la v3 ("Enviado").
+   *
+   * @returns {null | {dias, plazo, atrasado}}  null si no está esperando respuesta
+   *          o si no se sabe cuándo salió (sin fecha no se inventa una antigüedad).
+   */
+  function seguimiento(p, hoyStr = E.hoy()) {
+    const est = String(p?.estado || "").toLowerCase();
+    if (est !== "enviado" && est !== "negociacion") return null;
+    const desde = p.fechaEnvio || p.fecha;
+    const d = dias(desde, hoyStr);
+    if (d == null) return null;
+    const clave = p.subtipo === "equipo" ? "equipo" : (PLAZO_DEFINICION[p.subtipo] ? p.subtipo : "servicio");
+    const plazo = PLAZO_DEFINICION[clave];
+    return { dias: d, plazo, atrasado: d > plazo };
+  }
+
   global.NEXO_KPI = {
+    seguimiento, PLAZO_DEFINICION,
     // primitivas, exportadas para los reportes libres
     div, pct, redondear, suma, dias, mediana, porMoneda, textoMonedas, SIMBOLO,
     // motores

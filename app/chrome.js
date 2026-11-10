@@ -72,7 +72,7 @@ const SUBNAV = {
 const VIEW_WS = {
   dashboard: "contratos", listado: "contratos", agenda: "contratos", detalle: "contratos", form: "contratos", pipeline: "contratos",
   propuestas: "contratos", propdetalle: "contratos", propform: "contratos",
-  ptablero: "presupuestos", presupuestos: "presupuestos", presudetalle: "presupuestos", presuform: "presupuestos",
+  ptablero: "presupuestos", presupuestos: "presupuestos", presudetalle: "presupuestos", presuform: "presupuestos", presuimportar: "presupuestos",
   tickets: "presupuestos", tkdetalle: "presupuestos", tkform: "presupuestos", reportes: "presupuestos", direccion: "presupuestos",
   facturacion: "presupuestos", cambio: "presupuestos",
   mktablero: "marketing", campanas: "marketing", campdetalle: "marketing", campform: "marketing",
@@ -111,7 +111,7 @@ function router() {
   const R = {
     dashboard: renderDashboard, ptablero: renderPTablero, pipeline: renderPipeline, listado: renderListado, agenda: renderAgenda,
     detalle: () => renderDetalle(view[1]), form: () => renderForm(view[1]),
-    presupuestos: renderPresupuestos, presudetalle: () => renderPresuDetalle(view[1]), presuform: () => renderPresuForm(view[1], view[2]),
+    presupuestos: renderPresupuestos, presudetalle: () => renderPresuDetalle(view[1]), presuform: () => renderPresuForm(view[1], view[2]), presuimportar: renderPresuImportar,
     tickets: renderTickets, tkdetalle: () => renderTicketDetalle(view[1]), tkform: () => renderTicketForm(view[1]),
     reportes: renderReportes, direccion: renderPTablero,
     // Vistas registradas por los módulos de nucleo/vistas.
