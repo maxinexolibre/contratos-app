@@ -27,7 +27,10 @@
   function estadoDesdePlanilla(estado, fechaEnvio, nota = "") {
     const e = String(estado || "").trim().toLowerCase();
     if (e === "aprobado") return "ganado";
-    if (e === "rechazado") return "perdido";
+    // "Desestimado" es como Maxi marca la oportunidad que el cliente dejó
+    // caer sin rechazarla formalmente: para la tasa de aprobación es una
+    // venta perdida, no un anulado (anulado es error nuestro o reemplazo).
+    if (e === "rechazado" || e === "desestimado") return "perdido";
     if (e === "anulado") return "anulado";
     // "Pendiente" sin fecha de envío no siempre es borrador: muchas filas
     // dicen "pendiente de respuesta del cliente" y nunca se les cargó la

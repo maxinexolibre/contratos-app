@@ -1254,6 +1254,8 @@ prueba("planilla: estados y fecha de envío", () => {
   igual(PL.filaARegistro(filaPl()).presupuesto.estado, "enviado");
   igual(PL.filaARegistro(filaPl({ Estado: "Aprobado" })).presupuesto.estado, "ganado");
   igual(PL.filaARegistro(filaPl({ Estado: "Anulado" })).presupuesto.estado, "anulado");
+  igual(PL.filaARegistro(filaPl({ Estado: "Desestimado" })).presupuesto.estado, "perdido",
+    "desestimado por el cliente es venta perdida, no anulado");
   igual(PL.filaARegistro(filaPl({ "Fecha de envío": null, "Última nota": "Pendiente de enviar al cliente." })).presupuesto.estado,
     "borrador", "sin fecha y con 'enviar' en la nota es borrador");
   igual(PL.filaARegistro(filaPl({ "Fecha de envío": null })).presupuesto.estado,
