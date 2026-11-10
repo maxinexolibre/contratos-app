@@ -242,6 +242,10 @@
       let registros = lista || [];
 
       if (t) {
+        // Un alta masiva (la importación de la planilla) trae clientes que no
+        // están en el padrón. Sin darlos de alta antes, sus registros quedaban
+        // con clienteId vacío: el presupuesto existía pero no era de nadie.
+        await this._asegurarClientesEnLote(registros.map((r) => r.cliente));
         const idx = AD.indiceClientes(this.clientes);
         const ip = AD.indicePresupuestos(this.estado.presupuestos);
         registros = registros.map((r) => AD[t.aNuevo](r, {
@@ -250,6 +254,30 @@
       }
       await this.almacen.guardarLote(entidad, registros, mensaje);
       return registros.length;
+    }
+
+    /** Como `_asegurarCliente`, pero escribe el padrón una sola vez. */
+    async _asegurarClientesEnLote(bloques) {
+      const nuevos = [];
+      for (const b of bloques || []) {
+        const nombre = (b?.nombreComercial || "").trim();
+        if (!nombre) continue;
+        const clave = E.claveCliente(nombre);
+        const ya = [...this.clientes, ...nuevos].find(
+          (c) => E.claveCliente(c.nombreComercial) === clave || (c.alias || []).some(
+            (a) => E.claveCliente(a) === clave));
+        if (ya) continue;
+        nuevos.push(E.ENTIDADES.clientes.normalizar({
+          id: `cli_${clave.replace(/\s+/g, "-").slice(0, 32)}`,
+          nombreComercial: nombre, razonSocial: nombre,
+          localidad: b.localidad, provincia: b.provincia, contacto: b.contacto, alias: [nombre],
+        }));
+      }
+      if (!nuevos.length) return 0;
+      this.clientes.push(...nuevos);
+      this.estado.clientes = this.clientes;
+      await this.almacen.guardarLote("clientes", this.clientes, `Alta de ${nuevos.length} clientes`);
+      return nuevos.length;
     }
 
     /**

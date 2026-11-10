@@ -280,6 +280,7 @@ fieldset legend { font: 800 13px var(--body); text-transform: uppercase; letter-
 .badge.presupuestado { background: var(--orange-soft); color: var(--orange-hover); }
 .badge.ganado { background: var(--ok-soft); color: var(--ok); }
 .badge.perdido { background: var(--st-cerrado-bg); color: var(--st-cerrado-tx); }
+.badge.anulado { background: transparent; color: var(--muted, #8a837c); border: 1px dashed currentColor; }
 .badge.cerrado { background: var(--st-cerrado-bg); color: var(--st-cerrado-tx); }
 
 /* ---------- Editor de ítems (presupuestos) ---------- */

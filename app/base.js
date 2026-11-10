@@ -275,13 +275,16 @@ const PRE_ESTADOS = [
   { id: "borrador", label: "Borrador", grupo: "abierto" },
   { id: "enviado", label: "Enviado", grupo: "abierto" },
   { id: "negociacion", label: "Negociación", grupo: "abierto" },
-  { id: "ganado", label: "Ganado", grupo: "ganado" },
-  { id: "perdido", label: "Perdido", grupo: "perdido" },
+  { id: "ganado", label: "Aprobado", grupo: "ganado" },
+  { id: "perdido", label: "Rechazado", grupo: "perdido" },
+  // Anulado: lo decidimos nosotros (reemplazo, baja del equipo, error de
+  // carga). No cuenta como rechazo del cliente en la tasa de aprobación.
+  { id: "anulado", label: "Anulado", grupo: "anulado" },
 ];
 const PRE_ESTADO_LABEL = Object.fromEntries(PRE_ESTADOS.map((e) => [e.id, e.label]));
 const PRE_ABIERTOS = new Set(["borrador", "enviado", "negociacion"]);
 // Probabilidad de cierre por etapa, para ponderar el pipeline.
-const PRE_PROB = { borrador: 0.2, enviado: 0.5, negociacion: 0.7, ganado: 1, perdido: 0 };
+const PRE_PROB = { borrador: 0.2, enviado: 0.5, negociacion: 0.7, ganado: 1, perdido: 0, anulado: 0 };
 // Tipos según el registro comercial real: Servicio y Venta. La Venta se
 // desglosa en subtipos para poder analizarla sin cambiar la nomenclatura.
 // El SaaS de Gestión y Monitoreo Cryo salió de acá: tiene su propio documento

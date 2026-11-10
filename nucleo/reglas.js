@@ -77,12 +77,15 @@
   // --------------------------------------------------------------------------
 
   const TRANSICION_PRESUPUESTO = {
-    Borrador:  ["Borrador", "Enviado"],
+    // Se anula desde cualquier estado abierto: un borrador que no sale o un
+    // enviado que se reemplaza por otra versión.
+    Borrador:  ["Borrador", "Enviado", "Anulado"],
     // Un presupuesto no se aprueba ni se rechaza sin haber salido.
-    Enviado:   ["Enviado", "Aprobado", "Rechazado"],
+    Enviado:   ["Enviado", "Aprobado", "Rechazado", "Anulado"],
     // Los resueltos son terminales: para renegociar se duplica en una versión nueva.
     Aprobado:  ["Aprobado"],
     Rechazado: ["Rechazado"],
+    Anulado:   ["Anulado"],
   };
 
   const TRANSICION_TICKET = {
@@ -176,7 +179,7 @@
       if (!permitidas.includes(nuevo.estado)) {
         fallar("NX-020",
           `El presupuesto ${nuevo.numero} no puede pasar de ${anterior.estado} a ${nuevo.estado}`,
-          anterior.estado === "Aprobado" || anterior.estado === "Rechazado"
+          ["Aprobado", "Rechazado", "Anulado"].includes(anterior.estado)
             ? "Ya está resuelto: para renegociar, duplicalo en una versión nueva"
             : "");
       }

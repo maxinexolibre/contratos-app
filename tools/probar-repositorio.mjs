@@ -279,6 +279,24 @@ await prueba("un alta con cliente nuevo lo suma al padrón", async () => {
   cierto(cls.some((c) => c.nombreComercial === "Cliente Recién Creado"), "quedó guardado");
 });
 
+await prueba("un alta masiva da de alta sus clientes nuevos en una sola escritura", async () => {
+  const r2 = new REP.Repositorio(CFG, estado);
+  await r2.abrir();
+  await r2.cargarTodo({ meses: 12 });
+  const antes = r2.clientes.length;
+  estado.tickets.push(
+    { id: "tk_lote1", numero: "TK-20260602", fecha: "2026-06-21", cliente: { nombreComercial: "Cliente Lote Uno", razonesSociales: [] },
+      tipoPedido: "servicio", descripcion: "x", estado: "abierto", presupuestoIds: [], usuario: "demo", historial: [] },
+    { id: "tk_lote2", numero: "TK-20260603", fecha: "2026-06-22", cliente: { nombreComercial: "Cliente Lote Dos", razonesSociales: [] },
+      tipoPedido: "servicio", descripcion: "x", estado: "abierto", presupuestoIds: [], usuario: "demo", historial: [] });
+  await r2.guardarColeccion("tickets", "lote");
+  igual(r2.clientes.length, antes + 2, "los dos clientes entraron al padrón");
+  const r3 = new REP.Repositorio(CFG, {});
+  await r3.abrir();
+  const tks = await r3.almacen.cargar("tickets", { todos: true });
+  cierto(tks.find((t) => t.id === "tk_lote1").clienteId !== "", "el ticket quedó con su cliente");
+});
+
 await prueba("reintenta ante escritura concurrente en vez de perder el cambio", async () => {
   const r2 = new REP.Repositorio(CFG, {});
   await r2.abrir();
