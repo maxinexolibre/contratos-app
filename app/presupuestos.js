@@ -644,9 +644,27 @@ async function leerPlanilla(file) {
   return filas;
 }
 
+/**
+ * Arma el plan completo: presupuestos de la planilla y acuerdos de
+ * mantenimiento que pasan a Propuestas. Con filas vacías solo hace lo segundo.
+ */
+function armarPlanImport(filas, archivo) {
+  const usuario = state.user || "importación";
+  const plan = NEXO_PLANILLA.planImportacion(filas, state.presupuestos, { usuario });
+  plan.archivo = archivo;
+  plan.acu = NEXO_PLANILLA.planAcuerdos(plan.acuerdos, {
+    propuestas: state.propuestas || [], contratos: state.data || [], tickets: state.tickets || [],
+    clientes: state.clientes || [], usuario,
+  });
+  plan.avisos.push(...plan.acu.avisos);
+  window._planImport = plan;
+  renderPresuImportar();
+}
+
 function renderPresuImportar() {
   const el = document.getElementById("view-presuimportar");
   const plan = window._planImport;
+  const acuerdosCargados = state.presupuestos.filter((p) => NEXO_PLANILLA.esAcuerdo(p.titulo)).length;
   el.innerHTML = `
     <div class="kicker">Presupuestos</div>
     <div class="page-head"><h1>Importar <span class="accent">planilla</span></h1></div>
@@ -658,6 +676,10 @@ function renderPresuImportar() {
       <input type="file" id="impArchivo" accept=".xlsx,.xls,.csv" />
       <span class="muted" id="impEstado" style="margin-left:8px"></span>
     </div>
+    ${!plan && acuerdosCargados ? `<div class="card">
+      <p style="margin-top:0">Hay <b>${acuerdosCargados}</b> propuestas de mantenimiento o Continuidad Operativa
+      cargadas como presupuesto. Van a <b>Propuestas</b>, conservando su número original, ticket, archivos y contrato.</p>
+      <button class="btn" onclick="armarPlanImport([], '')">Ver cómo quedarían en Propuestas</button></div>` : ""}
     ${plan ? renderPlanImport(plan) : ""}
     <p style="margin-top:14px"><a href="#presupuestos">← Volver a presupuestos</a></p>`;
   document.getElementById("impArchivo").onchange = async (e) => {
@@ -666,22 +688,25 @@ function renderPresuImportar() {
     const st = document.getElementById("impEstado");
     st.textContent = "Leyendo…";
     try {
-      const filas = await leerPlanilla(f);
-      window._planImport = NEXO_PLANILLA.planImportacion(filas, state.presupuestos, { usuario: state.user || "importación" });
-      window._planImport.archivo = f.name;
-      renderPresuImportar();
+      armarPlanImport(await leerPlanilla(f), f.name);
     } catch (err) { st.textContent = ""; toast("No se pudo leer: " + err.message, true, true); }
   };
 }
 
 function renderPlanImport(plan) {
+  const acu = plan.acu || { propuestas: [], quitar: [], clientes: [] };
+  const cli = [...(state.clientes || []), ...acu.clientes];
+  const nombreCli = (id) => cli.find((c) => c.id === id)?.nombreComercial || "—";
+  const nroContrato = (id) => (state.data || []).find((c) => c.id === id)?.numero || "";
+  const total = plan.crear.length + plan.actualizar.length + acu.propuestas.length + acu.quitar.length;
   const fila = (n, txt) => `<tr><td><b>${esc(n)}</b></td><td>${txt}</td></tr>`;
   const lbl = { estado: "Estado", estadoOrigen: "Estado en planilla", fechaEnvio: "Enviado", notas: "Notas", moneda: "Moneda", neto: "Neto" };
   const val = (c, v) => c === "estado" ? (PRE_ESTADO_LABEL[v] || v || "—") : esc(String(v ?? "").slice(0, 80) || "—");
   return `
     <div class="grid-kpi" style="margin:14px 0">
       ${kpi("Nuevos", plan.crear.length)}${kpi("Con cambios", plan.actualizar.length)}
-      ${kpi("Sin cambios", plan.iguales)}${kpi("Para revisar", plan.avisos.length, "", plan.avisos.length ? "warn" : "")}
+      ${kpi("Sin cambios", plan.iguales)}${kpi("A Propuestas", acu.propuestas.length)}
+      ${kpi("Para revisar", plan.avisos.length, "", plan.avisos.length ? "warn" : "")}
     </div>
     ${plan.avisos.length ? `<div class="card"><h3>Para revisar después de importar</h3><div class="overflow"><table class="data"><tbody>
       ${plan.avisos.map((a) => fila(a.numero, esc(a.texto))).join("")}</tbody></table></div></div>` : ""}
@@ -694,10 +719,18 @@ function renderPlanImport(plan) {
       <thead><tr><th>N°</th><th>Qué cambia</th></tr></thead><tbody>
       ${plan.actualizar.map((a) => fila(a.numero, a.cambios.map((c) => `${lbl[c.campo] || c.campo}: <span class="muted">${val(c.campo, c.antes)}</span> → ${val(c.campo, c.despues)}`).join("<br>"))).join("")}
       </tbody></table></div></div>` : ""}
-    ${plan.crear.length || plan.actualizar.length ? `<div style="display:flex;gap:10px;justify-content:flex-end">
+    ${acu.propuestas.length ? `<div class="card"><h3>Pasan a Propuestas</h3>
+      <p class="muted" style="margin-top:0">Dejan de figurar como presupuesto. El importe entra como canon mensual: revisalo en cada propuesta.</p>
+      <div class="overflow"><table class="data">
+      <thead><tr><th>Antes</th><th>Propuesta</th><th>Cliente</th><th>Estado</th><th>Importe</th><th>Contrato</th></tr></thead><tbody>
+      ${acu.propuestas.map((p) => `<tr><td>${esc(p.numeroLegado)}</td><td><b>${esc(p.numero)}</b></td><td>${esc(nombreCli(p.clienteId))}</td>
+        <td>${esc(p.estado)}</td><td>${p.economico.canonMensual ? money(p.economico.canonMensual, p.economico.moneda) : "—"}</td>
+        <td>${esc(nroContrato(p.contratoId))}</td></tr>`).join("")}
+      </tbody></table></div></div>` : ""}
+    ${total ? `<div style="display:flex;gap:10px;justify-content:flex-end">
       <button class="btn ghost" onclick="window._planImport=null;renderPresuImportar()">Descartar</button>
-      <button class="btn primary" id="impAplicar" onclick="aplicarImportacion()">Importar ${plan.crear.length + plan.actualizar.length} presupuestos</button></div>`
-      : `<p class="muted">La planilla no trae nada nuevo.</p>`}`;
+      <button class="btn primary" id="impAplicar" onclick="aplicarImportacion()">Aplicar</button></div>`
+      : `<p class="muted">No hay nada nuevo para aplicar.</p>`}`;
 }
 
 async function aplicarImportacion() {
@@ -723,11 +756,41 @@ async function aplicarImportacion() {
       tk.historial = [...(tk.historial || []), { estado: estTk, fecha: new Date().toISOString().slice(0, 10), usuario }];
     }
   }
+  // Acuerdos de mantenimiento: pasan a Propuestas.
+  const acu = plan.acu || { propuestas: [], quitar: [], clientes: [], contratos: [], tickets: [] };
+  for (const t of acu.tickets) {
+    const i = state.tickets.findIndex((x) => x.id === t.id);
+    if (i >= 0) state.tickets[i] = t;
+  }
+  for (const c of acu.contratos) {
+    const i = state.data.findIndex((x) => x.id === c.id);
+    if (i >= 0) state.data[i] = c;
+  }
+  // Reemplazo por id y no agregado: si el guardado falla y se reintenta con
+  // el mismo plan, no se duplican en memoria.
+  const reemplazar = (lista, nuevos) => {
+    const ids = new Set(nuevos.map((x) => x.id));
+    return [...(lista || []).filter((x) => !ids.has(x.id)), ...nuevos];
+  };
+  if (acu.clientes.length) state.clientes = reemplazar(state.clientes, acu.clientes);
+  state.propuestas = reemplazar(state.propuestas, acu.propuestas);
+  const quitar = new Set(acu.quitar);
+  state.presupuestos = state.presupuestos.filter((p) => !quitar.has(p.id));
+
+  const ref = plan.archivo ? `Importación de planilla · ${plan.archivo}` : "Acuerdos de mantenimiento a Propuestas";
   try {
     // Una escritura por colección: importar 100 filas de a una serían 100 commits.
-    await persist(`Importación de planilla · ${plan.archivo || ""} · tickets`, "tickets");
-    await persist(`Importación de planilla · ${plan.archivo || ""} · ${plan.crear.length} nuevos, ${plan.actualizar.length} actualizados`, "presupuestos");
-    toast(`Importados: ${plan.crear.length} nuevos y ${plan.actualizar.length} actualizados`);
+    // Primero lo que se crea y después lo que se quita: si algo falla a mitad,
+    // un acuerdo queda duplicado (y el reintento no lo duplica de nuevo), nunca perdido.
+    if (acu.clientes.length) await persist(`${ref} · ${acu.clientes.length} clientes`, "clientes");
+    if (acu.propuestas.length) await persist(`${ref} · ${acu.propuestas.length} propuestas`, "propuestas");
+    for (const c of acu.contratos) await persist(`${ref} · contrato ${c.numero} vinculado a su propuesta`, "contratos", c);
+    if (plan.crear.length || acu.tickets.length) await persist(`${ref} · tickets`, "tickets");
+    if (plan.crear.length || plan.actualizar.length) {
+      await persist(`${ref} · ${plan.crear.length} nuevos, ${plan.actualizar.length} actualizados`, "presupuestos");
+    }
+    await eliminarRegistros("presupuestos", acu.quitar, `${ref} · ${acu.quitar.length} presupuestos pasan a Propuestas`);
+    toast(`Listo: ${plan.crear.length} nuevos, ${plan.actualizar.length} actualizados, ${acu.propuestas.length} a Propuestas`);
     window._planImport = null;
     go("presupuestos");
   } catch (e) {

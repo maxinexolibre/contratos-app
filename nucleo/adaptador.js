@@ -198,6 +198,10 @@
       origen: c.origen || (c.ticketId ? "comercial" : "independiente"),
       clienteId: idx.get(E.claveCliente(c.cliente?.nombreComercial)) || "",
       pais: c.pais,
+      // Sin propagar, el contrato generado desde una propuesta perdía el
+      // vínculo al primer guardado: la propuesta sabía de su contrato pero el
+      // contrato no de su propuesta.
+      propuestaId: c.propuestaId || null,
       ticketId: c.ticketId || null,
       presupuestoId: c.presupuestoId || null,
       estado,
@@ -320,6 +324,7 @@
       pais: c.pais,
       cliente: bloqueCliente(c.clienteId, ctx.clientes),
       clienteId: c.clienteId,
+      propuestaId: c.propuestaId,
       ticketId: c.ticketId,
       presupuestoId: c.presupuestoId,
       recurrencia: c.recurrencia,

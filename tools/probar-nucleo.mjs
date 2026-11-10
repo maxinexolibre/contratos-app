@@ -1195,6 +1195,18 @@ prueba("contrato: ida y vuelta sin perder ningún bloque de dominio", () => {
   igual(otraVez, nuevo, "convertir dos veces da el mismo resultado");
 });
 
+prueba("contrato: el vínculo a la propuesta sobrevive al adaptador", () => {
+  // Regresión: propuestaId no se propagaba y el contrato generado desde una
+  // propuesta la perdía al primer guardado.
+  const clientes = AD.clientesDesde({ data: [contratoViejo()] });
+  const idx = AD.indiceClientes(clientes);
+  const nuevo = AD.contratoANuevo(contratoViejo({ propuestaId: "prop_x", origen: "independiente", ticketId: null, presupuestoId: null }), { indiceClientes: idx });
+  igual(nuevo.propuestaId, "prop_x");
+  const vuelta = AD.contratoAViejo(nuevo, { clientes });
+  igual(vuelta.propuestaId, "prop_x");
+  igual(AD.contratoANuevo(vuelta, { indiceClientes: idx }).propuestaId, "prop_x", "segunda vuelta");
+});
+
 prueba("la condición de IVA sobrevive al adaptador", () => {
   // Regresión: sin propagarla, un presupuesto no gravado volvía a "Gravado"
   // y la facturación le sumaba 21% que el cliente no paga.
@@ -1264,7 +1276,7 @@ prueba("planilla: estados y fecha de envío", () => {
   igual(r.presupuesto.fechaEnvio, "2026-09-03", "el año mal tipeado se corrige al del número");
   cierto(r.avisos.length === 1);
   igual(PL.filaARegistro({ ID: 20260909, Mes: "Septiembre", Tipo: "-", "Título": "-", Cliente: "-" }), null, "fila vacía");
-  igual(PL.filaARegistro(filaPl({ Tipo: "Contrato" })), null, "una propuesta de mantenimiento no es presupuesto");
+  cierto(PL.filaARegistro(filaPl({ Tipo: "Contrato" })).acuerdo, "una fila de tipo Contrato es acuerdo");
 });
 
 prueba("planilla: pesos, IVA cero y subtipo de venta", () => {
@@ -1294,6 +1306,46 @@ prueba("planilla: el plan crea lo nuevo y actualiza solo lo que cambió", () => 
   igual(sinCambio.iguales, 1);
   const rep = PL.planImportacion([filaPl(), filaPl()], []);
   igual(rep.crear.length, 1, "número repetido: se toma la primera fila");
+});
+
+prueba("planilla: los acuerdos de mantenimiento pasan a Propuestas sin perder la línea", () => {
+  const PL = contexto.NEXO_PLANILLA;
+  cierto(PL.esAcuerdo("Propuesta de mantenimiento", "Servicio"));
+  cierto(PL.esAcuerdo("Continuidad Operativa Full · MRI", ""));
+  cierto(!PL.esAcuerdo("Mantenimiento preventivo", "Servicio"), "el preventivo suelto es un servicio puntual");
+
+  // Uno ya cargado como presupuesto, con contrato colgado; otro nuevo en la planilla.
+  const cargado = PL.filaARegistro(filaPl({ ID: 20260701, "Título": "Propuesta de mantenimiento", Estado: "Aprobado", "Monto s/iva": 3000 })).presupuesto;
+  cargado.estado = "enviado";
+  const ticket = { id: cargado.ticketId, presupuestoIds: [cargado.id, "pre_otro"] };
+  const contrato = { id: "ctr_1", numero: "CT-2026-0009", origen: "comercial", presupuestoId: cargado.id, ticketId: cargado.ticketId, notas: "" };
+  const plan = PL.planImportacion([
+    filaPl({ ID: 20260701, "Título": "Propuesta de mantenimiento", Estado: "Aprobado", "Monto s/iva": 3000 }),
+    filaPl({ ID: 20260702, Tipo: "Contrato", "Título": "Continuidad Operativa", Cliente: "Sanatorio Inventado" }),
+  ], [cargado]);
+  igual(plan.crear.length, 0, "un acuerdo no se crea como presupuesto");
+  igual(plan.acuerdos.length, 2);
+  igual(plan.acuerdos[0].presupuesto.estado, "ganado", "la planilla actualiza el estado antes de pasar");
+
+  const r = PL.planAcuerdos(plan.acuerdos, {
+    propuestas: [{ numero: "PR-2026-0003", numeroLegado: "" }],
+    clientes: [{ id: "cli_ficticia", nombreComercial: "Clínica Ficticia", alias: [] }],
+    contratos: [contrato], tickets: [ticket], hoy: "2026-11-10" });
+  igual(r.propuestas.map((p) => [p.numero, p.numeroLegado, p.estado]),
+    [["PR-2026-0004", "P20260701", "Aceptada"], ["PR-2026-0005", "P20260702", "Enviada"]]);
+  igual(r.propuestas[0].clienteId, "cli_ficticia");
+  igual(r.propuestas[0].economico.canonMensual, 3000);
+  igual(r.propuestas[0].contratoId, "ctr_1");
+  igual(r.propuestas[0].ticketId, cargado.ticketId, "conserva el ticket");
+  igual(r.quitar, [cargado.id], "solo se quita lo que estaba cargado");
+  igual(r.contratos[0].propuestaId, r.propuestas[0].id);
+  igual(r.contratos[0].presupuestoId, null);
+  igual(r.contratos[0].origen, "independiente", "sin presupuesto, comercial violaría NX-040");
+  igual(r.tickets[0].presupuestoIds, ["pre_otro"]);
+  igual(r.clientes.map((c) => c.nombreComercial), ["Sanatorio Inventado"]);
+
+  const otraVez = PL.planAcuerdos(plan.acuerdos, { propuestas: r.propuestas, hoy: "2026-11-10" });
+  igual(otraVez.propuestas.length, 0, "correrlo dos veces no duplica");
 });
 
 prueba("ticket: ida y vuelta estable", () => {

@@ -407,6 +407,23 @@ await prueba("los KPIs dan lo mismo antes y después de migrar", async () => {
   igual(d.pipeline, a.pipeline, "mismo pipeline");
 });
 
+await prueba("quitar registros solo toca las particiones que los tienen", async () => {
+  const r3 = new REP.Repositorio(CFG, {});
+  await r3.abrir();
+  const todos = await r3.almacen.cargar("presupuestos", { todos: true });
+  const victima = todos[0];
+  const putAntes = peticiones.put;
+  const n = await r3.eliminarLote("presupuestos", [victima.id, "pre_que_no_existe"], "Prueba de baja");
+  igual(n, 1);
+  igual(peticiones.put - putAntes, 2, "una partición y el índice");
+  const r4 = new REP.Repositorio(CFG, {});
+  await r4.abrir();
+  const despues = await r4.almacen.cargar("presupuestos", { todos: true });
+  igual(despues.length, todos.length - 1);
+  cierto(!despues.some((p) => p.id === victima.id), "ya no está");
+  igual(await r4.eliminarLote("presupuestos", [], ""), 0, "sin ids no escribe");
+});
+
 // ===========================================================================
 
 console.log(`\n  ${pasadas} pasadas · ${fallidas} fallidas`);

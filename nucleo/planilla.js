@@ -97,7 +97,21 @@
   }
 
   /**
-   * Traduce una fila a { presupuesto, ticket, avisos } en forma vieja.
+   * ¿Es un acuerdo de mantenimiento y no un presupuesto?
+   *
+   * Hasta noviembre de 2026 las propuestas de mantenimiento y de Continuidad
+   * Operativa se numeraron y registraron como presupuestos. En la plataforma
+   * van por Propuestas → Contrato. "Mantenimiento preventivo" a secas es un
+   * servicio puntual que algunos clientes piden: ese sí es presupuesto.
+   */
+  function esAcuerdo(titulo, tipo) {
+    if (/^(contrato|propuesta)/i.test(String(tipo || "").trim())) return true;
+    return /propuesta de mantenimiento|mano de obra de mantenimiento|continuidad operativa/i
+      .test(String(titulo || ""));
+  }
+
+  /**
+   * Traduce una fila a { presupuesto, ticket, avisos, acuerdo } en forma vieja.
    * Devuelve null para filas sin número o vacías (la planilla tiene una con guiones).
    */
   function filaARegistro(fila, opciones = {}) {
@@ -106,11 +120,6 @@
     const titulo = String(campo(fila, "Título", "Titulo") || "").trim();
     const cliente = String(campo(fila, "Cliente") || "").trim();
     if ((!titulo || titulo === "-") && (!cliente || cliente === "-")) return null;
-    // Las propuestas de mantenimiento y Continuidad Operativa van por
-    // Propuestas → Contrato, no por presupuesto. La planilla de faltantes las
-    // traía en una hoja aparte y el lector lee todas las hojas: entraron 16
-    // como presupuestos en cero.
-    if (/^contrato|^propuesta/i.test(String(campo(fila, "Tipo") || "").trim())) return null;
 
     const avisos = [];
     const pais = /CL$/i.test(id) || String(campo(fila, "País", "Pais") || "").toUpperCase() === "CL" ? "CL" : "AR";
@@ -180,7 +189,7 @@
       motivoPerdida: estado === "perdido" || estado === "anulado" ? (notas.split("\n")[0] || "") : "",
       usuario, historial: [{ estado: TICKET_SEGUN_PRESU[estado], fecha, usuario }],
     };
-    return { presupuesto, ticket, avisos };
+    return { presupuesto, ticket, avisos, acuerdo: esAcuerdo(titulo, campo(fila, "Tipo")) };
   }
 
   /** Neto de un presupuesto en forma vieja (para comparar con la planilla). */
@@ -197,7 +206,7 @@
    */
   function planImportacion(filas, existentes = [], opciones = {}) {
     const porNumero = new Map((existentes || []).map((p) => [String(p.numero).toUpperCase(), p]));
-    const plan = { crear: [], actualizar: [], iguales: 0, avisos: [], ignoradas: 0 };
+    const plan = { crear: [], actualizar: [], iguales: 0, avisos: [], ignoradas: 0, acuerdos: [] };
     const vistos = new Set();
 
     for (const fila of filas || []) {
@@ -212,29 +221,165 @@
       vistos.add(n.numero);
 
       const ya = porNumero.get(n.numero.toUpperCase());
+      if (r.acuerdo) {
+        // Un acuerdo no se crea como presupuesto: va a Propuestas. Si ya
+        // estaba cargado como presupuesto, la planilla le actualiza el estado
+        // antes de pasarlo.
+        const base = ya ? aplicarActualizacion(ya, { cambios: diferencias(ya, n), nuevo: n }, opciones) : n;
+        plan.acuerdos.push({ presupuesto: base, cargado: !!ya });
+        continue;
+      }
       if (!ya) { plan.crear.push({ presupuesto: n, ticket }); continue; }
 
-      // Solo se tocan los datos que lleva la planilla. Ítems con detalle,
-      // garantía, razones sociales y archivos cargados en la app se respetan.
-      const cambios = [];
-      const comparar = (campoNombre, antes, despues) => {
-        if ((antes ?? "") !== (despues ?? "")) cambios.push({ campo: campoNombre, antes: antes ?? "", despues: despues ?? "" });
-      };
-      comparar("estado", ya.estado, n.estado);
-      comparar("estadoOrigen", ya.estadoOrigen, n.estadoOrigen);
-      comparar("fechaEnvio", ya.fechaEnvio, n.fechaEnvio);
-      comparar("notas", ya.notas, n.notas);
-      comparar("moneda", ya.economico?.moneda, n.economico.moneda);
-      const netoYa = netoViejo(ya), netoN = netoViejo(n);
-      if (Math.abs(netoYa - netoN) >= 1 && netoN > 0) cambios.push({ campo: "neto", antes: netoYa, despues: netoN });
-
+      const cambios = diferencias(ya, n);
       if (!cambios.length) { plan.iguales++; continue; }
       plan.actualizar.push({
         id: ya.id, numero: ya.numero, cambios,
         nuevo: n,
       });
     }
+
+    // Los acuerdos ya cargados como presupuesto que la planilla no menciona
+    // (los de la planilla de faltantes, por ejemplo) también se pasan.
+    for (const p of existentes || []) {
+      if (vistos.has(p.numero) || !esAcuerdo(p.titulo)) continue;
+      plan.acuerdos.push({ presupuesto: p, cargado: true });
+    }
     return plan;
+  }
+
+  /**
+   * Lo que la planilla cambia de un presupuesto ya cargado. Solo los datos que
+   * lleva la planilla: ítems con detalle, garantía, razones sociales y
+   * archivos cargados en la app se respetan.
+   */
+  function diferencias(ya, n) {
+    const cambios = [];
+    const comparar = (campoNombre, antes, despues) => {
+      if ((antes ?? "") !== (despues ?? "")) cambios.push({ campo: campoNombre, antes: antes ?? "", despues: despues ?? "" });
+    };
+    comparar("estado", ya.estado, n.estado);
+    comparar("estadoOrigen", ya.estadoOrigen, n.estadoOrigen);
+    comparar("fechaEnvio", ya.fechaEnvio, n.fechaEnvio);
+    comparar("notas", ya.notas, n.notas);
+    comparar("moneda", ya.economico?.moneda, n.economico.moneda);
+    const netoYa = netoViejo(ya), netoN = netoViejo(n);
+    if (Math.abs(netoYa - netoN) >= 1 && netoN > 0) cambios.push({ campo: "neto", antes: netoYa, despues: netoN });
+    return cambios;
+  }
+
+  const PROPUESTA_SEGUN_PRESU = {
+    borrador: "Borrador", enviado: "Enviada", negociacion: "Enviada",
+    ganado: "Aceptada", perdido: "Rechazada", anulado: "Rechazada",
+  };
+
+  /**
+   * Convierte los acuerdos del plan en propuestas, sin escribir nada.
+   *
+   * La línea de cada acuerdo no se pierde: la propuesta guarda el número con
+   * que circuló (numeroLegado), el ticket y los archivos; el contrato que
+   * colgaba del presupuesto pasa a colgar de la propuesta.
+   *
+   * @param {Array} acuerdos  plan.acuerdos de planImportacion
+   * @param {object} ctx { propuestas (v3), contratos y tickets (forma vieja), clientes (v3), usuario, hoy }
+   * @returns {{propuestas, clientes, quitar, contratos, tickets, avisos}}
+   *   quitar: ids de presupuestos que dejan de existir como tales.
+   */
+  function planAcuerdos(acuerdos, ctx = {}) {
+    const hoy = ctx.hoy || E.hoy();
+    const usuario = ctx.usuario || "importación";
+    const res = { propuestas: [], clientes: [], quitar: [], contratos: [], tickets: [], avisos: [] };
+    const existentes = ctx.propuestas || [];
+    const porLegado = new Map(existentes.filter((p) => p.numeroLegado).map((p) => [p.numeroLegado.toUpperCase(), p]));
+    const clientes = [...(ctx.clientes || [])];
+    const tickets = ctx.tickets || [];
+
+    // Numeración PR por año del documento original, a continuación de lo que ya hay.
+    const maxPorAnio = {};
+    for (const p of existentes) {
+      const g = String(p.numero || "").match(/^PR-(\d{4})-(\d{4})$/);
+      if (g) maxPorAnio[g[1]] = Math.max(maxPorAnio[g[1]] || 0, Number(g[2]));
+    }
+    const proximo = (anio) => {
+      maxPorAnio[anio] = (maxPorAnio[anio] || 0) + 1;
+      return `PR-${anio}-${String(maxPorAnio[anio]).padStart(4, "0")}`;
+    };
+    const clienteId = (nombre) => {
+      const n = String(nombre || "").trim();
+      if (!n) return "";
+      const clave = E.claveCliente(n);
+      let c = clientes.find((x) => E.claveCliente(x.nombreComercial) === clave ||
+        (x.alias || []).some((a) => E.claveCliente(a) === clave));
+      if (!c) {
+        c = E.ENTIDADES.clientes.normalizar({
+          id: `cli_${clave.replace(/\s+/g, "-").slice(0, 32)}`,
+          nombreComercial: n, razonSocial: n, alias: [n] });
+        clientes.push(c);
+        res.clientes.push(c);
+      }
+      return c.id;
+    };
+
+    const ordenados = [...acuerdos].sort((a, b) => String(a.presupuesto.numero).localeCompare(String(b.presupuesto.numero)));
+    for (const { presupuesto: p, cargado } of ordenados) {
+      if (cargado) res.quitar.push(p.id);
+      const ya = porLegado.get(String(p.numero).toUpperCase());
+      if (ya) {
+        res.avisos.push({ numero: p.numero, texto: `Ya existe como ${ya.numero}: no se duplica` });
+        continue;
+      }
+      const estado = PROPUESTA_SEGUN_PRESU[p.estado] || "Borrador";
+      const historial = (p.historialEstados || []).map((h) => ({ ...h, estado: PROPUESTA_SEGUN_PRESU[h.estado] || h.estado }));
+      const resuelta = estado === "Aceptada" || estado === "Rechazada";
+      const neto = netoViejo(p);
+      const ticket = cargado && p.ticketId ? tickets.find((t) => t.id === p.ticketId) : null;
+      const notas = [p.notas, `Registrada como presupuesto ${p.numero} hasta ${hoy}.`,
+        neto ? `Importe cotizado: ${neto} ${p.economico?.moneda || "USD"}; revisar si es canon mensual o total.` : ""]
+        .filter(Boolean).join("\n");
+      const prop = E.ENTIDADES.propuestas.normalizar({
+        id: "prop_" + p.numero,
+        numero: proximo(String(p.fecha || hoy).slice(0, 4)),
+        numeroLegado: p.numero,
+        clienteId: clienteId(p.cliente?.nombreComercial),
+        pais: p.pais,
+        ticketId: ticket ? ticket.id : null,
+        estado,
+        fechas: {
+          creado: p.fecha,
+          enviado: p.fechaEnvio || (estado !== "Borrador" ? p.fecha : null),
+          resuelto: resuelta ? (historial.length ? historial[historial.length - 1].fecha : p.fecha) : null,
+        },
+        motivoRechazo: p.estado === "anulado" ? `Anulada: ${p.motivoAnulacion || ""}`.trim()
+          : (estado === "Rechazada" ? String(p.notas || "").split("\n")[0] : ""),
+        economico: { canonMensual: neto, moneda: p.economico?.moneda || "USD",
+          ivaPct: p.economico?.ivaPct ?? (p.pais === "CL" ? 19 : 21), incluyeIVA: false, formaPago: "" },
+        archivos: p.archivos || [],
+        notas,
+        historialEstados: [...historial, { estado, fecha: hoy, usuario, nota: `Pasó desde el presupuesto ${p.numero}` }],
+      });
+      if (!prop.clienteId) res.avisos.push({ numero: p.numero, texto: "Sin cliente: completalo en la propuesta" });
+
+      // El contrato que colgaba del presupuesto pasa a colgar de la propuesta.
+      if (cargado) {
+        for (const c of ctx.contratos || []) {
+          if (c.presupuestoId !== p.id) continue;
+          prop.contratoId = c.id;
+          res.contratos.push({ ...c, propuestaId: prop.id, origen: "independiente", presupuestoId: null, ticketId: null,
+            notas: [c.notas, `Venía del presupuesto ${p.numero}, ahora propuesta ${prop.numero}.`].filter(Boolean).join("\n") });
+          if (estado !== "Aceptada") {
+            res.avisos.push({ numero: p.numero, texto: `El contrato ${c.numero} cuelga de una propuesta ${estado}: aceptala o revisá el contrato` });
+          }
+        }
+        if (ticket) {
+          res.tickets.push({ ...ticket, presupuestoIds: (ticket.presupuestoIds || []).filter((x) => x !== p.id) });
+        }
+      }
+      if (estado === "Aceptada" && !prop.contratoId) {
+        res.avisos.push({ numero: p.numero, texto: `${prop.numero} aceptada sin contrato: generalo desde la propuesta` });
+      }
+      res.propuestas.push(prop);
+    }
+    return res;
   }
 
   /**
@@ -269,5 +414,6 @@
 
   global.NEXO_PLANILLA = {
     filaARegistro, planImportacion, aplicarActualizacion, estadoDesdePlanilla, subtipoVenta, fechaPlanilla,
+    esAcuerdo, planAcuerdos,
   };
 })(typeof window !== "undefined" ? window : globalThis);

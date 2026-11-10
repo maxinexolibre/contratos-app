@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Exo:wght@300;600;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=7b4a7cd-mwb1iish" />
+  <link rel="stylesheet" href="styles.css?v=b9e022a-mwb21cij" />
   <script>
     // Se aplica antes de pintar para que no haya un parpadeo de tema claro.
     (function () {
@@ -109,48 +109,48 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="config.js?v=7b4a7cd-mwb1iish"></script>
+  <script src="config.js?v=b9e022a-mwb21cij"></script>
   <!-- Núcleo v3: esquema, permisos, reglas, KPIs y almacén particionado.
        Se carga antes que todo lo demás y no altera el comportamiento actual:
        app.js sigue con su capa de datos hasta completar el pasaje. -->
-  <script src="nucleo/esquema.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/permisos.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/reglas.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/kpi.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/almacen.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/adaptador.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/cambio.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/comisiones.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/repositorio.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/tabla.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/catalogo.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="nucleo/planilla.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="brand.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="planes.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="contrato.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="presupuesto.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="docgen.js?v=7b4a7cd-mwb1iish"></script>
+  <script src="nucleo/esquema.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/permisos.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/reglas.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/kpi.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/almacen.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/adaptador.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/cambio.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/comisiones.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/repositorio.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/tabla.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/catalogo.js?v=b9e022a-mwb21cij"></script>
+  <script src="nucleo/planilla.js?v=b9e022a-mwb21cij"></script>
+  <script src="brand.js?v=b9e022a-mwb21cij"></script>
+  <script src="planes.js?v=b9e022a-mwb21cij"></script>
+  <script src="contrato.js?v=b9e022a-mwb21cij"></script>
+  <script src="presupuesto.js?v=b9e022a-mwb21cij"></script>
+  <script src="docgen.js?v=b9e022a-mwb21cij"></script>
   <!-- Vistas del modelo v3. Se registran en NEXO_VISTAS y el router de app.js
        las toma de ahí, creando su sección al vuelo.
        Van ANTES de app.js: este arranca el router apenas carga, y si el
        registro todavía no existe la vista queda en blanco. Solo registran
        funciones al cargar; a persist(), toast() y go() las llaman después,
        cuando ya están declaradas. -->
-  <script src="vistas/facturacion.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="vistas/marketing.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="vistas/vendedores.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="vistas/visor.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="vistas/propuestas.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="vistas/catalogo.js?v=7b4a7cd-mwb1iish"></script>
+  <script src="vistas/facturacion.js?v=b9e022a-mwb21cij"></script>
+  <script src="vistas/marketing.js?v=b9e022a-mwb21cij"></script>
+  <script src="vistas/vendedores.js?v=b9e022a-mwb21cij"></script>
+  <script src="vistas/visor.js?v=b9e022a-mwb21cij"></script>
+  <script src="vistas/propuestas.js?v=b9e022a-mwb21cij"></script>
+  <script src="vistas/catalogo.js?v=b9e022a-mwb21cij"></script>
   <!-- Aplicación, dividida por dominio. El orden importa: comparten el
        ámbito global y las constantes declaradas antes se ven después.
        tableros.js va último porque arranca la aplicación. -->
-  <script src="app/base.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="app/datos.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="app/chrome.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="app/contratos.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="app/tickets.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="app/presupuestos.js?v=7b4a7cd-mwb1iish"></script>
-  <script src="app/tableros.js?v=7b4a7cd-mwb1iish"></script>
+  <script src="app/base.js?v=b9e022a-mwb21cij"></script>
+  <script src="app/datos.js?v=b9e022a-mwb21cij"></script>
+  <script src="app/chrome.js?v=b9e022a-mwb21cij"></script>
+  <script src="app/contratos.js?v=b9e022a-mwb21cij"></script>
+  <script src="app/tickets.js?v=b9e022a-mwb21cij"></script>
+  <script src="app/presupuestos.js?v=b9e022a-mwb21cij"></script>
+  <script src="app/tableros.js?v=b9e022a-mwb21cij"></script>
 </body>
 </html>

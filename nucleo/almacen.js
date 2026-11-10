@@ -355,6 +355,31 @@
       await this._guardarIndice();
     }
 
+    /**
+     * Quita registros por id. Recorre las particiones del índice porque quien
+     * llama no siempre sabe en qué mes quedó cada uno; solo escribe las que
+     * cambian. Lo quitado queda en el historial de git del repo de datos.
+     */
+    async eliminarLote(entidad, ids, mensaje) {
+      const quitar = new Set(ids || []);
+      if (!quitar.size) return 0;
+      const def = E.ENTIDADES[entidad];
+      const periodos = def.particionado ? this.periodos(entidad) : [null];
+      let quitados = 0;
+      for (const periodo of periodos) {
+        const part = await this._cargarParticion(entidad, periodo);
+        const copia = part.registros.filter((r) => !quitar.has(r.id));
+        if (copia.length === part.registros.length) continue;
+        const sha = await this._escribir(this._ruta(entidad, periodo), copia, part.sha,
+          mensaje || `Quita ${part.registros.length - copia.length} ${entidad} ${periodo || ""}`.trim());
+        quitados += part.registros.length - copia.length;
+        this.cache.set(`${entidad}/${periodo || "_"}`, { registros: copia, sha, fallidos: part.fallidos });
+        this._registrarEnIndice(entidad, periodo, copia);
+      }
+      if (quitados) await this._guardarIndice();
+      return quitados;
+    }
+
     async _guardarIndice() {
       for (let intento = 1; intento <= REINTENTOS; intento++) {
         try {
