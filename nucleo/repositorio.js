@@ -123,9 +123,18 @@
       this.almacen = new global.NEXO_ALMACEN.Almacen(cfg);
       this.estado = estado;
       this.cfg = cfg;
-      /** Clientes derivados, para resolver ids al traducir. */
-      this.clientes = [];
+      if (!Array.isArray(this.estado.clientes)) this.estado.clientes = [];
     }
+
+    /**
+     * Padrón para resolver ids al traducir. Es el mismo arreglo que ve la app:
+     * antes era una copia propia, y cuando una pantalla reemplazaba
+     * `state.clientes` (alta desde Propuestas, fusión de clientes) el
+     * repositorio seguía con la lista vieja y podía dar de alta otra vez un
+     * cliente que ya existía.
+     */
+    get clientes() { return this.estado.clientes; }
+    set clientes(v) { this.estado.clientes = v; }
 
     async abrir() {
       await this.almacen.abrir();

@@ -191,6 +191,11 @@
           telefono: esTexto(r.telefono),
           // Nombres alternativos con los que este cliente aparecía antes.
           alias: esLista(r.alias).map(esTexto).filter(Boolean),
+          // Grupo al que pertenece (una red de sedes o un prestador con
+          // varios hospitales) y nombre de la sede. Texto y no id: un grupo no
+          // tiene datos propios, es solo cómo se suman sus sedes en reportes.
+          grupo: esTexto(r.grupo),
+          sede: esTexto(r.sede),
           creado: fecha(r.creado) || hoy(),
         };
       },

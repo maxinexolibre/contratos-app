@@ -407,6 +407,13 @@ await prueba("los KPIs dan lo mismo antes y después de migrar", async () => {
   igual(d.pipeline, a.pipeline, "mismo pipeline");
 });
 
+await prueba("el repositorio ve el mismo padrón que la app aunque se reemplace", async () => {
+  const st = {};
+  const r5 = new REP.Repositorio(CFG, st);
+  st.clientes = [{ id: "cli_x", nombreComercial: "Cliente Ficticio", alias: [] }];
+  cierto(r5.clientes === st.clientes, "mismo arreglo");
+});
+
 await prueba("quitar registros solo toca las particiones que los tienen", async () => {
   const r3 = new REP.Repositorio(CFG, {});
   await r3.abrir();

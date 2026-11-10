@@ -281,6 +281,8 @@ fieldset legend { font: 800 13px var(--body); text-transform: uppercase; letter-
 .badge.ganado { background: var(--ok-soft); color: var(--ok); }
 .badge.perdido { background: var(--st-cerrado-bg); color: var(--st-cerrado-tx); }
 .badge.anulado { background: transparent; color: var(--muted, #8a837c); border: 1px dashed currentColor; }
+/* Cabecera de grupo en el padrón de clientes: no es un registro, no se cliquea. */
+table.data tr.grupo td { background: var(--bg); cursor: default; }
 .badge.cerrado { background: var(--st-cerrado-bg); color: var(--st-cerrado-tx); }
 
 /* ---------- Editor de ítems (presupuestos) ---------- */
