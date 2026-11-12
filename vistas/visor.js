@@ -81,7 +81,8 @@
     let html, titulo, descarga;
 
     if (tipo === "contrato") {
-      const c = (st.data || []).find((x) => x.id === id);
+      // También las propuestas comerciales, que salen con el mismo modelo.
+      const c = (st.data || []).find((x) => x.id === id) || global.documentoPropuesta?.(id);
       if (!c) return;
       const m = global.NEXO_CONTRATO.construirContrato(c, { plantilla: false });
       html = global.renderContratoHTML(m);
