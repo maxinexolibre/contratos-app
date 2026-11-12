@@ -45,7 +45,9 @@ async function imagen(nombre) {
 }
 
 async function generarDocx(id) {
-  const c = state.data.find((x) => x.id === id);
+  // Las propuestas comerciales viven en su propio store: sin el segundo
+  // intento, crear una propuesta no dejaba bajar ningún documento.
+  const c = state.data.find((x) => x.id === id) || window.documentoPropuesta?.(id);
   if (!c) return;
   toast("Generando documento…");
   try {

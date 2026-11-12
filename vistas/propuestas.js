@@ -35,6 +35,39 @@
     { pais: "", mes: "", estado: "", q: "", pagina: 1 });
 
   const nombreCliente = (id) => (clientes().find((c) => c.id === id)?.nombreComercial) || "—";
+  const CAT = () => global.NEXO_CATALOGO;
+
+  /**
+   * La propuesta en la forma que entienden `construirContrato` y docgen.
+   *
+   * Cuando las propuestas pasaron a ser registros propios, el documento quedó
+   * atado a la forma vieja (`state.data`): se creaba la propuesta y no había
+   * de dónde sacar el PDF ni el .docx. En vez de duplicar el armado del
+   * documento, se traduce acá y se reusa el mismo modelo que los contratos,
+   * así lo que ve el cliente sale igual que antes.
+   */
+  function comoDocumento(p) {
+    const cli = clientes().find((c) => c.id === p.clienteId) || {};
+    return {
+      id: p.id, tipo: "propuesta", numero: p.numero, pais: p.pais, estado: "borrador",
+      cliente: {
+        nombreComercial: cli.nombreComercial || "",
+        razonesSociales: cli.razonSocial
+          ? [{ razonSocial: cli.razonSocial, cuit: cli.cuit || "", domicilio: "", principal: true }] : [],
+        contacto: cli.contacto || "", localidad: cli.localidad || "", provincia: cli.provincia || "",
+      },
+      plan: p.plan || {}, equipos: p.equipos || [], cobertura: p.cobertura || {},
+      economico: p.economico, ajuste: {},
+      // Sin inicio no se calcula vencimiento: la propuesta todavía no corre.
+      vigencia: { inicio: p.vigenciaPropuesta.inicioEstimado || "", meses: p.vigenciaPropuesta.meses, fin: "" },
+      fechas: { creado: p.fechas.creado, enviado: p.fechas.enviado || "", firmado: "" },
+      archivos: [], notas: p.notas,
+    };
+  }
+  const documentoPropuesta = (id) => {
+    const p = propuestas().find((x) => x.id === id);
+    return p ? comoDocumento(p) : null;
+  };
 
   async function guardar(registro, mensaje) {
     const normalizado = E.ENTIDADES.propuestas.normalizar(registro);
@@ -209,9 +242,19 @@
             ${p.numeroLegado ? ` · circuló como ${esc(p.numeroLegado)}` : ""}
           </p>
         </div>
-        ${puedeEditar ? `<a class="btn ghost" href="#propform/${esc(p.id)}">Editar</a>` : ""}
+        <button class="btn primary" onclick="verDocumento('contrato','${esc(p.id)}')">👁 Ver documento / PDF</button>
+        <button class="btn" onclick="generarDocx('${esc(p.id)}')" title="Descarga un .docx editable en Word">⬇ .docx</button>
+        ${puedeEditar && !["Aceptada", "Rechazada"].includes(p.estado)
+          ? `<a class="btn ghost" href="#propform/${esc(p.id)}">Editar</a>` : ""}
         ${accionesEtapa(p, contrato)}
       </div>
+
+      ${!p.plan?.id || !p.equipos.length ? `<div class="card interno" style="margin-top:16px">
+        <b>El documento sale incompleto.</b> Falta${!p.plan?.id && !p.equipos.length ? "n el plan y los equipos"
+          : !p.plan?.id ? " el plan" : "n los equipos"}: sin eso no lleva alcance ni fichas técnicas.
+        ${puedeEditar && !["Aceptada", "Rechazada"].includes(p.estado)
+          ? `Cargalos desde <a href="#propform/${esc(p.id)}">Editar</a>.` : ""}
+      </div>` : ""}
 
       ${p.esquemaAnterior ? `<div class="card interno" style="margin-top:16px">
         <b>Registro del esquema anterior.</b> Esta propuesta fue aceptada y está
@@ -255,6 +298,8 @@
 
       <div class="card">
         <h3>Lo que se ofrece</h3>
+        ${p.plan?.id ? `<p style="margin:8px 0 0"><span class="pill-plan">${esc(p.plan.etiquetaPublica
+          || CAT().PLANES[p.plan.id]?.etiquetaPublica || p.plan.id)}</span></p>` : ""}
         ${p.equipos.length ? `<table class="data" style="margin-top:12px">
           <thead><tr><th>Equipo</th><th>Marca</th><th>Modalidad</th><th>Ubicación</th></tr></thead>
           <tbody>${p.equipos.map((eq) => `<tr>
@@ -331,10 +376,35 @@
           <div class="field"><label for="pfValidez">Validez de la propuesta (días)</label>
             <input type="number" id="pfValidez" min="1" value="${d.validezDias}" /></div>
         </div>
-        <div class="field"><label for="pfNotas">Notas</label>
+        <div class="form-grid">
+          <div class="field"><label for="pfFormaPago">Forma de pago</label>
+            <input id="pfFormaPago" value="${esc(d.economico.formaPago)}" placeholder="Mensual, antes del 5º día hábil" /></div>
+          <div class="field"><label for="pfInicio">Inicio estimado</label>
+            <input type="date" id="pfInicio" value="${esc(d.vigenciaPropuesta.inicioEstimado || "")}" /></div>
+        </div>
+        <div class="check-row" style="margin:4px 0 12px">
+          <label><input type="checkbox" id="pfIVA" ${d.economico.incluyeIVA ? "checked" : ""}> El canon incluye IVA</label>
+        </div>
+
+        <h3 style="margin-top:8px">Programa NexoCare</h3>
+        <div class="form-grid">
+          <div class="field"><label for="pfPlan">Nivel del programa</label>
+            <select id="pfPlan"><option value="">— sin nivel —</option>${CAT().PLAN_ORDEN.map((x) =>
+              `<option value="${x}"${d.plan?.id === x ? " selected" : ""}>${esc(CAT().PLANES[x].label)} (${esc(CAT().PLANES[x].precioTxt)})</option>`).join("")}</select></div>
+          <div class="field"><label for="pfEtiqueta">Etiqueta que ve el cliente</label>
+            <input id="pfEtiqueta" value="${esc(d.plan?.etiquetaPublica || "")}" placeholder="Por defecto, la del plan" /></div>
+        </div>
+        <p class="muted" style="font-size:13px;margin-top:0">
+          La cobertura (preventivos, correctivo, bobinas, SLA) se arma sola a partir del plan.
+        </p>
+
+        <h3 style="margin-top:8px">Equipos alcanzados</h3>
+        <div class="equipos-list" id="pfEquipos">${(d.equipos || []).map(filaEquipo).join("")}</div>
+        <button type="button" class="btn sm" onclick="document.getElementById('pfEquipos').insertAdjacentHTML('beforeend', filaEquipoProp())">+ Equipo</button>
+
+        <div class="field" style="margin-top:14px"><label for="pfNotas">Notas</label>
           <input id="pfNotas" value="${esc(d.notas)}" /></div>
         <p class="muted" style="font-size:13px">
-          Los equipos y la cobertura se cargan desde el detalle, una vez creada.
           Las cláusulas no van acá: son parte del contrato.
         </p>
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px">
@@ -343,6 +413,17 @@
         </div>
       </div>`}
     `;
+  }
+
+  function filaEquipo(e = {}) {
+    return `<div class="eq-row">
+      <input placeholder="Marca" data-eq="marca" value="${esc(e.marca || "")}">
+      <input placeholder="Modelo" data-eq="modelo" value="${esc(e.modelo || "")}">
+      <select data-eq="modalidad">${["MRI", "CT"].map((m) =>
+        `<option${e.modalidad === m ? " selected" : ""}>${m}</option>`).join("")}</select>
+      <input placeholder="Ubicación" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+      <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
+    </div>`;
   }
 
   async function guardarPropuesta(id) {
@@ -361,6 +442,25 @@
     }
 
     const anterior = id ? propuestas().find((x) => x.id === id) : null;
+
+    // Plan y cobertura. La cobertura se deriva del plan sólo cuando el plan
+    // cambia (o no había): si se rehiciera en cada guardado, pisaría los
+    // ajustes que se hayan hecho a mano sobre una propuesta ya armada.
+    const planId = val("pfPlan");
+    const planAnt = anterior?.plan || {};
+    const modulos = planAnt.modulos || [];
+    const plan = planId ? { ...planAnt, id: planId, modulos,
+      etiquetaPublica: val("pfEtiqueta") || CAT().PLANES[planId].etiquetaPublica } : {};
+    const cambioPlan = planId && (planId !== planAnt.id || !Object.keys(anterior?.cobertura || {}).length);
+    const cobertura = !planId ? (anterior?.cobertura || {})
+      : cambioPlan ? { ...CAT().derivarDePlan(planId, modulos).cobertura, incluirSLA: true }
+      : anterior.cobertura;
+    const equipos = [...document.querySelectorAll("#pfEquipos .eq-row")].map((row) => {
+      const o = {};
+      row.querySelectorAll("[data-eq]").forEach((f) => (o[f.dataset.eq] = f.value.trim()));
+      return o;
+    }).filter((e) => e.marca || e.modelo || e.ubicacion);
+
     const reg = {
       ...(anterior || {}),
       id: id || undefined,
@@ -370,15 +470,27 @@
       economico: {
         ...(anterior?.economico || {}),
         canonMensual: val("pfCanon"), moneda: val("pfMoneda"),
+        formaPago: val("pfFormaPago"), incluyeIVA: document.getElementById("pfIVA").checked,
       },
-      vigenciaPropuesta: { ...(anterior?.vigenciaPropuesta || {}), meses: val("pfMeses") },
+      plan, cobertura, equipos,
+      vigenciaPropuesta: { ...(anterior?.vigenciaPropuesta || {}),
+        meses: val("pfMeses"), inicioEstimado: val("pfInicio") || null },
       validezDias: val("pfValidez"),
       notas: val("pfNotas"),
       fechas: anterior?.fechas || { creado: E.hoy() },
     };
+    const regId = reg.id || (reg.id = E.ENTIDADES.propuestas.normalizar(reg).id);
     if (await guardar(reg, `${id ? "Edita" : "Alta"} propuesta ${reg.numero}`)) {
-      global.toast("Propuesta guardada");
-      global.go("propuestas");
+      // Antes volvía al listado y el documento no aparecía por ningún lado.
+      // Se va al detalle, que es donde está el seguimiento, y a una propuesta
+      // recién creada se le abre el documento, como hacía el alta vieja.
+      global.go("propdetalle/" + regId);
+      if (!id) {
+        global.toast(`Propuesta ${reg.numero} creada ✓`);
+        setTimeout(() => global.verDocumento("contrato", regId), 300);
+      } else {
+        global.toast("Propuesta guardada");
+      }
     }
   }
 
@@ -540,7 +652,7 @@
   });
 
   Object.assign(global, {
-    guardarPropuesta, enviarPropuesta, aceptarPropuesta, rechazarPropuesta,
+    documentoPropuesta, filaEquipoProp: filaEquipo, guardarPropuesta, enviarPropuesta, aceptarPropuesta, rechazarPropuesta,
     generarContrato, exportarPropuestasCSV, limpiarFiltroProp, irPaginaProp,
   });
 })(typeof window !== "undefined" ? window : globalThis);

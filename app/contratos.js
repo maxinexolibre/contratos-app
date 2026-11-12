@@ -10,7 +10,8 @@
 function renderDashboard() {
   const el = document.getElementById("view-dashboard");
   const vigentes = state.data.filter((c) => ACTIVOS.has(c.estado));
-  const pipeline = state.data.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado));
+  const pipeline = [...state.data.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado)),
+    ...propuestasAbiertas()];
   const mrr = vigentes.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
   const { venc, aum, pend } = calcAlertas();
   // MRR por nivel NexoCare (dona)
@@ -112,16 +113,49 @@ function renderBarras() {
 // ============================================================
 //  Vista: Pipeline (kanban)
 // ============================================================
+// Las propuestas comerciales (store `propuestas`, serie PR-) van en las mismas
+// columnas que las fichas viejas. Antes el kanban leía sólo `state.data`: una
+// propuesta recién creada no aparecía en ningún lado y no había cómo seguirla.
+const PROP_COLUMNA = { Borrador: "borrador", Enviada: "enviada" };
+function propuestasAbiertas() {
+  return (state.propuestas || []).filter((p) => PROP_COLUMNA[p.estado]);
+}
+// Aceptadas cuyo contrato todavía no se redactó. Las del esquema anterior
+// quedan afuera: están operando hace tiempo y no son trabajo comercial nuevo.
+function propuestasSinContrato() {
+  return (state.propuestas || []).filter((p) => p.estado === "Aceptada" && !p.contratoId && !p.esquemaAnterior);
+}
 function renderPipeline() {
   const el = document.getElementById("view-pipeline");
+  const props = propuestasAbiertas();
+  const sinContrato = propuestasSinContrato();
+  const col = (titulo, cards) => `<div class="kcol"><h4>${titulo} <span class="count">${cards.length}</span></h4>
+        ${cards.join("") || '<p class="muted" style="font-size:13px">—</p>'}</div>`;
   el.innerHTML = `
     <div class="kicker">Flujo comercial</div>
-    <div class="page-head"><h1>Pipeline de <span class="accent">propuestas</span></h1></div>
+    <div class="page-head"><h1>Pipeline de <span class="accent">propuestas</span></h1>
+      ${state.soloLectura ? "" : `<a class="btn primary" href="#propform">+ Nueva propuesta</a>`}</div>
     <div class="kanban">${KANBAN_COLS.map((estId) => {
-      const items = state.data.filter((c) => c.estado === estId);
-      return `<div class="kcol"><h4>${ESTADO_LABEL[estId]} <span class="count">${items.length}</span></h4>
-        ${items.map(kcard).join("") || '<p class="muted" style="font-size:13px">—</p>'}</div>`;
+      const cards = [
+        ...props.filter((p) => PROP_COLUMNA[p.estado] === estId).map(kcardProp),
+        ...state.data.filter((c) => c.estado === estId).map(kcard),
+      ];
+      const html = col(ESTADO_LABEL[estId], cards);
+      // Después de "Negociación" van las aceptadas que esperan contrato.
+      return estId === "negociacion" && sinContrato.length
+        ? html + col("Aceptada · falta contrato", sinContrato.map(kcardProp)) : html;
     }).join("")}</div>`;
+}
+function kcardProp(p) {
+  const cli = (state.clientes || []).find((c) => c.id === p.clienteId)?.nombreComercial || "—";
+  const accion = state.soloLectura ? ""
+    : p.estado === "Borrador" ? `<button class="btn sm" onclick="enviarPropuesta('${esc(p.id)}')">→ Enviada</button>`
+    : p.estado === "Enviada" ? `<button class="btn sm" onclick="aceptarPropuesta('${esc(p.id)}')">✓ Aceptada</button>`
+    : p.estado === "Aceptada" ? `<button class="btn sm" onclick="generarContrato('${esc(p.id)}')">Generar contrato</button>` : "";
+  return `<div class="kcard">
+    <div class="cli" onclick="location.hash='propdetalle/${esc(p.id)}'" style="cursor:pointer">${esc(cli)}</div>
+    <div class="meta">${esc(p.numero)} · ${p.equipos.length} equipos${p.fechas.enviado ? ` · enviada ${esc(p.fechas.enviado)}` : ""}</div>
+    <div class="row"><span class="num-usd">${money(p.economico.canonMensual, p.economico.moneda)}/mes</span>${accion}</div></div>`;
 }
 function kcard(c) {
   const next = nextEstado(c.estado);
@@ -850,7 +884,7 @@ const LEGAL = {
   preavisoNoRenovacion: 60, indiceLabel: { US_CPI: "US CPI", IPC_INDEC: "IPC INDEC" },
 };
 function generarPDF(id) {
-  const c = state.data.find((x) => x.id === id);
+  const c = state.data.find((x) => x.id === id) || window.documentoPropuesta?.(id);
   if (!c) return;
   const m = NEXO_CONTRATO.construirContrato(c, { plantilla: false });
   document.getElementById("printRoot").innerHTML = renderContratoHTML(m);
