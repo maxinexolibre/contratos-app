@@ -1794,6 +1794,15 @@ prueba("catálogo · modalidad libre: una que no está en la lista se conserva",
   igual(CAT.aParte({ ...n, disponibilidad: "EnStock", publicarWeb: true }).modalidad, "Litotricia");
 });
 
+prueba("propuesta · valor de referencia: null se conserva en la segunda vuelta", () => {
+  const N = (r) => E.ENTIDADES.propuestas.normalizar(r);
+  const sin = N(N({ clienteId: "cli_x", economico: { canonMensual: 1000 } }));
+  igual(sin.economico.valorReferencia, null, "sin valor no es gratis");
+  const con = N(N({ clienteId: "cli_x", economico: { canonMensual: 1000, valorReferencia: "1500", ajuste: "Anual" } }));
+  igual(con.economico.valorReferencia, 1500);
+  igual(con.economico.ajuste, "Anual");
+});
+
 // ===========================================================================
 
 console.log(`\n  ${pasadas} pasadas · ${fallidas} fallidas\n`);

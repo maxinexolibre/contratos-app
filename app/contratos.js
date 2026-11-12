@@ -884,7 +884,7 @@ const LEGAL = {
   preavisoNoRenovacion: 60, indiceLabel: { US_CPI: "US CPI", IPC_INDEC: "IPC INDEC" },
 };
 function generarPDF(id) {
-  const c = state.data.find((x) => x.id === id) || window.documentoPropuesta?.(id);
+  const c = state.data.find((x) => x.id === id);
   if (!c) return;
   const m = NEXO_CONTRATO.construirContrato(c, { plantilla: false });
   document.getElementById("printRoot").innerHTML = renderContratoHTML(m);

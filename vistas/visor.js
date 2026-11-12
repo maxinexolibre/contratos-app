@@ -81,13 +81,21 @@
     let html, titulo, descarga;
 
     if (tipo === "contrato") {
-      // También las propuestas comerciales, que salen con el mismo modelo.
-      const c = (st.data || []).find((x) => x.id === id) || global.documentoPropuesta?.(id);
+      const c = (st.data || []).find((x) => x.id === id);
       if (!c) return;
       const m = global.NEXO_CONTRATO.construirContrato(c, { plantilla: false });
       html = global.renderContratoHTML(m);
       titulo = `${c.numero} · ${c.cliente?.nombreComercial || ""}`;
       descarga = `generarDocx('${esc(id)}')`;
+    } else if (tipo === "propuesta") {
+      // Primera etapa comercial: documento propio, sin cláusulas (propuesta.js).
+      const p = (st.propuestas || []).find((x) => x.id === id);
+      if (!p) return;
+      const cli = (st.clientes || []).find((c) => c.id === p.clienteId) || {};
+      const m = global.NEXO_PROPUESTA.construirPropuesta(p, cli);
+      html = global.NEXO_PROPUESTA.renderPropuestaHTML(m);
+      titulo = `${p.numero} · ${cli.nombreComercial || ""}`;
+      descarga = `generarPropuestaDocx('${esc(id)}')`;
     } else {
       const p = (st.presupuestos || []).find((x) => x.id === id);
       if (!p) return;

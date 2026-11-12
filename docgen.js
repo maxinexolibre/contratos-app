@@ -45,10 +45,9 @@ async function imagen(nombre) {
 }
 
 async function generarDocx(id) {
-  // Las propuestas comerciales viven en su propio store: sin el segundo
-  // intento, crear una propuesta no dejaba bajar ningún documento.
-  const c = state.data.find((x) => x.id === id) || window.documentoPropuesta?.(id);
-  if (!c) return;
+  const c = state.data.find((x) => x.id === id);
+  // Una propuesta comercial tiene su propio documento, sin cláusulas.
+  if (!c) return (state.propuestas || []).some((p) => p.id === id) ? generarPropuestaDocx(id) : undefined;
   toast("Generando documento…");
   try {
     const D = await cargarDocx();
@@ -447,3 +446,149 @@ async function armarPresupuestoDocx(D, m) {
 
 window.generarDocx = generarDocx;
 window.generarPresupuestoDocx = generarPresupuestoDocx;
+
+// ============================================================
+//  Propuesta comercial en .docx (propuesta.js)
+//  Membrete en encabezado y pie, una hoja por sección: portada,
+//  alcance y propuesta económica. Sin cláusulas: eso es del contrato.
+// ============================================================
+async function generarPropuestaDocx(id) {
+  const p = (state.propuestas || []).find((x) => x.id === id);
+  if (!p) return;
+  const cli = (state.clientes || []).find((c) => c.id === p.clienteId) || {};
+  toast("Generando propuesta…");
+  try {
+    const D = await cargarDocx();
+    const m = NEXO_PROPUESTA.construirPropuesta(p, cli);
+    const blob = await armarPropuestaDocx(D, m);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${m.nombreArchivo}.docx`.replace(/[\/\\:*?"<>|]/g, "-");
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast("Propuesta descargada ✓");
+  } catch (e) {
+    toast("No se pudo generar el .docx: " + e.message, true, true);
+  }
+}
+
+async function armarPropuestaDocx(D, m) {
+  const {
+    Document, Packer, Paragraph, TextRun, AlignmentType, BorderStyle,
+    Table, TableRow, TableCell, WidthType, ImageRun, Header, Footer, PageBreak, ShadingType,
+  } = D;
+  const GRIS = "8C867D", OSCURO = "4A443E", RESALTE = "C47500";
+
+  const dec = (s) => String(s ?? "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+  // <b> negrita, <em> resaltado naranja de la marca.
+  const runs = (frag, { size = 20, color = DC.ink, bold: base = false, italics = false, font = FB } = {}) => {
+    const out = [];
+    let b = false, e = false;
+    for (const part of dec(frag).split(/(<\/?(?:b|em)>)/)) {
+      if (part === "<b>") { b = true; continue; }
+      if (part === "</b>") { b = false; continue; }
+      if (part === "<em>") { e = true; continue; }
+      if (part === "</em>") { e = false; continue; }
+      if (!part) continue;
+      out.push(new TextRun({ text: part.replace(/<[^>]+>/g, ""), bold: base || b || e, italics, color: e ? RESALTE : color, size, font }));
+    }
+    return out;
+  };
+  const P = (frag, o = {}) => new Paragraph({ children: runs(frag, o), alignment: o.align ?? AlignmentType.JUSTIFIED,
+    spacing: { before: o.before ?? 0, after: o.after ?? 140, line: 276 }, keepNext: o.keepNext });
+  const kicker = () => new Paragraph({ children: [new TextRun({ text: m.kicker, bold: true, color: DC.orange, size: 16, font: FB, characterSpacing: 40 })], spacing: { before: 200, after: 60 } });
+  const H1 = (frag) => new Paragraph({ children: runs(frag, { size: 34, bold: true, color: DC.taupe, font: FH }), spacing: { after: 60 } });
+  const linea = () => new Paragraph({ children: [], spacing: { before: 120, after: 240 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: DC.line, space: 1 } } });
+  const H3 = (frag) => P(frag, { size: 20, bold: true, color: OSCURO, font: FH, after: 40, before: 120, keepNext: true, align: AlignmentType.LEFT });
+  const salto = () => new Paragraph({ children: [new PageBreak()] });
+  const sinBorde = ["top", "bottom", "left", "right", "insideHorizontal", "insideVertical"]
+    .reduce((a, k) => (a[k] = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" }, a), {});
+  const conBorde = ["top", "bottom", "left", "right", "insideHorizontal", "insideVertical"]
+    .reduce((a, k) => (a[k] = { style: BorderStyle.SINGLE, size: 4, color: DC.ink }, a), {});
+  const celda = (hijos, w, o = {}) => new TableCell({ width: { size: w, type: WidthType.PERCENTAGE }, children: hijos,
+    shading: o.bg ? { type: ShadingType.CLEAR, fill: o.bg } : undefined,
+    margins: { top: o.pad ?? 110, bottom: o.pad ?? 110, left: 140, right: 140 } });
+
+  const kids = [];
+
+  // ---------- Portada ----------
+  kids.push(kicker());
+  kids.push(H1(`${m.titulo.pre ? m.titulo.pre + " " : ""}<em>${m.titulo.resaltado}</em>`));
+  kids.push(P(`Preparado exclusivamente para <em>${m.cliente}</em>${m.plan ? ` · ${m.plan}` : ""}`, { color: GRIS, after: 20, align: AlignmentType.LEFT }));
+  kids.push(P(`${m.numero ? `Propuesta ${m.numero} · ` : ""}${m.fecha}`, { color: GRIS, size: 16, after: 0, align: AlignmentType.LEFT }));
+  kids.push(linea());
+  kids.push(P(m.intro.destacado, { bold: true, size: 22, color: OSCURO, after: 200 }));
+  m.intro.parrafos.forEach((t) => kids.push(P(t)));
+  if (m.equipos.length) {
+    kids.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: conBorde, rows: [
+      new TableRow({ tableHeader: true, children: ["#", "Equipo", "Modalidad", "Ubicación"].map((h, i) =>
+        celda([P(h, { bold: true, color: OSCURO, after: 0, align: AlignmentType.LEFT })], [6, 50, 18, 26][i], { bg: DC.crema, pad: 60 })) }),
+      ...m.equipos.map((e) => new TableRow({ children: [String(e.n), e.equipo, e.modalidad, e.ubicacion || "—"].map((v, i) =>
+        celda([P(v, { after: 0, align: AlignmentType.LEFT })], [6, 50, 18, 26][i], { pad: 60 })) })),
+    ] }));
+  }
+
+  // ---------- Alcance ----------
+  kids.push(salto());
+  kids.push(kicker());
+  kids.push(H1("Alcance del Programa"));
+  kids.push(linea());
+  kids.push(P(m.alcanceIntro, { after: 200 }));
+  for (const a of m.alcance) {
+    kids.push(H3(a.titulo));
+    kids.push(P(a.porque, { after: 20, keepNext: true }));
+    kids.push(P(a.que, { color: GRIS }));
+  }
+  if (m.opcionales) { kids.push(H3("Servicios opcionales")); kids.push(P(m.opcionales)); }
+
+  // ---------- Propuesta económica ----------
+  kids.push(salto());
+  kids.push(kicker());
+  kids.push(H1("Propuesta Económica"));
+  kids.push(linea());
+  kids.push(P(m.economicaIntro));
+  if (m.referencia) { kids.push(H3("Valor de referencia del Programa")); kids.push(P(m.referencia, { bold: true, size: 24, align: AlignmentType.LEFT })); }
+  if (m.precio) { kids.push(H3(m.precioTitulo)); kids.push(P(m.precio, { bold: true, size: 24, align: AlignmentType.LEFT })); }
+  if (m.precioNota) kids.push(P(m.precioNota));
+  kids.push(H3("Condiciones comerciales"));
+  kids.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: conBorde,
+    rows: m.condiciones.map(([l, v]) => new TableRow({ children: [
+      celda([P(l, { bold: true, color: OSCURO, size: 19, after: 0, align: AlignmentType.LEFT })], 38, { bg: DC.crema }),
+      celda([P(v, { size: 19, after: 0, align: AlignmentType.LEFT })], 62),
+    ] })) }));
+  kids.push(P(m.aviso, { italics: true, color: GRIS, size: 16, before: 120 }));
+  kids.push(linea());
+  kids.push(P(m.cierre));
+
+  // ---------- Membrete ----------
+  const header = new Header({ children: [new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: sinBorde, rows: [
+    new TableRow({ children: [
+      celda(["innovación", "y crecimiento", "continuo_"].map((t) => new Paragraph({ children: [new TextRun({ text: t, italics: true, color: DC.orange, size: 20, font: FB })] })), 50, { pad: 0 }),
+      celda([new Paragraph({ alignment: AlignmentType.RIGHT, children: [new ImageRun({ type: "png", data: await imagen("nexolibre-logo.png"), transformation: { width: 172, height: 40 } })] })], 50, { pad: 0 }),
+    ] }),
+  ] })] });
+  const footer = new Footer({ children: [new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: sinBorde, rows: [
+    new TableRow({ children: [
+      ...NEXO_PROPUESTA.OFICINAS.map((o) => celda([
+        new Paragraph({ children: [new TextRun({ text: o.pais, color: DC.orange, size: 13, font: FB })] }),
+        ...o.lineas.map((l) => new Paragraph({ children: [new TextRun({ text: l, color: DC.taupe, size: 13, font: FB })] })),
+      ], 21, { pad: 0 })),
+      celda([new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: "www.nexolibre.com", bold: true, color: DC.orange, size: 18, font: FB })] })], 37, { pad: 0 }),
+    ] }),
+  ] })] });
+
+  const doc = new Document({
+    creator: "Nexolibre",
+    title: `Propuesta · Programa de Continuidad Operativa · ${dec(m.cliente)}`,
+    description: "Generado desde el sistema comercial de Nexolibre",
+    sections: [{
+      properties: { page: { size: { width: PAGINA.ancho, height: PAGINA.alto },
+        margin: { top: 1900, right: 1500, bottom: 1700, left: 1500, header: 600, footer: 500 } } },
+      headers: { default: header },
+      footers: { default: footer },
+      children: kids,
+    }],
+  });
+  return Packer.toBlob(doc);
+}
