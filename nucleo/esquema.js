@@ -402,6 +402,13 @@
             ivaPct: esNumero(r.economico?.ivaPct, 21),
             incluyeIVA: esBool(r.economico?.incluyeIVA),
             formaPago: esTexto(r.economico?.formaPago),
+            // Precio de lista del programa, para mostrar la condición
+            // especial contra él. `null` = no se muestra; money(null) daría 0,
+            // que en el documento se leería como "valor de referencia: gratis".
+            valorReferencia: r.economico?.valorReferencia == null || r.economico.valorReferencia === ""
+              ? null : money(r.economico.valorReferencia),
+            // Cómo se ajusta el canon, en el texto que lee el cliente.
+            ajuste: esTexto(r.economico?.ajuste),
           },
           vigenciaPropuesta: {
             meses: esNumero(r.vigenciaPropuesta?.meses, 12),

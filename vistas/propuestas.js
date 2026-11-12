@@ -37,37 +37,6 @@
   const nombreCliente = (id) => (clientes().find((c) => c.id === id)?.nombreComercial) || "—";
   const CAT = () => global.NEXO_CATALOGO;
 
-  /**
-   * La propuesta en la forma que entienden `construirContrato` y docgen.
-   *
-   * Cuando las propuestas pasaron a ser registros propios, el documento quedó
-   * atado a la forma vieja (`state.data`): se creaba la propuesta y no había
-   * de dónde sacar el PDF ni el .docx. En vez de duplicar el armado del
-   * documento, se traduce acá y se reusa el mismo modelo que los contratos,
-   * así lo que ve el cliente sale igual que antes.
-   */
-  function comoDocumento(p) {
-    const cli = clientes().find((c) => c.id === p.clienteId) || {};
-    return {
-      id: p.id, tipo: "propuesta", numero: p.numero, pais: p.pais, estado: "borrador",
-      cliente: {
-        nombreComercial: cli.nombreComercial || "",
-        razonesSociales: cli.razonSocial
-          ? [{ razonSocial: cli.razonSocial, cuit: cli.cuit || "", domicilio: "", principal: true }] : [],
-        contacto: cli.contacto || "", localidad: cli.localidad || "", provincia: cli.provincia || "",
-      },
-      plan: p.plan || {}, equipos: p.equipos || [], cobertura: p.cobertura || {},
-      economico: p.economico, ajuste: {},
-      // Sin inicio no se calcula vencimiento: la propuesta todavía no corre.
-      vigencia: { inicio: p.vigenciaPropuesta.inicioEstimado || "", meses: p.vigenciaPropuesta.meses, fin: "" },
-      fechas: { creado: p.fechas.creado, enviado: p.fechas.enviado || "", firmado: "" },
-      archivos: [], notas: p.notas,
-    };
-  }
-  const documentoPropuesta = (id) => {
-    const p = propuestas().find((x) => x.id === id);
-    return p ? comoDocumento(p) : null;
-  };
 
   async function guardar(registro, mensaje) {
     const normalizado = E.ENTIDADES.propuestas.normalizar(registro);
@@ -242,16 +211,16 @@
             ${p.numeroLegado ? ` · circuló como ${esc(p.numeroLegado)}` : ""}
           </p>
         </div>
-        <button class="btn primary" onclick="verDocumento('contrato','${esc(p.id)}')">👁 Ver documento / PDF</button>
-        <button class="btn" onclick="generarDocx('${esc(p.id)}')" title="Descarga un .docx editable en Word">⬇ .docx</button>
+        <button class="btn primary" onclick="verDocumento('propuesta','${esc(p.id)}')">👁 Ver propuesta / PDF</button>
+        <button class="btn" onclick="generarPropuestaDocx('${esc(p.id)}')" title="Descarga un .docx editable en Word">⬇ .docx</button>
         ${puedeEditar && !["Aceptada", "Rechazada"].includes(p.estado)
           ? `<a class="btn ghost" href="#propform/${esc(p.id)}">Editar</a>` : ""}
         ${accionesEtapa(p, contrato)}
       </div>
 
       ${!p.plan?.id || !p.equipos.length ? `<div class="card interno" style="margin-top:16px">
-        <b>El documento sale incompleto.</b> Falta${!p.plan?.id && !p.equipos.length ? "n el plan y los equipos"
-          : !p.plan?.id ? " el plan" : "n los equipos"}: sin eso no lleva alcance ni fichas técnicas.
+        <b>La propuesta sale incompleta.</b> Falta${!p.plan?.id && !p.equipos.length ? "n el plan y los equipos"
+          : !p.plan?.id ? " el plan" : "n los equipos"}: el plan arma el alcance y los equipos, el título.
         ${puedeEditar && !["Aceptada", "Rechazada"].includes(p.estado)
           ? `Cargalos desde <a href="#propform/${esc(p.id)}">Editar</a>.` : ""}
       </div>` : ""}
@@ -377,13 +346,21 @@
             <input type="number" id="pfValidez" min="1" value="${d.validezDias}" /></div>
         </div>
         <div class="form-grid">
+          <div class="field"><label for="pfReferencia">Valor de referencia (opcional)</label>
+            <input type="number" id="pfReferencia" min="0" step="50" value="${d.economico.valorReferencia ?? ""}"
+              placeholder="Precio de lista, si el canon es una condición especial" /></div>
           <div class="field"><label for="pfFormaPago">Forma de pago</label>
-            <input id="pfFormaPago" value="${esc(d.economico.formaPago)}" placeholder="Mensual, antes del 5º día hábil" /></div>
+            <input id="pfFormaPago" value="${esc(d.economico.formaPago)}" placeholder="Facturación mensual." /></div>
+        </div>
+        <div class="form-grid">
+          <div class="field"><label for="pfAjuste">Ajuste</label>
+            <input id="pfAjuste" value="${esc(d.economico.ajuste)}" placeholder="Anual, según variación de costos." /></div>
           <div class="field"><label for="pfInicio">Inicio estimado</label>
             <input type="date" id="pfInicio" value="${esc(d.vigenciaPropuesta.inicioEstimado || "")}" /></div>
         </div>
         <div class="check-row" style="margin:4px 0 12px">
           <label><input type="checkbox" id="pfIVA" ${d.economico.incluyeIVA ? "checked" : ""}> El canon incluye IVA</label>
+          <label><input type="checkbox" id="pfRelev" ${d.cobertura?.relevamientoInicial !== false ? "checked" : ""}> Relevamiento técnico inicial sin cargo</label>
         </div>
 
         <h3 style="margin-top:8px">Programa NexoCare</h3>
@@ -471,8 +448,10 @@
         ...(anterior?.economico || {}),
         canonMensual: val("pfCanon"), moneda: val("pfMoneda"),
         formaPago: val("pfFormaPago"), incluyeIVA: document.getElementById("pfIVA").checked,
+        valorReferencia: val("pfReferencia") || null, ajuste: val("pfAjuste"),
       },
-      plan, cobertura, equipos,
+      plan, equipos,
+      cobertura: { ...cobertura, relevamientoInicial: document.getElementById("pfRelev").checked },
       vigenciaPropuesta: { ...(anterior?.vigenciaPropuesta || {}),
         meses: val("pfMeses"), inicioEstimado: val("pfInicio") || null },
       validezDias: val("pfValidez"),
@@ -487,7 +466,7 @@
       global.go("propdetalle/" + regId);
       if (!id) {
         global.toast(`Propuesta ${reg.numero} creada ✓`);
-        setTimeout(() => global.verDocumento("contrato", regId), 300);
+        setTimeout(() => global.verDocumento("propuesta", regId), 300);
       } else {
         global.toast("Propuesta guardada");
       }
@@ -652,7 +631,7 @@
   });
 
   Object.assign(global, {
-    documentoPropuesta, filaEquipoProp: filaEquipo, guardarPropuesta, enviarPropuesta, aceptarPropuesta, rechazarPropuesta,
+    filaEquipoProp: filaEquipo, guardarPropuesta, enviarPropuesta, aceptarPropuesta, rechazarPropuesta,
     generarContrato, exportarPropuestasCSV, limpiarFiltroProp, irPaginaProp,
   });
 })(typeof window !== "undefined" ? window : globalThis);
