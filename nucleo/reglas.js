@@ -374,9 +374,21 @@
   }
 
   function validarLead(nuevo, anterior, ctx) {
-    if (!nuevo.contactoNombre) fallar("NX-040", "El lead necesita nombre de contacto");
-    if (!nuevo.contactoEmail && !nuevo.contactoTel) {
-      fallar("NX-040", "El lead necesita email o teléfono");
+    // Un prospecto arranca como institución + sitio web, antes de conocer al
+    // decisor: eso ya es accionable (hay a quién investigar y por dónde).
+    // Recién al avanzar en la secuencia se exige una vía de contacto directa.
+    if (!nuevo.contactoNombre && !nuevo.institucion) {
+      fallar("NX-040", "El lead necesita nombre de contacto o institución");
+    }
+    if (!nuevo.contactoEmail && !nuevo.contactoTel && !nuevo.sitioWeb && !nuevo.institucion) {
+      fallar("NX-040", "El lead necesita email, teléfono, sitio web o institución",
+        "Sin ninguna vía no hay a quién ni cómo contactar");
+    }
+    // Una vez contactado, ya tiene que haber una vía directa registrada.
+    if ((nuevo.estado === "Calificado" || nuevo.estado === "Convertido") &&
+        !nuevo.contactoEmail && !nuevo.contactoTel) {
+      fallar("NX-040", "Un lead calificado necesita email o teléfono del contacto",
+        "Antes de calificar hay que haber encontrado a la persona");
     }
     if (nuevo.estado === "Convertido" && !nuevo.ticketId) {
       fallar("NX-040", "Un lead convertido tiene que apuntar a un ticket");

@@ -64,7 +64,7 @@ const SUBNAV = {
   contratos: [["dashboard", "Tablero"], ["pipeline", "Pipeline"], ["propuestas", "Propuestas"],
     ["listado", "Contratos"], ["agenda", "Vencimientos"]],
   presupuestos: [["ptablero", "Tablero"], ["presupuestos", "Presupuestos"], ["tickets", "Tickets"], ["clientes", "Clientes"], ["facturacion", "Facturación"], ["reportes", "Reportes"]],
-  marketing: [["mktablero", "Tablero"], ["campanas", "Campañas"], ["leads", "Leads"], ["canales", "Canales"]],
+  marketing: [["semana", "Esta semana"], ["mktablero", "Tablero"], ["campanas", "Campañas"], ["leads", "Leads"], ["canales", "Canales"]],
   equipo: [["vendedores", "Vendedores"], ["comisiones", "Comisiones"]],
   catalogo: [["catalogo", "Catálogo"], ["catrapida", "Carga rápida"], ["catauditoria", "Auditoría"], ["catpublicar", "Publicar en la web"]],
 };
@@ -77,10 +77,11 @@ const VIEW_WS = {
   facturacion: "presupuestos", cambio: "presupuestos", clientes: "presupuestos", cliform: "presupuestos",
   mktablero: "marketing", campanas: "marketing", campdetalle: "marketing", campform: "marketing",
   leads: "marketing", leadform: "marketing", canales: "marketing",
+  semana: "marketing", importar: "marketing",
   vendedores: "equipo", vnddetalle: "equipo", vndform: "equipo", comisiones: "equipo",
   catalogo: "catalogo", catform: "catalogo", catauditoria: "catalogo", catpublicar: "catalogo", catrapida: "catalogo",
 };
-const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero", marketing: "mktablero", equipo: "vendedores", catalogo: "catalogo" };
+const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero", marketing: "semana", equipo: "vendedores", catalogo: "catalogo" };
 
 function router() {
   const view = (location.hash.replace("#", "") || "dashboard").split("/");
