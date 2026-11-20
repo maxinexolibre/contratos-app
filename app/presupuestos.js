@@ -169,6 +169,7 @@ function renderPresuDetalle(id) {
             ${p.estado === "anulado" ? `<dt>Motivo de anulación</dt><dd>${esc(p.motivoAnulacion || "—")}</dd>` : ""}
           </dl>
         </div>
+        ${window.tarjetaComision ? tarjetaComision("Presupuesto", p.id) : ""}
         <div class="card"><h3>Trazabilidad</h3>
           <ul class="tl">${(p.historialEstados || []).slice().reverse().map((h) => `<li><span class="est">${PRE_ESTADO_LABEL[h.estado] || h.estado}</span> <span class="fch">${fmt(h.fecha)} · ${esc(h.usuario || "")}</span></li>`).join("") || '<li class="muted">Sin movimientos</li>'}</ul>
         </div>
@@ -215,6 +216,16 @@ async function cambiarEstadoPresu(id, nuevo) {
   }
   const antes = structuredClone(p);
   const propuesto = { ...structuredClone(p), estado: nuevo };
+
+  // Al enviar se decide si lleva comisión. Es el momento en que todavía se
+  // sabe quién trajo al cliente; después, nadie se acuerda y la comisión
+  // queda colgada o se discute.
+  if (nuevo === "enviado" && window.marcarComision &&
+      !NEXO_COMISIONES.marcaDe("Presupuesto", p.id, state.marcasComision)) {
+    try { validarEscritura("presupuestos", "editar", propuesto, antes); }
+    catch (e) { if (avisarRegla(e)) return; throw e; }
+    if (!(await marcarComision("Presupuesto", p.id, { alGuardar: "Guardar y enviar" }))) return;
+  }
 
   // Las transiciones ilegales, el aprobar dos presupuestos del mismo ticket y
   // el aprobar uno vencido se cortan acá, antes de escribir nada.

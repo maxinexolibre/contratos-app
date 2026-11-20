@@ -62,6 +62,12 @@
     // Propuestas
     "NX-070": "La propuesta ya generó un contrato",
     "NX-071": "La propuesta todavía no fue aceptada",
+    // Seguimiento de comisiones por operación
+    "NX-090": "La operación ya tiene marcada su comisión",
+    "NX-091": "El lead no está asignado a ese comercial",
+    "NX-092": "La decisión sobre la comisión necesita un motivo",
+    "NX-093": "La comisión ya tiene pagos registrados",
+    "NX-094": "El pago supera lo que corresponde",
     // Catálogo
     "NX-080": "La referencia ya existe en el catálogo",
     "NX-081": "Referencia con formato inválido",
@@ -118,6 +124,13 @@
   function validarTicket(nuevo, anterior, ctx) {
     if (!nuevo.clienteId) fallar("NX-040", "El ticket necesita un cliente");
     if (!nuevo.descripcion) fallar("NX-040", "El ticket necesita una descripción del pedido");
+
+    // Quién trajo el lead decide la comisión de un externo: lo asigna
+    // gerencia, no el que carga el ticket.
+    if ((nuevo.traidoPor || null) !== (anterior?.traidoPor || null) &&
+        !P.capacidad(ctx.rol, "asignar_vendedor")) {
+      fallar("NX-011", "Asignar quién trajo el lead corresponde a gerencia comercial");
+    }
 
     if (anterior && nuevo.estado !== anterior.estado) {
       const permitidas = TRANSICION_TICKET[anterior.estado] || [];
@@ -602,12 +615,105 @@
     return true;
   }
 
+  /**
+   * Comisión de una operación (la decisión tomada al enviarla).
+   *
+   * Las reglas que importan: un externo cobra solo si el lead está asignado a
+   * él; ir contra lo que dice la historia del cliente pide un motivo; y lo
+   * que ya se pagó no se rediscute cambiando la decisión.
+   */
+  function validarMarcaComision(nuevo, anterior, ctx) {
+    const CM = global.NEXO_COMISIONES;
+    if (!nuevo.origenId) fallar("NX-040", "Falta la operación");
+
+    const otra = (ctx.marcasComision || []).find((m) => m.id !== nuevo.id &&
+      m.origenTipo === nuevo.origenTipo && m.origenId === nuevo.origenId);
+    if (otra) {
+      fallar("NX-090", `${nuevo.origenNumero || nuevo.origenId} ya tiene marcada su comisión`,
+        "Editá la que existe");
+    }
+
+    if (nuevo.lleva) {
+      if (!nuevo.area && !nuevo.externo) {
+        fallar("NX-040", "Si lleva comisión, alguien tiene que cobrarla");
+      }
+    } else if (nuevo.area || nuevo.externo) {
+      fallar("NX-040", "Una operación sin comisión no puede tener a quién pagarle");
+    }
+
+    // Ir contra la historia del cliente, o contestar una consulta, se explica.
+    const contradice = (nuevo.criterio === "ClienteNuevo" && !nuevo.lleva) ||
+      (nuevo.criterio === "ClienteExistente" && nuevo.lleva);
+    if ((contradice || nuevo.criterio === "Consulta" || nuevo.historico) && !nuevo.motivo) {
+      fallar("NX-092",
+        contradice ? "Decidiste distinto de lo que indica la historia del cliente: contá por qué"
+          : nuevo.historico ? "Una comisión cargada después de los hechos necesita un motivo"
+          : "Contá por qué corresponde o no corresponde",
+        "Queda escrito para que no se vuelva a discutir");
+    }
+
+    const coleccion = nuevo.origenTipo === "Propuesta" ? ctx.propuestas : ctx.presupuestos;
+    const op = (coleccion || []).find((o) => o.id === nuevo.origenId) || null;
+
+    if (nuevo.externo) {
+      const { vendedorId, porcentaje } = nuevo.externo;
+      const v = (ctx.vendedores || []).find((x) => x.id === vendedorId);
+      if (!v) fallar("NX-041", "Ese comercial no está dado de alta en Vendedores");
+      if (!(porcentaje > 0) || porcentaje > 100) {
+        fallar("NX-060", `Porcentaje inválido para ${v.nombre}: ${porcentaje}%`);
+      }
+      // Un externo cobra solo si el lead se le asignó a él. Sin esta regla
+      // cualquiera podía sumar una comisión de un tercero que nadie autorizó.
+      // Lo cargado a posteriori queda exceptuado, con motivo obligatorio.
+      if (op && !nuevo.historico) {
+        const tk = op.ticketId ? (ctx.tickets || []).find((t) => t.id === op.ticketId) : null;
+        if (!tk || tk.traidoPor !== vendedorId) {
+          fallar("NX-091", `El lead de ${nuevo.origenNumero || op.numero} no está asignado a ${v.nombre}`,
+            tk ? "Asignáselo en el ticket, en «¿Quién trajo el lead?»"
+              : "La operación no tiene ticket: creá el ticket y asignale quién lo trajo");
+        }
+      }
+    }
+
+    // Lo pagado no se rediscute: cambiar la decisión deja pagos sin respaldo.
+    const pagosAntes = anterior?.pagos || [];
+    if (pagosAntes.length) {
+      const decision = (m) => JSON.stringify([m.lleva, m.area, m.externo, m.baseManual]);
+      if (decision(anterior) !== decision(nuevo)) {
+        fallar("NX-093", "Ya hay pagos registrados: la decisión no se puede cambiar",
+          "Si hubo un error, anulá los pagos primero");
+      }
+    }
+
+    const cambiaronPagos = JSON.stringify(pagosAntes) !== JSON.stringify(nuevo.pagos);
+    if (cambiaronPagos && nuevo.pagos.length) {
+      if (!P.capacidad(ctx.rol, "liquidar_comision")) {
+        fallar("NX-011", "Registrar pagos de comisiones corresponde a administración");
+      }
+      if (op || nuevo.baseManual != null) {
+        const lineas = CM.lineas(nuevo, ctx);
+        for (const p of nuevo.pagos) {
+          const l = lineas.find((x) => x.clave === p.beneficiario);
+          if (!l) fallar("NX-041", `Pago a alguien que no cobra en esta operación (${p.beneficiario})`);
+          if (!(p.monto > 0)) fallar("NX-040", "El pago tiene que ser mayor que cero");
+        }
+        for (const l of lineas) {
+          if (l.pagado > l.monto + 0.01) {
+            fallar("NX-094", `A ${l.nombre} le corresponden ${l.monto} y se registraron ${l.pagado}`);
+          }
+        }
+      }
+    }
+    return true;
+  }
+
   const VALIDADORES = {
     propuestas: validarPropuesta,
     vendedores: validarVendedor,
     catalogo: validarCatalogo,
     acuerdosComision: validarAcuerdoComision,
     comisiones: validarComision,
+    marcasComision: validarMarcaComision,
     tickets: validarTicket,
     presupuestos: validarPresupuesto,
     contratos: validarContrato,

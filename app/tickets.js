@@ -120,6 +120,8 @@ function renderTicketDetalle(id) {
             <dt>Nombre</dt><dd><b>${esc(t.cliente?.nombreComercial || "—")}</b></dd>
             <dt>Contacto</dt><dd>${esc(t.cliente?.contacto || "—")}</dd>
             <dt>Razón social</dt><dd>${esc(rsPrincipal(t).razonSocial || "—")}</dd>
+            <dt>Trajo el lead</dt><dd>${esc((state.vendedores || []).find((v) => v.id === t.traidoPor)?.nombre || "Propio de Nexo")}${t.traidoPorAsignacion
+              ? ` <span class="muted" style="font-size:12px">· asignado por ${esc(t.traidoPorAsignacion.por)} el ${fmt(t.traidoPorAsignacion.fecha)}</span>` : ""}</dd>
           </dl>
         </div>
         <div class="card"><h3>Trazabilidad</h3>
@@ -211,6 +213,7 @@ function renderTicketForm(id) {
         ${sel("Tipo de pedido", "tipoPedido", t.tipoPedido, Object.entries(TK_TIPO_PEDIDO))}
         ${sel("País", "pais", t.pais || "AR", Object.entries(NEXO_ESQUEMA.PAIS_NOMBRE))}
         ${!isNew ? sel("Estado", "estado", t.estado, TK_ESTADOS.map((e) => [e.id, e.label])) : ""}
+        ${campoTraidoPor(t)}
       </div>
       <div class="field full" style="margin-top:12px"><label>Descripción del pedido</label>
         <textarea data-path="descripcion" rows="4" placeholder="Qué necesita el cliente, equipo involucrado, urgencia…">${esc(t.descripcion || "")}</textarea></div>
@@ -222,10 +225,30 @@ function renderTicketForm(id) {
     </form>`;
   document.getElementById("tkform").onsubmit = (e) => { e.preventDefault(); guardarTicket(isNew, id); };
 }
+/**
+ * Quién trajo el lead. De esto depende que un comercial externo cobre: lo
+ * asigna gerencia comercial, y queda anotado quién y cuándo.
+ */
+function campoTraidoPor(t) {
+  const nombre = (state.vendedores || []).find((v) => v.id === t.traidoPor)?.nombre;
+  if (!NEXO_PERMISOS.capacidad(state.rol, "asignar_vendedor")) {
+    return `<div class="field"><label>¿Quién trajo el lead?</label>
+      <p style="margin:6px 0 0">${esc(nombre || "Propio de Nexo")}</p></div>`;
+  }
+  const activos = (state.vendedores || []).filter((v) => v.estado !== "Inactivo" || v.id === t.traidoPor);
+  return sel("¿Quién trajo el lead?", "traidoPor", t.traidoPor || "",
+    [["", "Propio de Nexo"], ...activos.map((v) => [v.id, `${esc(v.nombre)} · ${esc(v.relacion)}`])]);
+}
 async function guardarTicket(isNew, id) {
   const t = window._draftTk;
   const prev = isNew ? null : ticketPorId(id)?.estado;
+  const traidoAntes = isNew ? null : (ticketPorId(id)?.traidoPor || null);
   document.querySelectorAll("#tkform [data-path]").forEach((f) => setPath(t, f.dataset.path, f.value));
+  t.traidoPor = t.traidoPor || null;
+  if (t.traidoPor !== traidoAntes) {
+    t.traidoPorAsignacion = t.traidoPor
+      ? { por: state.user || "—", fecha: new Date().toISOString().slice(0, 10) } : null;
+  }
   if (!t.cliente.nombreComercial) { toast("Falta el nombre del cliente", true, true); return; }
   if (!t.cliente.razonesSociales) t.cliente.razonesSociales = [];
   if (!isNew && prev !== t.estado) t.historial.push({ estado: t.estado, fecha: new Date().toISOString().slice(0, 10), usuario: state.user || "—" });

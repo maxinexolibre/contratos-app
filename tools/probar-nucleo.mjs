@@ -1047,12 +1047,17 @@ prueba("un contrato de venta única no se valúa como abono anual", () => {
 // Reparto interno por área
 // ---------------------------------------------------------------------------
 
-prueba("el reparto interno suma 4,5% y cubre los cinco países", () => {
+prueba("el reparto interno suma 4,5% en proporción 6:2:1 y cubre los cinco países", () => {
   const total = CM.REPARTO_INTERNO.reduce((s, r) => s + r.porcentaje, 0);
-  igual(total, 4.5, "3 + 0,5 + 0,5 + 0,5");
+  igual(total, 4.5, "3 + 1 + 0,5");
+  const pct = Object.fromEntries(CM.REPARTO_INTERNO.map((r) => [r.area, r.porcentaje]));
+  igual(pct["Gerencia comercial"], 3, "6 partes de 9");
+  igual(pct["Diseño"], 1, "2 partes de 9");
+  igual(pct["Marketing"], 0.5, "1 parte de 9");
+  cierto(!("Ventas" in pct), "Ventas salió del reparto el 2026-11-20");
   igual(CM.PAISES_REPARTO, ["AR", "CL", "CO", "UY", "US"]);
   const acus = CM.acuerdosReparto("2026-01-01");
-  igual(acus.length, 4);
+  igual(acus.length, 3);
   cierto(acus.every((a) => a.alcance === "Area" && a.base === "Neto"));
   cierto(acus.every((a) => !a.pagoTrasCobro), "el reparto no espera al cobro");
 });
@@ -1064,21 +1069,21 @@ prueba("el reparto alcanza solo a los países listados", () => {
   cierto(!CM.alcanzaPais(ger, "BR"), "Brasil no está en el reparto");
 });
 
-prueba("devenga la comisión del vendedor MÁS las cuatro de área", () => {
+prueba("devenga la comisión del vendedor MÁS las tres de área", () => {
   const coms = CM.devengarPorContrato(contratoFirmado(), {
     vendedores: [VND],
     acuerdos: [acuerdoPct(), ...CM.acuerdosReparto("2026-01-01")],
     comisiones: [], tickets: [ticketBase({ id: "tk_1", vendedor: "vend" })],
     presupuestos: [presuBase({ id: "pre_1", estado: "Aprobado" })],
   });
-  igual(coms.length, 5, "1 del vendedor + 4 áreas");
+  igual(coms.length, 4, "1 del vendedor + 3 áreas");
   const porArea = Object.fromEntries(
     coms.filter((c) => c.alcance === "Area").map((c) => [c.area, c.monto]));
   // Base 40.000 sin IVA incluido -> el neto es el total
   igual(porArea["Gerencia comercial"], 1200, "3% de 40.000");
   igual(porArea["Marketing"], 200, "0,5%");
-  igual(porArea["Diseño"], 200);
-  igual(porArea["Ventas"], 200);
+  igual(porArea["Diseño"], 400, "1%");
+  igual(porArea["Ventas"], undefined);
   const vendedorCom = coms.find((c) => c.alcance === "Vendedor");
   igual(vendedorCom.monto, 2000, "5% pactado");
 });
@@ -1088,7 +1093,7 @@ prueba("el reparto corre aunque no haya vendedor asignado", () => {
     vendedores: [], acuerdos: CM.acuerdosReparto("2026-01-01"),
     comisiones: [], tickets: [], permitirSinVendedor: true,
   });
-  igual(coms.length, 4, "solo las de área");
+  igual(coms.length, 3, "solo las de área");
   cierto(coms.every((c) => c.alcance === "Area"));
 });
 
@@ -1801,6 +1806,296 @@ prueba("propuesta · valor de referencia: null se conserva en la segunda vuelta"
   const con = N(N({ clienteId: "cli_x", economico: { canonMensual: 1000, valorReferencia: "1500", ajuste: "Anual" } }));
   igual(con.economico.valorReferencia, 1500);
   igual(con.economico.ajuste, "Anual");
+});
+
+// ---------------------------------------------------------------------------
+// Seguimiento de comisiones por operación
+// ---------------------------------------------------------------------------
+// Caso tipo: un externo trae el lead, cobra 10% del neto; el área comercial
+// cobra 4,5% repartido 6:2:1. Datos ficticios.
+
+const EXT = E.ENTIDADES.vendedores.normalizar({
+  id: "vnd_ext", nombre: "Comercial Externo Ejemplo", relacion: "Externo", fechaAlta: "2026-01-01",
+});
+const acuExt = E.ENTIDADES.acuerdosComision.normalizar({
+  id: "acu_ext", alcance: "Vendedor", vendedorId: "vnd_ext", modalidad: "Porcentaje",
+  porcentaje: 10, base: "Neto", moneda: "USD", vigenciaDesde: "2026-01-01",
+});
+const MARCA = (over = {}) => E.ENTIDADES.marcasComision.normalizar({
+  id: "mco_1", origenTipo: "Presupuesto", origenId: "pre_1", origenNumero: "P20260801",
+  clienteId: "cli_1", lleva: true, criterio: "ClienteNuevo", area: true,
+  externo: { vendedorId: "vnd_ext", porcentaje: 10 }, fecha: "2026-08-01", ...over,
+});
+// Presupuesto de 10.000 neto, aprobado el 2026-08-10.
+const presuGanado = (over = {}) => presuBase({
+  estado: "Aprobado", items: [{ detalle: "Servicio", cantidad: 1, unitario: 10000 }],
+  historialEstados: [{ estado: "enviado", fecha: "2026-08-02" }, { estado: "ganado", fecha: "2026-08-10" }],
+  ...over,
+});
+const ctxSeg = (over = {}) => ({
+  ...ADMIN,
+  clientes: [E.ENTIDADES.clientes.normalizar({ id: "cli_1", nombreComercial: "Clínica Ficticia" })],
+  tickets: [ticketBase({ traidoPor: "vnd_ext" })],
+  presupuestos: [presuGanado()],
+  propuestas: [], contratos: [], facturaciones: [],
+  vendedores: [EXT], acuerdos: [acuExt], acuerdosComision: [acuExt],
+  marcasComision: [], ...over,
+});
+
+prueba("seguimiento · el caso tipo: 10% del externo + 4,5% del área en 6:2:1", () => {
+  const ls = CM.lineas(MARCA(), ctxSeg(), "2026-08-15");
+  const m = Object.fromEntries(ls.map((l) => [l.nombre, l.monto]));
+  igual(m["Comercial Externo Ejemplo"], 1000, "10% de 10.000");
+  igual(m["Gerencia comercial"], 300, "6/9 de 450");
+  igual(m["Diseño"], 100, "2/9 de 450");
+  igual(m["Marketing"], 50, "1/9 de 450");
+  cierto(ls.every((l) => l.estado === "Devengada"), "ganada sin cobro: devengada");
+});
+
+prueba("seguimiento · sin comisión no hay líneas", () => {
+  igual(CM.lineas(MARCA({ lleva: false, area: false, externo: null }), ctxSeg()).length, 0);
+});
+
+prueba("seguimiento · los estados avanzan solos con la operación y el cobro", () => {
+  const abierto = ctxSeg({ presupuestos: [presuBase({ estado: "Enviado", fechaEnvio: "2026-08-02",
+    items: [{ detalle: "x", cantidad: 1, unitario: 10000 }] })] });
+  igual(CM.lineas(MARCA(), abierto)[0].estado, "Prevista");
+
+  const cobrado = ctxSeg({ facturaciones: [E.ENTIDADES.facturaciones.normalizar({
+    presupuestoId: "pre_1", fechaEmision: "2026-09-01", tipoComprobante: "Factura" })] });
+  const l = CM.lineas(MARCA(), cobrado, "2026-09-11")[0];
+  igual(l.estado, "ACobrar");
+  igual(l.desde, "2026-09-01");
+  igual(l.dias, 10);
+
+  const pagada = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", fecha: "2026-09-20", monto: 1000 }] });
+  const ls = CM.lineas(pagada, cobrado);
+  igual(ls.find((x) => x.tipo === "Externo").estado, "Pagada");
+  igual(ls.find((x) => x.nombre === "Diseño").estado, "ACobrar", "cada uno se paga por separado");
+
+  const perdido = ctxSeg({ presupuestos: [presuBase({ estado: "Rechazado",
+    items: [{ detalle: "x", cantidad: 1, unitario: 10000 }] })] });
+  igual(CM.lineas(MARCA(), perdido)[0].estado, "Anulada");
+});
+
+prueba("seguimiento · una nota de crédito no cuenta como cobro", () => {
+  const c = ctxSeg({ facturaciones: [E.ENTIDADES.facturaciones.normalizar({
+    presupuestoId: "pre_1", fechaEmision: "2026-09-01", tipoComprobante: "NotaCredito" })] });
+  igual(CM.lineas(MARCA(), c)[0].estado, "Devengada");
+});
+
+prueba("seguimiento · un pago parcial no se cuenta dos veces en los totales", () => {
+  const c = ctxSeg({
+    facturaciones: [E.ENTIDADES.facturaciones.normalizar({ presupuestoId: "pre_1", fechaEmision: "2026-09-01" })],
+    marcasComision: [MARCA({ area: false, pagos: [{ beneficiario: "vnd:vnd_ext", monto: 400 }] })],
+  });
+  const t = CM.totalesSeguimiento(CM.filasSeguimiento(c));
+  igual(t.ACobrar.USD, 600, "lo que falta");
+  igual(t.Pagada.USD, 400, "lo pagado");
+});
+
+prueba("seguimiento · los totales no mezclan monedas", () => {
+  const c = ctxSeg({
+    presupuestos: [presuGanado(), presuGanado({ id: "pre_2", numero: "P20260802-CL", ticketId: "",
+      economico: { moneda: "UF", recurrencia: "unica" } })],
+    marcasComision: [MARCA({ externo: null }), MARCA({ id: "mco_2", origenId: "pre_2", externo: null })],
+  });
+  const t = CM.totalesSeguimiento(CM.filasSeguimiento(c));
+  igual(t.Devengada, { USD: 450, UF: 450 });
+});
+
+prueba("seguimiento · un abono mensual se comisiona por 12 meses", () => {
+  const p = presuGanado({ economico: { moneda: "USD", recurrencia: "mensual" },
+    items: [{ detalle: "Abono", cantidad: 1, unitario: 1000 }] });
+  const b = CM.baseOperacion("Presupuesto", p, null);
+  igual(b.base, 12000);
+});
+
+prueba("seguimiento · base manual: null es «de la operación», no cero", () => {
+  const m = E.ENTIDADES.marcasComision.normalizar({ origenId: "pre_1", baseManual: null });
+  igual(m.baseManual, null);
+  igual(E.ENTIDADES.marcasComision.normalizar(m).baseManual, null, "segunda vuelta");
+  igual(E.ENTIDADES.marcasComision.normalizar({ origenId: "pre_1", baseManual: 0 }).baseManual, 0);
+});
+
+prueba("seguimiento · una propuesta se comisiona sobre canon neto × meses", () => {
+  const prop = E.ENTIDADES.propuestas.normalizar({ id: "prop_1", numero: "PR-2026-0001", clienteId: "cli_1",
+    estado: "Aceptada", fechas: { creado: "2026-07-01", resuelto: "2026-07-20" },
+    economico: { canonMensual: 1210, incluyeIVA: true, ivaPct: 21 }, vigenciaPropuesta: { meses: 12 } });
+  igual(CM.baseOperacion("Propuesta", prop, null).base, 12000);
+  const c = ctxSeg({ propuestas: [prop] });
+  const ls = CM.lineas(MARCA({ origenTipo: "Propuesta", origenId: "prop_1", externo: null }), c);
+  igual(ls.find((l) => l.nombre === "Gerencia comercial").monto, 360);
+  igual(ls[0].estado, "Devengada");
+});
+
+// --- Cliente nuevo ---------------------------------------------------------
+
+prueba("cliente nuevo · sin actividad antes de marzo de 2026, corresponde", () => {
+  const el = CM.elegibilidad("Presupuesto", presuBase(), ctxSeg());
+  igual(el.criterio, "ClienteNuevo");
+  igual(el.lleva, true);
+});
+
+prueba("cliente nuevo · su propio ticket y las otras versiones del presupuesto no cuentan", () => {
+  const c = ctxSeg({
+    tickets: [ticketBase({ fecha: "2026-02-10" })],
+    presupuestos: [presuBase({ id: "pre_0", numero: "P20260210", fecha: "2026-02-12" }), presuBase()],
+  });
+  igual(CM.elegibilidad("Presupuesto", presuBase(), c).criterio, "ClienteNuevo",
+    "el lead entró en febrero pero es la misma oportunidad");
+});
+
+prueba("cliente nuevo · con actividad reciente antes del corte, no corresponde", () => {
+  const c = ctxSeg({ presupuestos: [presuBase({ id: "pre_v", numero: "P20251105", ticketId: "", fecha: "2025-11-05" })] });
+  const el = CM.elegibilidad("Presupuesto", presuBase(), c);
+  igual(el.criterio, "ClienteExistente");
+  igual(el.lleva, false);
+});
+
+prueba("cliente nuevo · algo aislado de hace más de 2 años: pregunta", () => {
+  const c = ctxSeg({ contratos: [{ id: "ct_v", numero: "C-2022", clienteId: "cli_1", fechaFirma: "2022-05-01" }] });
+  const el = CM.elegibilidad("Presupuesto", presuBase(), c);
+  igual(el.criterio, "Consulta");
+  igual(el.lleva, null, "no decide sola");
+});
+
+prueba("cliente nuevo · la historia de otra sede del mismo grupo cuenta", () => {
+  const c = ctxSeg({
+    clientes: [
+      E.ENTIDADES.clientes.normalizar({ id: "cli_1", nombreComercial: "Sede Norte", grupo: "Red Ficticia" }),
+      E.ENTIDADES.clientes.normalizar({ id: "cli_2", nombreComercial: "Sede Sur", grupo: "Red Ficticia" }),
+    ],
+    presupuestos: [presuBase({ id: "pre_s", numero: "P20251201", clienteId: "cli_2", ticketId: "", fecha: "2025-12-01" })],
+  });
+  igual(CM.elegibilidad("Presupuesto", presuBase(), c).criterio, "ClienteExistente");
+});
+
+prueba("cliente nuevo · sin cliente identificado, pregunta", () => {
+  igual(CM.elegibilidad("Presupuesto", presuBase({ clienteId: "" }), ctxSeg()).criterio, "Consulta");
+});
+
+prueba("sugerencia · trae al externo del lead con su porcentaje pactado", () => {
+  const s = CM.sugerirMarca("Presupuesto", presuBase(), ctxSeg());
+  igual(s.externo, { vendedorId: "vnd_ext", porcentaje: 10 });
+  igual(s.lleva, true);
+  const sinLead = CM.sugerirMarca("Presupuesto", presuBase(), ctxSeg({ tickets: [ticketBase()] }));
+  igual(sinLead.externo, null, "lead propio de Nexo");
+});
+
+// --- Reglas ----------------------------------------------------------------
+
+prueba("reglas · un externo sin el lead asignado no puede cobrar", () => {
+  rechaza("NX-091", () => R.validar("marcasComision", "crear", MARCA(), null,
+    ctxSeg({ tickets: [ticketBase()] })));
+  rechaza("NX-091", () => R.validar("marcasComision", "crear", MARCA(), null,
+    ctxSeg({ presupuestos: [presuGanado({ ticketId: "" })] })));
+  cierto(R.validar("marcasComision", "crear", MARCA(), null, ctxSeg()));
+});
+
+prueba("reglas · lo cargado después de los hechos se exceptúa, con motivo", () => {
+  const c = ctxSeg({ tickets: [ticketBase()] });
+  rechaza("NX-092", () => R.validar("marcasComision", "crear", MARCA({ historico: true, criterio: "Historico" }), null, c));
+  cierto(R.validar("marcasComision", "crear",
+    MARCA({ historico: true, criterio: "Historico", motivo: "Acordado al cerrar" }), null, c));
+});
+
+prueba("reglas · ir contra la historia del cliente pide motivo", () => {
+  rechaza("NX-092", () => R.validar("marcasComision", "crear",
+    MARCA({ criterio: "ClienteExistente" }), null, ctxSeg()));
+  rechaza("NX-092", () => R.validar("marcasComision", "crear",
+    MARCA({ criterio: "Consulta" }), null, ctxSeg()));
+  cierto(R.validar("marcasComision", "crear",
+    MARCA({ criterio: "Consulta", motivo: "Única reparación en 2021, se considera nuevo" }), null, ctxSeg()));
+});
+
+prueba("reglas · una operación se marca una sola vez", () => {
+  rechaza("NX-090", () => R.validar("marcasComision", "crear", MARCA({ id: "mco_2" }), null,
+    ctxSeg({ marcasComision: [MARCA()] })));
+});
+
+prueba("reglas · sin comisión no puede tener a quién pagarle", () => {
+  rechaza("NX-040", () => R.validar("marcasComision", "crear",
+    MARCA({ lleva: false, criterio: "ClienteExistente" }), null, ctxSeg()));
+  cierto(R.validar("marcasComision", "crear",
+    MARCA({ lleva: false, area: false, externo: null, criterio: "ClienteExistente" }), null, ctxSeg()));
+});
+
+prueba("reglas · registrar pagos es de administración y no supera lo que corresponde", () => {
+  const ant = MARCA();
+  const conPago = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1000 }] });
+  rechaza("NX-011", () => R.validar("marcasComision", "editar", conPago, ant,
+    ctxSeg({ rol: "gerente_comercial" })));
+  cierto(R.validar("marcasComision", "editar", conPago, ant, ctxSeg({ rol: "gerente_administrativo" })));
+  rechaza("NX-094", () => R.validar("marcasComision", "editar",
+    MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1500 }] }), ant, ctxSeg()));
+  rechaza("NX-041", () => R.validar("marcasComision", "editar",
+    MARCA({ pagos: [{ beneficiario: "area:Ventas", monto: 10 }] }), ant, ctxSeg()));
+});
+
+prueba("reglas · con pagos registrados la decisión ya no cambia", () => {
+  const ant = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1000 }] });
+  rechaza("NX-093", () => R.validar("marcasComision", "editar",
+    { ...ant, externo: { vendedorId: "vnd_ext", porcentaje: 12 } }, ant, ctxSeg()));
+});
+
+prueba("reglas · asignar quién trajo el lead es de gerencia comercial", () => {
+  const ant = ticketBase();
+  rechaza("NX-011", () => R.validar("tickets", "editar", ticketBase({ traidoPor: "vnd_ext" }), ant,
+    { rol: "vendedor", usuario: "test", tickets: [ant] }));
+  cierto(R.validar("tickets", "editar", ticketBase({ traidoPor: "vnd_ext" }), ant,
+    { rol: "gerente_comercial", usuario: "test", tickets: [ant] }));
+});
+
+prueba("adaptador · quién trajo el lead sobrevive al ida y vuelta", () => {
+  const clientes = [E.ENTIDADES.clientes.normalizar({ id: "cli_1", nombreComercial: "Clínica Ficticia" })];
+  const t = ticketBase({ traidoPor: "vnd_ext", traidoPorAsignacion: { por: "gerente", fecha: "2026-08-01" } });
+  const viejo = AD.ticketAViejo(t, { clientes });
+  const vuelta = AD.ticketANuevo(viejo, { indiceClientes: AD.indiceClientes(clientes) });
+  igual(vuelta.traidoPor, "vnd_ext");
+  igual(vuelta.traidoPorAsignacion, { por: "gerente", fecha: "2026-08-01" });
+  igual(AD.ticketANuevo(AD.ticketAViejo(ticketBase(), { clientes }), {}).traidoPor, null, "sin asignar sigue vacío");
+});
+
+// --- Alertas ---------------------------------------------------------------
+
+prueba("alertas · comisión a cobrar hace más de 30 días que nadie reclamó", () => {
+  const c = ctxSeg({
+    facturaciones: [E.ENTIDADES.facturaciones.normalizar({ presupuestoId: "pre_1", fechaEmision: "2026-09-01" })],
+    marcasComision: [MARCA({ area: false })],
+  });
+  igual(CM.alertas(c, "2026-09-20").length, 0, "todavía en plazo");
+  const a = CM.alertas(c, "2026-10-15");
+  igual(a.length, 1);
+  igual(a[0].tipo, "SinReclamar");
+  igual(a[0].dias, 44);
+});
+
+prueba("alertas · una por operación aunque cobren varios", () => {
+  const c = ctxSeg({
+    facturaciones: [E.ENTIDADES.facturaciones.normalizar({ presupuestoId: "pre_1", fechaEmision: "2026-09-01" })],
+    marcasComision: [MARCA()],
+  });
+  const a = CM.alertas(c, "2026-10-15");
+  igual(a.length, 1);
+  igual(a[0].quienes.length, 4, "externo + tres áreas");
+  cierto(a[0].texto.includes("US$ 1.450"), a[0].texto);
+});
+
+prueba("alertas · ganada hace más de 60 días sin cobro", () => {
+  const c = ctxSeg({ marcasComision: [MARCA()] });
+  igual(CM.alertas(c, "2026-09-01").length, 0);
+  const a = CM.alertas(c, "2026-10-20");
+  igual(a.map((x) => x.tipo), ["SinCobro"], "una por operación, no por beneficiario");
+});
+
+prueba("alertas · venta ganada desde el corte que nunca se marcó", () => {
+  const c = ctxSeg({ presupuestos: [presuGanado(),
+    presuGanado({ id: "pre_v", numero: "P20260110", fecha: "2026-01-10" })] });
+  const a = CM.alertas(c, "2026-08-15");
+  igual(a.map((x) => x.numero), ["P20260801"], "lo anterior al corte no se reclama");
+  igual(a[0].tipo, "SinMarcar");
+  igual(CM.operacionesPendientesDeMarca(ctxSeg({ marcasComision: [MARCA()] })).length, 0);
 });
 
 // ===========================================================================

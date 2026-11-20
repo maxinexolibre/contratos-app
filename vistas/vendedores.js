@@ -8,13 +8,12 @@
  *   Bajo qué condiciones acuerdo de comisión vigente, versionado por fecha.
  *   Cuánto rinden        conversión, ciclo, ticket promedio, cumplimiento de
  *                        cuota, pipeline propio.
- *   Cuánto se les debe   comisiones devengadas, aprobadas y liquidadas, y el
- *                        costo comercial que representan sobre lo vendido.
+ *   Cuánto se les debe   lo pendiente y lo pagado, que sale del seguimiento
+ *                        por operación (vistas/comisiones.js).
  *
- * El circuito de una comisión tiene cuatro estados y no se saltean:
- *   Devengada → Aprobada → Liquidada,  o  → Anulada (con motivo).
- * Nadie aprueba la propia, y con `pagoTrasCobro` no se liquida hasta que la
- * operación esté facturada.
+ * El acuerdo de un vendedor aporta el porcentaje que se sugiere al marcar una
+ * operación suya. El circuito anterior (Devengada → Aprobada → Liquidada por
+ * contrato) se conserva solo en el legajo, para cerrar lo que quedó de antes.
  */
 (function (global) {
   "use strict";
@@ -78,11 +77,11 @@
     const c = ctx();
     const panel = CM.panelVendedores(vendedores().filter((v) => v.estado === "Activo"), c);
     const inactivos = vendedores().filter((v) => v.estado === "Inactivo");
-    const res = CM.resumen(comisiones());
-
+    // Lo pendiente y lo pagado salen del seguimiento por operación.
+    const seg = CM.totalesSeguimiento(CM.filasSeguimiento(ctxSeguimiento()));
     const totalPendiente = {};
-    for (const est of ["Devengada", "Aprobada"]) {
-      for (const [m, v] of Object.entries(res[est])) {
+    for (const est of ["Devengada", "ACobrar"]) {
+      for (const [m, v] of Object.entries(seg[est])) {
         totalPendiente[m] = E.money((totalPendiente[m] || 0) + v);
       }
     }
@@ -118,17 +117,17 @@
         <div class="kpi${Object.keys(totalPendiente).length ? " warn" : ""}">
           <div class="label">Comisiones a pagar</div>
           <div class="num num-${K.textoMonedas(totalPendiente).length > 15 ? "sm" : "md"}">${K.textoMonedas(totalPendiente)}</div>
-          <div class="sub">devengadas + aprobadas</div>
+          <div class="sub"><a href="#comisiones">ganadas + a cobrar</a></div>
         </div>
         <div class="kpi">
-          <div class="label">Liquidado</div>
-          <div class="num num-${K.textoMonedas(res.Liquidada).length > 15 ? "sm" : "md"}">${K.textoMonedas(res.Liquidada)}</div>
+          <div class="label">Pagado</div>
+          <div class="num num-${K.textoMonedas(seg.Pagada).length > 15 ? "sm" : "md"}">${K.textoMonedas(seg.Pagada)}</div>
           <div class="sub">histórico pagado</div>
         </div>
         <div class="kpi">
           <div class="label">Sin acuerdo vigente</div>
           <div class="num num-lg">${panel.filter((v) => !CM.acuerdoVigente(acuerdos(), v.id, E.hoy())).length}</div>
-          <div class="sub">no pueden devengar</div>
+          <div class="sub">sin porcentaje sugerido</div>
         </div>
       </div>
 
@@ -179,71 +178,44 @@
     `;
   }
 
-  /**
-   * Reparto interno fijo: 3% gerencia comercial + 0,5% marketing +
-   * 0,5% diseño + 0,5% ventas sobre el neto de toda venta concretada.
-   *
-   * Se muestra siempre, esté activo o no, porque es una regla de la empresa
-   * y su ausencia también es información.
-   */
-  function panelReparto() {
-    const activos = acuerdos().filter(
-      (a) => a.alcance === "Area" && CM.rigeEn(a, E.hoy()));
-    const totalPct = CM.REPARTO_INTERNO.reduce((s, r) => s + r.porcentaje, 0);
-    const resArea = CM.resumenPorArea(comisiones());
-
-    return `<div class="card" style="margin-top:18px">
-      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
-        <h3 style="flex:1; margin:0">Reparto interno</h3>
-        ${activos.length
-          ? `<span class="pill">activo</span>`
-          : (P.puede(rol(), "acuerdosComision", "crear")
-            ? `<button class="btn sm primary" onclick="activarReparto()">Activar reparto</button>` : "")}
-      </div>
-      <p class="muted" style="font-size:13px; margin:8px 0 12px; max-width:72ch">
-        Asignación fija sobre el <b>neto</b> de toda venta concretada en
-        ${CM.PAISES_REPARTO.map((p) => E.PAIS_NOMBRE[p]).join(" · ")}.
-        Corre en paralelo a lo pactado con el vendedor y no espera al cobro:
-        es asignación de resultado, no un pago a un tercero.
-      </p>
-      <table class="data">
-        <thead><tr><th>Área</th><th class="num">%</th><th>Vigencia</th><th class="num">Devengado</th></tr></thead>
-        <tbody>${CM.REPARTO_INTERNO.map((r) => {
-          const a = activos.find((x) => x.area === r.area);
-          return `<tr>
-            <td><b>${esc(r.area)}</b></td>
-            <td class="num">${r.porcentaje}%</td>
-            <td>${a ? esc(a.vigenciaDesde) + " → " + esc(a.vigenciaHasta || "sin fin")
-              : `<span class="muted">sin activar</span>`}</td>
-            <td class="num">${K.textoMonedas(resArea[r.area] || {})}</td>
-          </tr>`;
-        }).join("")}
-        <tr style="font-weight:700">
-          <td>Total</td><td class="num">${totalPct}%</td><td></td>
-          <td class="num">${K.textoMonedas(
-            Object.values(resArea).reduce((acc, m) => {
-              for (const [k, v] of Object.entries(m)) acc[k] = E.money((acc[k] || 0) + v);
-              return acc;
-            }, {}))}</td>
-        </tr></tbody>
-      </table>
-    </div>`;
+  /** Contexto para el seguimiento por operación (nucleo/comisiones.js). */
+  function ctxSeguimiento() {
+    return { ...ctx(), marcasComision: global.state?.marcasComision || [] };
   }
 
-  /** Da de alta los cuatro acuerdos de área de una sola vez. */
-  async function activarReparto() {
-    const desde = prompt(
-      "Desde qué fecha rige el reparto interno.\n\n" +
-      "Las ventas anteriores a esta fecha no lo devengan: un acuerdo no se " +
-      "aplica hacia atrás.", E.hoy());
-    if (!desde) return;
-
-    let alta = 0;
-    for (const a of CM.acuerdosReparto(desde)) {
-      if (await guardar("acuerdosComision", a, `Reparto interno · ${a.area} ${a.porcentaje}%`)) alta++;
+  /**
+   * Reparto del área comercial: 4,5% del neto en proporción 6:2:1.
+   * Solo con clientes nuevos: lo decide cada operación al enviarse.
+   */
+  function panelReparto() {
+    const porArea = {};
+    for (const f of CM.filasSeguimiento(ctxSeguimiento())) {
+      for (const l of f.lineas) {
+        if (l.tipo !== "Area" || ["Prevista", "Anulada"].includes(l.estado)) continue;
+        const a = (porArea[l.nombre] = porArea[l.nombre] || { ganado: {}, pagado: {} });
+        a.ganado[l.moneda] = E.money((a.ganado[l.moneda] || 0) + l.monto);
+        a.pagado[l.moneda] = E.money((a.pagado[l.moneda] || 0) + l.pagado);
+      }
     }
-    global.toast(alta ? `Reparto interno activado (${alta} áreas)` : "No se activó ninguna", !alta);
-    global.router();
+    return `<div class="card" style="margin-top:18px">
+      <h3>Reparto del área comercial</h3>
+      <p class="muted" style="font-size:13px; margin:8px 0 12px; max-width:72ch">
+        ${String(CM.PORCENTAJE_AREA).replace(".", ",")}% del <b>neto</b>, repartido 6:2:1. Corresponde solo con
+        clientes nuevos (desde marzo de 2026, sin actividad anterior con Nexo): se decide al enviar
+        cada presupuesto o propuesta. El detalle está en <a href="#comisiones">Comisiones</a>.
+      </p>
+      <table class="data">
+        <thead><tr><th>Área</th><th class="num">Partes</th><th class="num">%</th><th class="num">Ganado</th><th class="num">Pagado</th></tr></thead>
+        <tbody>${CM.REPARTO_INTERNO.map((r) => `<tr>
+            <td><b>${esc(r.area)}</b></td>
+            <td class="num">${r.partes}</td>
+            <td class="num">${String(r.porcentaje).replace(".", ",")}%</td>
+            <td class="num">${K.textoMonedas(porArea[r.area]?.ganado || {}) || "—"}</td>
+            <td class="num">${K.textoMonedas(porArea[r.area]?.pagado || {}) || "—"}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
   }
 
   // ==========================================================================
@@ -527,96 +499,10 @@
   }
 
   // ==========================================================================
-  // Circuito de comisiones
+  // Comisiones del circuito anterior (devengadas por contrato).
+  // Las nuevas se siguen por operación en vistas/comisiones.js; estas quedan
+  // para poder cerrar las que se hubieran devengado antes.
   // ==========================================================================
-
-  function renderComisiones() {
-    const coms = [...comisiones()].sort((a, b) => b.fechaDevengo.localeCompare(a.fechaDevengo));
-    const res = CM.resumen(coms);
-    const mapaV = new Map(vendedores().map((v) => [v.id, v.nombre]));
-    const c = ctx();
-
-    // Contratos firmados sin comisión devengada: el trabajo pendiente real.
-    const conComision = new Set(coms.filter((x) => x.estado !== "Anulada").map((x) => x.origenId));
-    const sinDevengar = (c.contratos || []).filter(
-      (ct) => ["Firmado", "Activo", "Finalizado"].includes(ct.estado) && !conComision.has(ct.id));
-
-    document.getElementById("view-comisiones").innerHTML = `
-      <div class="kicker">Equipo comercial</div>
-      <h1>Comi<span class="hl">siones</span></h1>
-
-      <div class="grid-kpi" style="margin:18px 0">
-        ${E.COMISION_ESTADO.map((e) => `<div class="kpi${e === "Devengada" ? " warn" : ""}">
-          <div class="label">${e}</div>
-          <div class="num num-${K.textoMonedas(res[e]).length > 15 ? "sm" : "md"}">${K.textoMonedas(res[e])}</div>
-          <div class="sub">${coms.filter((x) => x.estado === e).length} operación(es)</div>
-        </div>`).join("")}
-      </div>
-
-      ${sinDevengar.length ? `<div class="card interno" style="margin-bottom:18px">
-        <b>${sinDevengar.length} contrato(s) firmados sin comisión devengada.</b>
-        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
-          ${sinDevengar.map((ct) => `<button class="btn sm ghost" onclick="devengar('${esc(ct.id)}')">
-            ${esc(ct.numero)} · devengar</button>`).join("")}
-        </div>
-      </div>` : ""}
-
-      ${coms.length ? `<div style="overflow-x:auto"><table class="data">
-        <thead><tr>
-          <th>Vendedor</th><th>Período</th><th>Origen</th><th class="num">Base</th>
-          <th class="num">Comisión</th><th>Estado</th><th></th>
-        </tr></thead>
-        <tbody>${coms.map((x) => {
-          const puede = CM.puedeLiquidarse(x, c);
-          return `<tr>
-            <td><b>${esc(mapaV.get(x.vendedorId) || x.vendedorId)}</b></td>
-            <td>${esc(x.periodo)}</td>
-            <td>${esc(x.origenNumero || "—")}</td>
-            <td class="num">${money(x.baseCalculo, x.moneda)}</td>
-            <td class="num"><b>${money(x.monto, x.moneda)}</b><br>
-              <span class="muted" style="font-size:11px">${esc(x.detalleCalculo)}</span></td>
-            <td><span class="pill">${esc(x.estado)}</span></td>
-            <td style="white-space:nowrap">
-              ${x.estado === "Devengada" && P.capacidad(rol(), "aprobar_comision")
-                ? `<button class="btn sm ghost" onclick="aprobarComision('${esc(x.id)}')">Aprobar</button>` : ""}
-              ${x.estado === "Aprobada" && P.capacidad(rol(), "liquidar_comision")
-                ? (puede.puede
-                    ? `<button class="btn sm primary" onclick="liquidarComision('${esc(x.id)}')">Liquidar</button>`
-                    : `<span class="muted" title="${esc(puede.motivo)}">bloqueada</span>`) : ""}
-              ${["Devengada", "Aprobada"].includes(x.estado)
-                ? `<button class="btn sm ghost" onclick="anularComision('${esc(x.id)}')">Anular</button>` : ""}
-            </td>
-          </tr>`;
-        }).join("")}</tbody>
-      </table></div>
-      <p class="muted" style="font-size:13px; margin-top:10px">
-        Circuito: <b>Devengada</b> al firmar el contrato → <b>Aprobada</b> por gerencia →
-        <b>Liquidada</b> cuando se paga. Nadie aprueba la propia, y con acuerdos de pago
-        tras cobro no se liquida hasta que la operación esté facturada.
-      </p>` : `<p class="muted">Todavía no hay comisiones registradas.</p>`}
-    `;
-  }
-
-  async function devengar(contratoId) {
-    try {
-      const c = ctx();
-      const contrato = (c.contratos || []).find((x) => x.id === contratoId);
-      if (!contrato) throw new Error("Contrato no encontrado");
-      // Devuelve varias: la del vendedor más una por cada área del reparto interno.
-      const generadas = CM.devengarPorContrato(contrato, c);
-      let alta = 0;
-      for (const com of generadas) {
-        if (await guardar("comisiones", com, `Devenga comisión · ${contrato.numero} · ${com.area || "vendedor"}`)) alta++;
-      }
-      if (alta) {
-        const total = generadas.reduce((t, x) => t + x.monto, 0);
-        global.toast(`${alta} comisión(es) devengadas · total ${money(E.money(total), generadas[0].moneda)}`);
-        global.router();
-      }
-    } catch (e) {
-      global.toast(e.sugerencia ? `${e.message} — ${e.sugerencia}` : e.message, true, true);
-    }
-  }
 
   async function aprobarComision(id) {
     const c = comisiones().find((x) => x.id === id);
@@ -658,11 +544,10 @@
     vendedores: renderVendedores,
     vnddetalle: () => renderVndDetalle(location.hash.split("/")[1]),
     vndform: () => renderVndForm(location.hash.split("/")[1]),
-    comisiones: renderComisiones,
   });
 
   Object.assign(global, {
-    guardarVendedor, nuevoAcuerdo, cerrarAcuerdo, activarReparto,
-    devengar, aprobarComision, liquidarComision, anularComision,
+    guardarVendedor, nuevoAcuerdo, cerrarAcuerdo,
+    aprobarComision, liquidarComision, anularComision,
   });
 })(typeof window !== "undefined" ? window : globalThis);
