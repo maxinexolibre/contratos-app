@@ -736,7 +736,7 @@
       <div class="field"><label for="redCuerpo">Mensaje</label>
         <textarea id="redCuerpo" rows="12" style="width:100%; font-family:inherit; line-height:1.5">${esc(m.cuerpo)}</textarea>
         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px">
-          <span class="muted" style="font-size:12px">Completá los [corchetes] que queden (equipo, etc.) antes de mandar.</span>
+          <span class="muted" style="font-size:12px">Completá los [corchetes] que queden (equipo, etc.). No incluye firma: la agrega tu correo.</span>
           <button class="btn sm ghost" onclick="copiarCampo('redCuerpo')">Copiar mensaje</button>
         </div>
       </div>
