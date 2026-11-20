@@ -594,7 +594,8 @@
         <td>Toque ${toqueN} de ${E.CADENCIA.toques}${esBreakup ? ' <span class="muted">· cierre</span>' : ""}</td>
         <td${atrasado ? ' style="color:var(--critico,#ff8a5c)"' : ""}><b>${esc(l.proximoToque)}</b>${atrasado ? " ⚠" : ""}</td>
         <td style="white-space:nowrap">
-          <button class="btn sm primary" onclick="registrarToque('${esc(l.id)}')">Registré el toque</button>
+          <button class="btn sm primary" onclick="redactarToque('${esc(l.id)}')">✉ Redactar</button>
+          <button class="btn sm ghost" onclick="registrarToque('${esc(l.id)}')" title="Si lo mandaste por fuera">Registré el toque</button>
           <button class="btn sm ghost" onclick="calificarLead('${esc(l.id)}')">Respondió</button>
         </td>
       </tr>`;
@@ -672,6 +673,132 @@
     if (await guardar("leads", reg, `Toque ${nuevoPaso} · ${l.institucion || l.contactoNombre}`)) {
       const quedan = E.proximoToque(nuevoPaso, E.hoy());
       global.toast(quedan ? `Toque ${nuevoPaso} registrado — próximo ${quedan}` : "Último toque registrado · secuencia agotada");
+      global.router();
+    }
+  }
+
+  // ==========================================================================
+  // Panel "Redactar": arma el mail del toque y lo deja listo para mandar
+  // ==========================================================================
+  //
+  // No manda el mail (camino B): lo arma con la plantilla del segmento y el
+  // toque que corresponde, para copiar o abrir en el cliente de mail. Pensado
+  // para delegarlo: quien prospecta abre, copia, manda y marca el toque, sin
+  // escribir de cero ni elegir plantilla.
+
+  const RED_ID = "overlay-redactar";
+
+  function cerrarRedactar() {
+    document.getElementById(RED_ID)?.remove();
+  }
+
+  function redactarToque(id, segOverride) {
+    const P = global.NEXO_PLANTILLAS_EMAIL;
+    const l = leads().find((x) => x.id === id);
+    if (!l || !P) return;
+    // Toque a mandar = el próximo (los ya dados son l.paso). El cierre es el 4º.
+    const idx = Math.min(l.paso, E.CADENCIA.toques - 1);
+    const seg = segOverride || l.segmento || "DirectorMedico";
+    const m = P.armar(seg, idx, l);
+    const sinMail = !l.contactoEmail;
+
+    cerrarRedactar();
+    const ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.id = RED_ID;
+    ov.innerHTML = `<div class="modal" style="max-width:640px">
+      <div style="display:flex; align-items:flex-start; gap:12px">
+        <div style="flex:1">
+          <div class="kicker">Toque ${m.toque} de ${m.total} · secuencia de prospección</div>
+          <h2 style="margin:0">${esc(l.institucion || l.contactoNombre)}</h2>
+        </div>
+        <button class="btn ghost sm" onclick="cerrarRedactar()" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="form-grid" style="gap:12px; margin-top:14px">
+        <div class="field"><label for="redSeg">Segmento / ángulo</label>
+          <select id="redSeg" onchange="redactarToque('${esc(l.id)}', this.value)">
+            ${P.segmentos.map((s) => `<option value="${s}"${s === seg ? " selected" : ""}>${esc(P.NOMBRE_SEG[s])}</option>`).join("")}
+          </select></div>
+        <div class="field"><label for="redPara">Para</label>
+          <input id="redPara" value="${esc(l.contactoEmail || "")}" placeholder="email del decisor…" />
+          ${sinMail ? `<span class="muted" style="font-size:12px">Todavía no cargaste el email del decisor. Podés escribirlo acá para este envío, o guardarlo en el lead.</span>` : ""}
+        </div>
+      </div>
+
+      <div class="field"><label for="redAsunto">Asunto</label>
+        <div style="display:flex; gap:8px">
+          <input id="redAsunto" value="${esc(m.asunto)}" style="flex:1" />
+          <button class="btn sm ghost" onclick="copiarCampo('redAsunto')">Copiar</button>
+        </div>
+      </div>
+
+      <div class="field"><label for="redCuerpo">Mensaje</label>
+        <textarea id="redCuerpo" rows="12" style="width:100%; font-family:inherit; line-height:1.5">${esc(m.cuerpo)}</textarea>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px">
+          <span class="muted" style="font-size:12px">Completá los [corchetes] que queden (equipo, etc.). No incluye firma: la agrega tu correo.</span>
+          <button class="btn sm ghost" onclick="copiarCampo('redCuerpo')">Copiar mensaje</button>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; margin-top:14px; border-top:1px solid var(--line); padding-top:14px">
+        <button class="btn ghost" onclick="abrirMail('${esc(l.id)}')">Abrir en mi mail</button>
+        <button class="btn primary" onclick="marcarToqueEmail('${esc(l.id)}')">Lo mandé · registrar toque</button>
+      </div>
+      <p class="muted" style="font-size:12px; margin-top:10px">
+        La app no manda el mail: lo copiás o lo abrís en tu cliente, lo mandás vos y marcás el toque.
+        El próximo se reprograma solo (cadencia 0 · +4 · +11 · +21 días).
+      </p>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.style.display = "flex";
+    ov.onclick = (e) => { if (e.target === ov) cerrarRedactar(); };
+  }
+
+  async function copiarCampo(elId) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    try {
+      await navigator.clipboard.writeText(el.value);
+      global.toast("Copiado al portapapeles");
+    } catch {
+      el.focus(); el.select();
+      try { document.execCommand("copy"); global.toast("Copiado"); }
+      catch { global.toast("Copiá a mano (Ctrl/Cmd+C)", true); }
+    }
+  }
+
+  function abrirMail(id) {
+    const para = (document.getElementById("redPara")?.value || "").trim();
+    const asunto = document.getElementById("redAsunto")?.value || "";
+    const cuerpo = document.getElementById("redCuerpo")?.value || "";
+    const url = `mailto:${encodeURIComponent(para)}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
+    // mailto largo puede fallar en algunos clientes; el camino principal es Copiar.
+    global.open(url, "_blank");
+  }
+
+  // Registra el toque como enviado por Email sin más preguntas: un clic después
+  // de mandar. Si se cargó un email nuevo en el panel, se guarda en el lead.
+  async function marcarToqueEmail(id) {
+    const l = leads().find((x) => x.id === id);
+    if (!l) return;
+    const para = (document.getElementById("redPara")?.value || "").trim();
+    const asunto = (document.getElementById("redAsunto")?.value || "").trim();
+    const nuevoPaso = l.paso + 1;
+    const hist = [...l.historialToques,
+      { fecha: E.hoy(), paso: nuevoPaso, canal: "Email", nota: asunto, resultado: "" }];
+    const reg = {
+      ...l, paso: nuevoPaso, historialToques: hist, fechaUltimoToque: E.hoy(),
+      canal: "Email",
+      estado: l.estado === "Nuevo" ? "Contactado" : l.estado,
+      proximoToque: null,
+    };
+    // Si se tipeó un email en el panel y el lead no tenía, se conserva.
+    if (para && !l.contactoEmail) reg.contactoEmail = para;
+    if (await guardar("leads", reg, `Toque ${nuevoPaso} (email) · ${l.institucion || l.contactoNombre}`)) {
+      const quedan = E.proximoToque(nuevoPaso, E.hoy());
+      cerrarRedactar();
+      global.toast(quedan ? `Toque ${nuevoPaso} registrado — próximo ${quedan}` : "Último toque · secuencia agotada");
       global.router();
     }
   }
@@ -849,6 +976,7 @@
   Object.assign(global, {
     guardarCampana, finalizarCampana, nuevaEstrategia, finalizarEstrategia,
     guardarLead, calificarLead, registrarToque,
+    redactarToque, cerrarRedactar, copiarCampo, abrirMail, marcarToqueEmail,
     impPreview, ejecutarImport,
   });
 })(typeof window !== "undefined" ? window : globalThis);
