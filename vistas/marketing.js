@@ -230,7 +230,13 @@
       </div>
 
       <div class="card" style="margin-top:18px">
-        <h3>Leads (${ld.length})</h3>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
+          <h3 style="flex:1; margin:0">Leads (${ld.length})</h3>
+          ${(() => { const sm = ld.filter((l) => !l.contactoEmail && l.estado !== "Descartado").length;
+            return sm ? `<span class="muted" style="font-size:13px">${sm} sin email</span>
+              <button class="btn sm ghost" onclick="archivarSinMail('${esc(c.id)}')"
+                title="Los saca de la secuencia de email. No se borran: quedan como universo y podés reactivarlos.">Archivar sin email</button>` : ""; })()}
+        </div>
         ${ld.length ? `<table class="data" style="margin-top:12px">
           <thead><tr><th>Contacto</th><th>Canal</th><th>Captura</th><th>Estado</th><th>Ticket</th></tr></thead>
           <tbody>${ld.slice(0, 25).map((l) => `<tr>
@@ -837,10 +843,12 @@
       <a href="#semana" class="muted">← Esta semana</a>
       <h1 style="margin-top:8px">Importar <span class="hl">lista de prospección</span></h1>
       <div class="card" style="margin-top:16px; max-width:70ch">
-        <p class="muted">Subí el CSV de la lista (universo-argentina.csv / universo-chile.csv).
-        Se crean leads con la institución, el tier y el sitio web; cada uno arranca la
-        secuencia de recontacto. El decisor se completa después. No se sube ningún archivo
-        a ningún lado: se lee en tu navegador y se guardan solo los leads.</p>
+        <p class="muted">Subí el CSV de la lista (universo-argentina.csv, o una lista
+        enriquecida con decisores). Se crean leads con la institución, el tier y el sitio
+        web; cada uno arranca la secuencia de recontacto. Si la fila trae
+        <code>decisor_nombre</code>, <code>email</code> y <code>segmento</code>, se cargan
+        también (esos ya quedan tocables por email). No se sube ningún archivo a ningún
+        lado: se lee en tu navegador y se guardan solo los leads.</p>
 
         <div class="field" style="margin-top:14px"><label for="impFile">Archivo CSV</label>
           <input type="file" id="impFile" accept=".csv,text/csv" onchange="impPreview()" /></div>
@@ -883,7 +891,8 @@
         _impFilas = parseCSV(String(lector.result));
         const conInst = _impFilas.filter((r) => (r.institucion || "").trim()).length;
         const conA = _impFilas.filter((r) => (r.tier || "").toUpperCase() === "A").length;
-        est.innerHTML = `Leídas <b>${_impFilas.length}</b> filas · ${conInst} con institución · ${conA} Tier A.`;
+        const conMail = _impFilas.filter((r) => (r.email || r.decisor_email || r.contacto_email || "").trim()).length;
+        est.innerHTML = `Leídas <b>${_impFilas.length}</b> filas · ${conInst} con institución · ${conA} Tier A · ${conMail} con decisor+mail (tocables por email).`;
         btn.disabled = conInst === 0;
       } catch (e) {
         est.innerHTML = `<span style="color:var(--critico,#ff8a5c)">No se pudo leer el CSV: ${esc(e.message)}</span>`;
@@ -913,10 +922,14 @@
       campId = reg.id;
     }
 
-    // Deduplicación por institución dentro de la campaña.
+    // Deduplicación dentro de la campaña. La clave incluye el decisor (email o
+    // nombre) además de la institución: así un mismo centro puede tener varios
+    // decisores (p. ej. director médico + ingeniería clínica) sin pisarse.
+    const claveLead = (inst, dec) =>
+      E.claveCliente(inst) + "|" + String(dec || "").trim().toLowerCase();
     const yaEn = new Set((leads() || [])
       .filter((l) => l.campanaId === campId)
-      .map((l) => E.claveCliente(l.institucion || l.contactoNombre)));
+      .map((l) => claveLead(l.institucion || l.contactoNombre, l.contactoEmail || l.contactoNombre)));
 
     const nuevos = [];
     let saltados = 0;
@@ -924,7 +937,12 @@
       const institucion = (r.institucion || "").trim();
       if (!institucion) { saltados++; continue; }
       if (soloA && (r.tier || "").toUpperCase() !== "A") { saltados++; continue; }
-      const clave = E.claveCliente(institucion);
+      // Decisor de la fila, si la lista lo trae (tarjetas recuperadas, listas
+      // enriquecidas). Si no viene, el lead arranca solo con la institución.
+      const nombre = (r.decisor_nombre || r.contacto_nombre || r.nombre || "").trim();
+      const email = (r.email || r.decisor_email || r.contacto_email || "").trim();
+      const segFila = (r.segmento || r.decisor_segmento || "").trim();
+      const clave = claveLead(institucion, email || nombre);
       if (yaEn.has(clave)) { saltados++; continue; }
       yaEn.add(clave);
       const zona = [r.localidad || r.comuna, r.provincia || r.region].filter(Boolean).join(", ");
@@ -932,9 +950,12 @@
         campanaId: campId, canal: "Email", pais,
         institucion, tier: (r.tier || "").toUpperCase(),
         sitioWeb: r.sitio_web || r.web || "",
-        contactoTel: r.telefono || "",
-        segmento: segDef,
-        origenDetalle: zona ? `Lista ${pais} · ${zona}` : `Lista ${pais}`,
+        contactoNombre: nombre,
+        contactoEmail: email,
+        contactoTel: r.telefono || r.celular || "",
+        // El segmento por fila manda sobre el valor por defecto del formulario.
+        segmento: segFila || segDef,
+        origenDetalle: [`Lista ${pais}`, r.notas || "", zona].filter(Boolean).join(" · "),
         fechaCaptura: E.hoy(), estado: "Nuevo",
       }));
     }
@@ -958,6 +979,28 @@
     global.go("semana");
   }
 
+  /**
+   * Archiva los leads de la campaña que no tienen email: los pasa a estado
+   * "Descartado", lo que los saca de la secuencia de email ("Esta semana") sin
+   * borrarlos. Sirve para limpiar una campaña donde se cargó el universo REFES
+   * (institución sola, sin mail): esos no se pueden tocar por correo, pero
+   * siguen siendo universo/LinkedIn y se pueden reactivar.
+   */
+  async function archivarSinMail(campId) {
+    const sin = (leads() || []).filter(
+      (l) => l.campanaId === campId && !l.contactoEmail && l.estado !== "Descartado");
+    if (!sin.length) { global.toast("No hay leads sin email para archivar."); return; }
+    if (!global.confirm(`Archivar ${sin.length} lead(s) sin email?\n\nSalen de la secuencia de email (estado Descartado). No se borran: quedan como universo y podés reactivarlos.`)) return;
+    const ids = new Set(sin.map((l) => l.id));
+    global.state.leads = (leads() || []).map((l) => ids.has(l.id)
+      ? E.ENTIDADES.leads.normalizar({ ...l, estado: "Descartado" }) : l);
+    try {
+      await global.persist(`Archivados ${sin.length} leads sin email`, "leads");
+    } catch (e) { global.toast(`Error al archivar: ${e.message}`, true); return; }
+    global.toast(`${sin.length} leads archivados (sin email).`);
+    renderCampDetalle(campId);
+  }
+
   // ==========================================================================
 
   global.NEXO_VISTAS = global.NEXO_VISTAS || {};
@@ -977,6 +1020,6 @@
     guardarCampana, finalizarCampana, nuevaEstrategia, finalizarEstrategia,
     guardarLead, calificarLead, registrarToque,
     redactarToque, cerrarRedactar, copiarCampo, abrirMail, marcarToqueEmail,
-    impPreview, ejecutarImport,
+    impPreview, ejecutarImport, archivarSinMail,
   });
 })(typeof window !== "undefined" ? window : globalThis);
