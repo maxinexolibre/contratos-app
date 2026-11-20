@@ -51,6 +51,42 @@
   const LEAD_ESTADO = ["Nuevo", "Contactado", "Calificado", "Descartado", "Convertido"];
   const RECURRENCIA = ["unica", "mensual"];
 
+  /**
+   * Segmento del decisor al que apunta el lead. La misma institución se trabaja
+   * distinto según a quién le hablamos: al de mantenimiento se le muestra el
+   * laboratorio; al director médico, cobertura y riesgo defendible. Vacío
+   * mientras no se definió a quién se apunta.
+   */
+  const SEGMENTO = ["DirectorMedico", "IngenieriaClinica", "GerenteGeneral", "Radiologo"];
+  const SEGMENTO_NOMBRE = {
+    DirectorMedico: "Director médico / Jefe de imágenes",
+    IngenieriaClinica: "Ingeniería clínica / Mantenimiento",
+    GerenteGeneral: "Gerente general / Dirección",
+    Radiologo: "Radiólogo / Jefe de informes",
+  };
+
+  /**
+   * Cadencia de recontacto de una secuencia de prospección. `gapDias[i]` son los
+   * días a esperar desde el toque i hasta el i+1; `gapDias[0] = 0` hace que el
+   * primer toque venza apenas se da de alta el lead. Cuatro toques en total
+   * (0 · +4 · +11 · +21 días); el cuarto es el cierre ("breakup"). Agotada la
+   * secuencia, no hay próximo toque y el lead espera respuesta o se descarta.
+   */
+  const CADENCIA = { toques: 4, gapDias: [0, 4, 7, 10] };
+  const TOQUE_CANAL = ["Email", "Llamada", "LinkedIn", "WhatsApp", "Visita"];
+
+  /**
+   * Fecha del próximo toque dado cuántos ya se dieron.
+   * @param {number} paso   toques ya registrados (0 = ninguno).
+   * @param {string} desde  fecha base; por defecto hoy.
+   * @returns {string|null} AAAA-MM-DD, o null si la secuencia se agotó.
+   */
+  function proximoToque(paso, desde) {
+    const p = esNumero(paso);
+    if (p < 0 || p >= CADENCIA.gapDias.length) return null;
+    return sumarDias(fecha(desde) || hoy(), CADENCIA.gapDias[p]);
+  }
+
   const VENDEDOR_ESTADO = ["Activo", "Inactivo"];
   const VENDEDOR_RELACION = ["Interno", "Externo", "Representante"];
   const COMISION_MODALIDAD = ["Porcentaje", "Escalonada", "Fija", "Mixta"];
@@ -546,6 +582,20 @@
       idPrefijo: "led_",
       normalizar(r) {
         const estado = enumerado(r.estado, LEAD_ESTADO, "Nuevo");
+        // La institución es el ancla del prospecto: existe desde antes de
+        // conocer a la persona. Si no vino nombre de contacto, la institución
+        // hace de nombre para que el lead sea legible igual.
+        const institucion = esTexto(r.institucion);
+        const historialToques = esLista(r.historialToques).map((t) => ({
+          fecha: fecha(t.fecha) || hoy(),
+          paso: esNumero(t.paso),
+          canal: enumerado(t.canal, TOQUE_CANAL, "Email"),
+          nota: esTexto(t.nota),
+          resultado: esTexto(t.resultado),
+        }));
+        // El paso es la cantidad de toques efectivamente dados: nunca menos que
+        // el largo del historial, para que no se desincronicen.
+        const paso = Math.max(esNumero(r.paso), historialToques.length);
         return {
           id: esTexto(r.id) || nuevoId("led_"),
           campanaId: esTexto(r.campanaId) || null,
@@ -555,13 +605,31 @@
           canal: enumerado(r.canal, CANAL, "Offline"),
           origenDetalle: esTexto(r.origenDetalle),
           fechaCaptura: fecha(r.fechaCaptura) || hoy(),
-          contactoNombre: esTexto(r.contactoNombre),
+          contactoNombre: esTexto(r.contactoNombre) || institucion,
           contactoEmail: esTexto(r.contactoEmail).toLowerCase(),
           contactoTel: esTexto(r.contactoTel),
+          institucion,
+          sitioWeb: esTexto(r.sitioWeb),
+          tier: esTexto(r.tier),
+          segmento: enumerado(r.segmento, SEGMENTO, ""),
           pais: esTexto(r.pais) || "AR",
           clienteId: esTexto(r.clienteId) || null,
           ticketId: esTexto(r.ticketId) || null,
           estado,
+          // Capa de secuencia de prospección. Un prospecto recién sembrado
+          // tiene paso 0 y vence hoy: entra en "esta semana" desde el día uno.
+          paso,
+          fechaUltimoToque: historialToques.length
+            ? historialToques[historialToques.length - 1].fecha
+            : fecha(r.fechaUltimoToque),
+          // Si no vino próximo toque, se deriva de la cadencia. Un lead ya
+          // respondido (Calificado/Convertido/Descartado) sale de la secuencia.
+          proximoToque: ["Calificado", "Convertido", "Descartado"].includes(estado)
+            ? null
+            : (fecha(r.proximoToque) || proximoToque(paso, historialToques.length
+                ? historialToques[historialToques.length - 1].fecha
+                : r.fechaCaptura)),
+          historialToques,
           motivoDescarte: estado === "Descartado" ? esTexto(r.motivoDescarte) : "",
         };
       },
@@ -905,6 +973,7 @@
     ENTIDADES,
     TICKET_ESTADO, TICKET_TIPO, PRIORIDAD, PRESUPUESTO_ESTADO, CONTRATO_ESTADO,
     CAMPANA_ESTADO, ESTRATEGIA_ESTADO, ESTRATEGIA_TIPO, CANAL, LEAD_ESTADO,
+    SEGMENTO, SEGMENTO_NOMBRE, CADENCIA, TOQUE_CANAL, proximoToque,
     PROPUESTA_ESTADO,
     RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_PRESUPUESTO, MONEDA_LIQUIDACION, PESO_ETAPA,
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,

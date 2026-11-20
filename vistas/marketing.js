@@ -403,24 +403,34 @@
       <h1 style="margin-top:8px">Nuevo <span class="hl">lead</span></h1>
       <div class="card" style="margin-top:16px">
         <div class="form-grid" style="gap:12px">
-          <div class="field"><label for="lNombre">Nombre del contacto</label>
-            <input id="lNombre" placeholder="Nombre y apellido" /></div>
           <div class="field"><label for="lEmpresa">Institución</label>
             <input id="lEmpresa" placeholder="Centro de imágenes" /></div>
+          <div class="field"><label for="lNombre">Nombre del contacto</label>
+            <input id="lNombre" placeholder="Nombre y apellido (si ya lo tenés)" /></div>
         </div>
         <div class="form-grid" style="gap:12px">
           <div class="field"><label for="lEmail">Email</label>
             <input type="email" id="lEmail" placeholder="contacto@centro.com" /></div>
           <div class="field"><label for="lTel">Teléfono</label>
             <input id="lTel" placeholder="+54 ..." /></div>
+          <div class="field"><label for="lWeb">Sitio web</label>
+            <input id="lWeb" placeholder="www.centro.com" /></div>
         </div>
         <p class="muted" style="font-size:13px; margin:-4px 0 12px">
-          Alcanza con email o teléfono. El email además sirve para no contar dos
-          veces al mismo contacto dentro de una campaña.
+          Para prospectar alcanza con la <b>institución y su sitio web</b>: el decisor se
+          investiga después. El email, cuando lo tengas, evita contar dos veces al mismo
+          contacto en una campaña.
         </p>
         <div class="form-grid" style="gap:12px">
+          <div class="field"><label for="lSegmento">Segmento del decisor</label>
+            <select id="lSegmento"><option value="">— sin definir —</option>
+              ${E.SEGMENTO.map((s) => `<option value="${s}">${esc(E.SEGMENTO_NOMBRE[s])}</option>`).join("")}</select></div>
           <div class="field"><label for="lCanal">Canal</label>
-            <select id="lCanal">${E.CANAL.map((c) => `<option value="${c}">${c}</option>`).join("")}</select></div>
+            <select id="lCanal">${E.CANAL.map((c) => `<option value="${c}"${c === "Email" ? " selected" : ""}>${c}</option>`).join("")}</select></div>
+          <div class="field"><label for="lPais">País</label>
+            <select id="lPais">${E.PAIS.map((p) => `<option value="${p}"${p === "AR" ? " selected" : ""}>${esc(E.PAIS_NOMBRE[p])}</option>`).join("")}</select></div>
+        </div>
+        <div class="form-grid" style="gap:12px">
           <div class="field"><label for="lCampana">Campaña</label>
             <select id="lCampana"><option value="">— sin campaña —</option>
               ${cs.map((c) => `<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("")}</select></div>
@@ -428,7 +438,7 @@
             <input type="date" id="lFecha" value="${E.hoy()}" /></div>
         </div>
         <div class="field"><label for="lOrigen">Detalle de origen</label>
-          <input id="lOrigen" placeholder="utm_source, nombre del evento, referido…" /></div>
+          <input id="lOrigen" placeholder="utm_source, nombre del evento, referido, provincia…" /></div>
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px">
           <a class="btn ghost" href="#leads">Cancelar</a>
           <button class="btn primary" onclick="guardarLead()">Guardar</button>
@@ -438,17 +448,22 @@
   }
 
   async function guardarLead() {
+    const institucion = document.getElementById("lEmpresa").value.trim();
     const reg = {
+      institucion,
       contactoNombre: document.getElementById("lNombre").value.trim(),
       contactoEmail: document.getElementById("lEmail").value.trim(),
       contactoTel: document.getElementById("lTel").value.trim(),
+      sitioWeb: document.getElementById("lWeb").value.trim(),
+      segmento: document.getElementById("lSegmento").value,
       canal: document.getElementById("lCanal").value,
+      pais: document.getElementById("lPais").value,
       campanaId: document.getElementById("lCampana").value || null,
       fechaCaptura: document.getElementById("lFecha").value,
       origenDetalle: document.getElementById("lOrigen").value.trim(),
       estado: "Nuevo",
     };
-    if (await guardar("leads", reg, `Lead ${reg.contactoNombre}`)) {
+    if (await guardar("leads", reg, `Lead ${reg.contactoNombre || institucion}`)) {
       global.toast("Lead guardado");
       global.go("leads");
     }
@@ -538,6 +553,285 @@
   }
 
   // ==========================================================================
+  // Esta semana · secuencia de prospección
+  // ==========================================================================
+
+  const SEG_LABEL = (s) => (s ? E.SEGMENTO_NOMBRE[s] || s : "Sin segmento definido");
+
+  /** Leads activos (no respondidos) que todavía están dentro de una secuencia. */
+  function enSecuencia() {
+    return leads().filter((l) =>
+      !["Calificado", "Convertido", "Descartado"].includes(l.estado) && l.proximoToque);
+  }
+
+  function renderSemana() {
+    const hoyISO = E.hoy();
+    const horizonte = E.sumarDias(hoyISO, 7);
+    const activos = leads().filter((l) =>
+      !["Calificado", "Convertido", "Descartado"].includes(l.estado));
+    const sec = enSecuencia();
+    const toca = sec
+      .filter((l) => l.proximoToque <= horizonte)
+      .sort((a, b) => a.proximoToque.localeCompare(b.proximoToque));
+    const vencidos = toca.filter((l) => l.proximoToque < hoyISO).length;
+    const agotados = activos.filter((l) => !l.proximoToque && l.paso >= E.CADENCIA.toques);
+
+    // Agrupado por segmento: cada decisor se trabaja distinto.
+    const grupos = {};
+    for (const l of toca) (grupos[l.segmento || ""] ??= []).push(l);
+
+    const filaLead = (l) => {
+      const atrasado = l.proximoToque < hoyISO;
+      const toqueN = l.paso + 1;
+      const esBreakup = toqueN === E.CADENCIA.toques;
+      return `<tr>
+        <td><b>${esc(l.institucion || l.contactoNombre)}</b>
+          ${l.contactoNombre && l.contactoNombre !== l.institucion
+            ? `<br><span class="muted" style="font-size:12px">${esc(l.contactoNombre)}</span>` : ""}
+          ${l.sitioWeb ? `<br><a href="${/^https?:/.test(l.sitioWeb) ? "" : "https://"}${esc(l.sitioWeb)}" target="_blank" rel="noopener" class="muted" style="font-size:12px">${esc(l.sitioWeb)}</a>` : ""}
+        </td>
+        <td>${l.tier ? `<span class="pill">${esc(l.tier)}</span>` : "—"}</td>
+        <td>Toque ${toqueN} de ${E.CADENCIA.toques}${esBreakup ? ' <span class="muted">· cierre</span>' : ""}</td>
+        <td${atrasado ? ' style="color:var(--critico,#ff8a5c)"' : ""}><b>${esc(l.proximoToque)}</b>${atrasado ? " ⚠" : ""}</td>
+        <td style="white-space:nowrap">
+          <button class="btn sm primary" onclick="registrarToque('${esc(l.id)}')">Registré el toque</button>
+          <button class="btn sm ghost" onclick="calificarLead('${esc(l.id)}')">Respondió</button>
+        </td>
+      </tr>`;
+    };
+
+    document.getElementById("view-semana").innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
+        <div style="flex:1">
+          <div class="kicker">Prospección · recontacto sistemático</div>
+          <h1>Esta <span class="hl">semana</span></h1>
+        </div>
+        <a class="btn ghost" href="#importar">Importar lista</a>
+        <a class="btn primary" href="#leadform">+ Lead manual</a>
+      </div>
+
+      <div class="grid-kpi" style="margin:18px 0">
+        <div class="kpi"><div class="label">Tocan esta semana</div><div class="num num-lg">${toca.length}</div><div class="sub">${vencidos} atrasado(s)</div></div>
+        <div class="kpi"><div class="label">En secuencia</div><div class="num num-lg">${sec.length}</div><div class="sub">activos sin respuesta</div></div>
+        <div class="kpi"><div class="label">Secuencia agotada</div><div class="num num-md">${agotados.length}</div><div class="sub">4 toques sin respuesta</div></div>
+      </div>
+
+      ${toca.length ? Object.entries(grupos).map(([seg, ls]) => `
+        <div class="card" style="margin-bottom:16px">
+          <h3 style="margin:0 0 4px">${esc(SEG_LABEL(seg))} <span class="muted" style="font-weight:400">· ${ls.length}</span></h3>
+          <table class="data" style="margin-top:10px">
+            <thead><tr><th>Institución</th><th>Tier</th><th>Paso</th><th>Vence</th><th></th></tr></thead>
+            <tbody>${ls.map(filaLead).join("")}</tbody>
+          </table>
+        </div>`).join("") : `<div class="card">
+          <h3>Nada pendiente esta semana</h3>
+          <p class="muted" style="max-width:62ch">Cuando importes la lista o cargues leads, acá
+          aparece a quién tocás y recontactás cada semana, ordenado por vencimiento.
+          Cada toque registrado reprograma el siguiente según la cadencia (0 · +4 · +11 · +21 días).</p>
+          <p style="margin-top:12px"><a class="btn primary" href="#importar">Importar la lista</a></p>
+        </div>`}
+
+      ${agotados.length ? `<div class="card interno" style="margin-top:6px">
+        <b>${agotados.length} con la secuencia agotada.</b> Cuatro toques sin respuesta.
+        Decidí: descartar (con motivo) o dejar en pausa para una campaña futura.
+        <div style="overflow-x:auto; margin-top:10px"><table class="data">
+          <thead><tr><th>Institución</th><th>Último toque</th><th></th></tr></thead>
+          <tbody>${agotados.slice(0, 30).map((l) => `<tr>
+            <td>${esc(l.institucion || l.contactoNombre)}</td>
+            <td>${esc(l.fechaUltimoToque || "—")}</td>
+            <td><button class="btn sm ghost" onclick="calificarLead('${esc(l.id)}')">Resolver</button></td>
+          </tr>`).join("")}</tbody>
+        </table></div>
+      </div>` : ""}
+    `;
+  }
+
+  /**
+   * Registra un toque dado: avanza el paso, lo anota en el historial y deja que
+   * el esquema reprograme el próximo según la cadencia. No pregunta por la
+   * respuesta acá: si el prospecto respondió, se usa "Respondió" (calificar),
+   * que lo saca de la secuencia.
+   */
+  async function registrarToque(id) {
+    const l = leads().find((x) => x.id === id);
+    if (!l) return;
+    const canal = prompt(`¿Por dónde fue el toque? (${E.TOQUE_CANAL.join(" / ")})`,
+      l.canal === "Email" ? "Email" : "Email");
+    if (!canal) return;
+    const nota = prompt("Nota del toque (asunto del mail, qué le dijiste). Opcional:", "");
+    if (nota === null) return;
+    const nuevoPaso = l.paso + 1;
+    const hist = [...l.historialToques,
+      { fecha: E.hoy(), paso: nuevoPaso, canal, nota: nota.trim(), resultado: "" }];
+    const reg = {
+      ...l, paso: nuevoPaso, historialToques: hist, fechaUltimoToque: E.hoy(),
+      estado: l.estado === "Nuevo" ? "Contactado" : l.estado,
+      // Null fuerza al esquema a recalcular el próximo toque desde la cadencia.
+      proximoToque: null,
+    };
+    if (await guardar("leads", reg, `Toque ${nuevoPaso} · ${l.institucion || l.contactoNombre}`)) {
+      const quedan = E.proximoToque(nuevoPaso, E.hoy());
+      global.toast(quedan ? `Toque ${nuevoPaso} registrado — próximo ${quedan}` : "Último toque registrado · secuencia agotada");
+      global.router();
+    }
+  }
+
+  // ==========================================================================
+  // Importador de la lista de prospección (CSV)
+  // ==========================================================================
+
+  /** Parser CSV mínimo con soporte de comillas y comas internas. */
+  function parseCSV(texto) {
+    const filas = [];
+    let campo = "", fila = [], enComillas = false;
+    const t = texto.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (enComillas) {
+        if (c === '"') { if (t[i + 1] === '"') { campo += '"'; i++; } else enComillas = false; }
+        else campo += c;
+      } else if (c === '"') enComillas = true;
+      else if (c === ",") { fila.push(campo); campo = ""; }
+      else if (c === "\n") { fila.push(campo); filas.push(fila); fila = []; campo = ""; }
+      else campo += c;
+    }
+    if (campo.length || fila.length) { fila.push(campo); filas.push(fila); }
+    if (!filas.length) return [];
+    const cab = filas[0].map((h) => h.trim().toLowerCase());
+    return filas.slice(1).filter((f) => f.some((x) => x.trim()))
+      .map((f) => Object.fromEntries(cab.map((h, i) => [h, (f[i] || "").trim()])));
+  }
+
+  let _impFilas = null;  // filas parseadas en memoria para el importador
+
+  function renderImportar() {
+    const emailCamps = campanas().filter((c) => c.canales.includes("Email"));
+    document.getElementById("view-importar").innerHTML = `
+      <a href="#semana" class="muted">← Esta semana</a>
+      <h1 style="margin-top:8px">Importar <span class="hl">lista de prospección</span></h1>
+      <div class="card" style="margin-top:16px; max-width:70ch">
+        <p class="muted">Subí el CSV de la lista (universo-argentina.csv / universo-chile.csv).
+        Se crean leads con la institución, el tier y el sitio web; cada uno arranca la
+        secuencia de recontacto. El decisor se completa después. No se sube ningún archivo
+        a ningún lado: se lee en tu navegador y se guardan solo los leads.</p>
+
+        <div class="field" style="margin-top:14px"><label for="impFile">Archivo CSV</label>
+          <input type="file" id="impFile" accept=".csv,text/csv" onchange="impPreview()" /></div>
+
+        <div class="form-grid" style="gap:12px">
+          <div class="field"><label for="impPais">País de la lista</label>
+            <select id="impPais">${E.PAIS.map((p) => `<option value="${p}"${p === "AR" ? " selected" : ""}>${esc(E.PAIS_NOMBRE[p])}</option>`).join("")}</select></div>
+          <div class="field"><label for="impSeg">Segmento por defecto</label>
+            <select id="impSeg"><option value="">— sin definir —</option>
+              ${E.SEGMENTO.map((s) => `<option value="${s}">${esc(E.SEGMENTO_NOMBRE[s])}</option>`).join("")}</select></div>
+          <div class="field"><label for="impSoloA"><input type="checkbox" id="impSoloA" checked /> Solo núcleo (Tier A)</label></div>
+        </div>
+
+        <div class="field"><label for="impCamp">Campaña destino</label>
+          <select id="impCamp">
+            <option value="__nueva__">+ Crear "Prospección Email" (canal Email)</option>
+            ${emailCamps.map((c) => `<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("")}
+          </select></div>
+
+        <div id="impEstado" class="muted" style="margin-top:8px"></div>
+
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px">
+          <a class="btn ghost" href="#semana">Cancelar</a>
+          <button class="btn primary" id="impBtn" onclick="ejecutarImport()" disabled>Importar</button>
+        </div>
+      </div>
+    `;
+    _impFilas = null;
+  }
+
+  function impPreview() {
+    const inp = document.getElementById("impFile");
+    const est = document.getElementById("impEstado");
+    const btn = document.getElementById("impBtn");
+    const f = inp.files?.[0];
+    if (!f) return;
+    const lector = new FileReader();
+    lector.onload = () => {
+      try {
+        _impFilas = parseCSV(String(lector.result));
+        const conInst = _impFilas.filter((r) => (r.institucion || "").trim()).length;
+        const conA = _impFilas.filter((r) => (r.tier || "").toUpperCase() === "A").length;
+        est.innerHTML = `Leídas <b>${_impFilas.length}</b> filas · ${conInst} con institución · ${conA} Tier A.`;
+        btn.disabled = conInst === 0;
+      } catch (e) {
+        est.innerHTML = `<span style="color:var(--critico,#ff8a5c)">No se pudo leer el CSV: ${esc(e.message)}</span>`;
+        _impFilas = null; btn.disabled = true;
+      }
+    };
+    lector.readAsText(f);
+  }
+
+  async function ejecutarImport() {
+    if (!_impFilas) return;
+    const pais = document.getElementById("impPais").value;
+    const segDef = document.getElementById("impSeg").value;
+    const soloA = document.getElementById("impSoloA").checked;
+    let campId = document.getElementById("impCamp").value;
+    const btn = document.getElementById("impBtn");
+    const est = document.getElementById("impEstado");
+    btn.disabled = true;
+
+    // Campaña destino: se crea una si hace falta.
+    if (campId === "__nueva__") {
+      const reg = E.ENTIDADES.campanas.normalizar({
+        nombre: "Prospección Email AR/CL", objetivo: "Generar reuniones con centros de imágenes",
+        canales: ["Email"], estado: "Activa", fechaInicio: E.hoy(), responsable: "Maxi",
+      });
+      if (!(await guardar("campanas", reg, "Campaña Prospección Email"))) { btn.disabled = false; return; }
+      campId = reg.id;
+    }
+
+    // Deduplicación por institución dentro de la campaña.
+    const yaEn = new Set((leads() || [])
+      .filter((l) => l.campanaId === campId)
+      .map((l) => E.claveCliente(l.institucion || l.contactoNombre)));
+
+    const nuevos = [];
+    let saltados = 0;
+    for (const r of _impFilas) {
+      const institucion = (r.institucion || "").trim();
+      if (!institucion) { saltados++; continue; }
+      if (soloA && (r.tier || "").toUpperCase() !== "A") { saltados++; continue; }
+      const clave = E.claveCliente(institucion);
+      if (yaEn.has(clave)) { saltados++; continue; }
+      yaEn.add(clave);
+      const zona = [r.localidad || r.comuna, r.provincia || r.region].filter(Boolean).join(", ");
+      nuevos.push(E.ENTIDADES.leads.normalizar({
+        campanaId: campId, canal: "Email", pais,
+        institucion, tier: (r.tier || "").toUpperCase(),
+        sitioWeb: r.sitio_web || r.web || "",
+        contactoTel: r.telefono || "",
+        segmento: segDef,
+        origenDetalle: zona ? `Lista ${pais} · ${zona}` : `Lista ${pais}`,
+        fechaCaptura: E.hoy(), estado: "Nuevo",
+      }));
+    }
+
+    if (!nuevos.length) {
+      est.innerHTML = `Nada para importar: ${saltados} fila(s) salteada(s) (sin institución, no Tier A, o ya cargadas).`;
+      btn.disabled = false;
+      return;
+    }
+
+    est.innerHTML = `Guardando ${nuevos.length} leads…`;
+    global.state.leads = [...(leads() || []), ...nuevos];
+    try {
+      await global.persist(`Importación prospección: ${nuevos.length} leads (${pais})`, "leads");
+    } catch (e) {
+      global.toast(`Error al guardar: ${e.message}`, true);
+      btn.disabled = false;
+      return;
+    }
+    global.toast(`${nuevos.length} leads importados${saltados ? ` · ${saltados} salteados` : ""}`);
+    global.go("semana");
+  }
+
+  // ==========================================================================
 
   global.NEXO_VISTAS = global.NEXO_VISTAS || {};
   Object.assign(global.NEXO_VISTAS, {
@@ -548,10 +842,13 @@
     leads: renderLeads,
     leadform: renderLeadForm,
     canales: renderCanales,
+    semana: renderSemana,
+    importar: renderImportar,
   });
 
   Object.assign(global, {
     guardarCampana, finalizarCampana, nuevaEstrategia, finalizarEstrategia,
-    guardarLead, calificarLead,
+    guardarLead, calificarLead, registrarToque,
+    impPreview, ejecutarImport,
   });
 })(typeof window !== "undefined" ? window : globalThis);
