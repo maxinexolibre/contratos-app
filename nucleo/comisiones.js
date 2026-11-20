@@ -93,22 +93,30 @@
   }
 
   /**
-   * Reparto interno fijo de Nexolibre (definido por Maxi, 2026-08-05).
+   * Reparto interno del área comercial: 4,5% del neto, repartido 6:2:1.
    *
-   * Corre sobre toda venta concretada en los cinco países donde opera, en
-   * paralelo a lo pactado con el vendedor. Suma 4,5% del neto.
+   *   Gerencia comercial  6/9  → 3%
+   *   Diseño              2/9  → 1%
+   *   Marketing           1/9  → 0,5%
    *
-   * Se generan como acuerdos de alcance "Area" para que sigan las mismas
-   * reglas que el resto: vigencia versionada, base explícita y trazabilidad
-   * del cálculo. Cambiar un porcentaje cierra el acuerdo y abre otro, con lo
-   * que las comisiones viejas se siguen explicando con sus propias reglas.
+   * Definido por Maxi el 2026-11-20. Reemplaza al reparto del 2026-08-05
+   * (3 / 0,5 / 0,5 / 0,5 con un 0,5% para Ventas), y por decisión suya rige
+   * para todas las operaciones, también las anteriores.
+   *
+   * Solo corresponde con clientes nuevos: ver `elegibilidad()`.
    */
-  const REPARTO_INTERNO = [
-    { area: "Gerencia comercial", porcentaje: 3 },
-    { area: "Marketing", porcentaje: 0.5 },
-    { area: "Diseño", porcentaje: 0.5 },
-    { area: "Ventas", porcentaje: 0.5 },
+  const PORCENTAJE_AREA = 4.5;
+  const PROPORCION_AREA = [
+    { area: "Gerencia comercial", partes: 6 },
+    { area: "Diseño", partes: 2 },
+    { area: "Marketing", partes: 1 },
   ];
+  const PARTES_AREA = PROPORCION_AREA.reduce((s, r) => s + r.partes, 0);
+  const REPARTO_INTERNO = PROPORCION_AREA.map((r) => ({
+    area: r.area,
+    partes: r.partes,
+    porcentaje: Math.round((PORCENTAJE_AREA * r.partes / PARTES_AREA) * 1000) / 1000,
+  }));
 
   const PAISES_REPARTO = ["AR", "CL", "CO", "UY", "US"];
 
@@ -494,11 +502,384 @@
     return out;
   }
 
+  // --------------------------------------------------------------------------
+  // Seguimiento por operación
+  // --------------------------------------------------------------------------
+  //
+  // Cómo funciona, en simple:
+  //
+  //   1. Cuando entra el lead se anota quién lo trajo (ticket.traidoPor).
+  //   2. Al ENVIAR el presupuesto o la propuesta se decide si lleva comisión.
+  //      La app propone la respuesta mirando la historia del cliente, y se
+  //      guarda una "marca" con esa decisión.
+  //   3. De ahí en adelante el estado avanza solo, leyendo la operación:
+  //        Prevista   la propuesta salió y no se cerró
+  //        Devengada  el cliente aceptó
+  //        ACobrar    el cliente pagó: ya se le puede pagar al comercial
+  //        Pagada     se registró el pago de la comisión
+  //        Anulada    la operación se rechazó o se anuló
+  //
+  // El estado no se guarda porque guardarlo exigía que alguien se acordara de
+  // moverlo en cada firma y en cada cobro. Así fue como el circuito anterior
+  // (devengar a mano al firmar el contrato) quedó sin usar.
+
+  /**
+   * Corte de "cliente nuevo" para el área comercial (Maxi, 2026-11-20):
+   * corresponde comisión con clientes que entraron desde marzo de 2026 y no
+   * tuvieron actividad anterior con Nexo.
+   */
+  const FECHA_CLIENTE_NUEVO = "2026-03-01";
+  /**
+   * Si la actividad anterior es de hace más de estos años, se toma como caso
+   * aislado y se pregunta en vez de decidir: puede corresponder o no.
+   */
+  const ANIOS_AISLADO = 2;
+  /** Días a partir de los cuales una comisión se considera colgada. */
+  const PLAZOS_ALERTA = { aCobrarDias: 30, sinCobroDias: 60 };
+
+  const restarAnios = (f, n) => `${Number(f.slice(0, 4)) - n}${f.slice(4)}`;
+  const diasEntre = (desde, hasta) =>
+    Math.round((Date.parse(hasta + "T00:00:00Z") - Date.parse(desde + "T00:00:00Z")) / 86400000);
+
+  const claveBeneficiario = (tipo, id) => (tipo === "Area" ? `area:${id}` : `vnd:${id}`);
+
+  /** Ids de cliente que cuentan como "el mismo": el cliente y las sedes de su grupo. */
+  function clientesDelGrupo(clienteId, clientes) {
+    const ids = new Set([clienteId]);
+    const c = (clientes || []).find((x) => x.id === clienteId);
+    if (c?.grupo) {
+      const k = E.claveCliente(c.grupo);
+      for (const x of clientes) if (x.grupo && E.claveCliente(x.grupo) === k) ids.add(x.id);
+    }
+    return ids;
+  }
+
+  const coleccion = (origenTipo) => (origenTipo === "Propuesta" ? "propuestas" : "presupuestos");
+  const operacionDe = (marca, ctx) =>
+    (ctx[coleccion(marca.origenTipo)] || []).find((o) => o.id === marca.origenId) || null;
+  const fechaOperacion = (origenTipo, op) =>
+    (origenTipo === "Propuesta" ? op.fechas?.creado : op.fecha) || E.hoy();
+  const ticketDe = (op, ctx) =>
+    op?.ticketId ? (ctx.tickets || []).find((t) => t.id === op.ticketId) || null : null;
+
+  /**
+   * Todo lo que el cliente (o su grupo) tuvo con Nexo, ordenado por fecha.
+   *
+   * Se excluye la operación misma y lo que viene del mismo pedido: el ticket
+   * que la originó y las otras versiones del presupuesto. Si no, un lead que
+   * entró en febrero y cerró en noviembre quedaría como "cliente existente"
+   * por su propio ticket.
+   */
+  function actividadesCliente(clienteId, ctx, { excluirIds = [], excluirTicket = null, excluirNumeros = [] } = {}) {
+    if (!clienteId) return [];
+    const ids = clientesDelGrupo(clienteId, ctx.clientes);
+    const fuera = new Set(excluirIds.filter(Boolean));
+    const numerosFuera = new Set(excluirNumeros.filter(Boolean));
+    const out = [];
+    const sumar = (tipo, r, f) => {
+      if (!f || !ids.has(r.clienteId) || fuera.has(r.id)) return;
+      if (excluirTicket && (r.id === excluirTicket || r.ticketId === excluirTicket)) return;
+      if (r.numero && numerosFuera.has(r.numero)) return;
+      out.push({ tipo, id: r.id, numero: r.numero || "", fecha: f });
+    };
+    for (const t of ctx.tickets || []) sumar("Ticket", t, t.fecha);
+    for (const p of ctx.presupuestos || []) sumar("Presupuesto", p, p.fecha);
+    for (const p of ctx.propuestas || []) sumar("Propuesta", p, p.fechas?.creado);
+    for (const c of ctx.contratos || []) sumar("Contrato", c, c.fechaFirma || c.fechas?.creado || c.vigencia?.inicio);
+    return out.sort((a, b) => a.fecha.localeCompare(b.fecha));
+  }
+
+  /**
+   * ¿Corresponde comisión según la historia del cliente?
+   *
+   * @returns {{criterio, lleva, motivo, primeraActividad, previas}}
+   *   lleva es true/false cuando la app puede decidir y null cuando pregunta.
+   */
+  function elegibilidad(origenTipo, op, ctx) {
+    if (!op.clienteId) {
+      return { criterio: "Consulta", lleva: null, primeraActividad: null, previas: [],
+        motivo: "No se pudo identificar al cliente en el padrón: revisá si es nuevo." };
+    }
+    const fOp = fechaOperacion(origenTipo, op);
+    const todas = actividadesCliente(op.clienteId, ctx, {
+      excluirIds: [op.id],
+      excluirTicket: op.ticketId,
+      // Un acuerdo pasado a propuesta guarda el número que tuvo como presupuesto.
+      excluirNumeros: [op.numeroLegado],
+    });
+    const primera = [todas[0]?.fecha, fOp].filter(Boolean).sort()[0];
+    const previas = todas.filter((a) => a.fecha < FECHA_CLIENTE_NUEVO);
+    const nombre = (a) => `${a.tipo.toLowerCase()} ${a.numero || ""}`.trim();
+
+    if (!previas.length) {
+      return { criterio: "ClienteNuevo", lleva: true, primeraActividad: primera, previas,
+        motivo: todas.length
+          ? `Cliente nuevo: empezó con Nexo el ${primera}, después de marzo de 2026.`
+          : "Cliente nuevo: es su primera operación con Nexo." };
+    }
+    const ultima = previas[previas.length - 1];
+    if (ultima.fecha < restarAnios(fOp, ANIOS_AISLADO)) {
+      return { criterio: "Consulta", lleva: null, primeraActividad: primera, previas,
+        motivo: `Tuvo actividad aislada hace años (${nombre(ultima)}, ${ultima.fecha}). ` +
+          "La app no lo decide sola: ¿corresponde comisión?" };
+    }
+    return { criterio: "ClienteExistente", lleva: false, primeraActividad: primera, previas,
+      motivo: `Cliente existente: trabaja con Nexo desde el ${previas[0].fecha} (${nombre(previas[0])}).` };
+  }
+
+  /** Porcentaje pactado con un vendedor a una fecha, si su acuerdo es un porcentaje simple. */
+  function porcentajeHabitual(vendedorId, f, acuerdos) {
+    const a = acuerdoVigente(acuerdos, vendedorId, f);
+    return a && a.modalidad === "Porcentaje" ? a.porcentaje : null;
+  }
+
+  /**
+   * Lo que la app propone al enviar: la decisión según la historia del
+   * cliente y, si el lead tiene asignado quién lo trajo, su comisión.
+   */
+  function sugerirMarca(origenTipo, op, ctx) {
+    const el = elegibilidad(origenTipo, op, ctx);
+    const ticket = ticketDe(op, ctx);
+    const traidoPor = ticket?.traidoPor || null;
+    return {
+      origenTipo,
+      origenId: op.id,
+      origenNumero: op.numero,
+      clienteId: op.clienteId,
+      criterio: el.criterio,
+      lleva: el.lleva,
+      area: el.lleva === true,
+      explicacion: el.motivo,
+      primeraActividad: el.primeraActividad,
+      previas: el.previas,
+      ticketId: ticket?.id || null,
+      traidoPor,
+      externo: traidoPor
+        ? { vendedorId: traidoPor,
+            porcentaje: porcentajeHabitual(traidoPor, fechaOperacion(origenTipo, op), ctx.acuerdos || ctx.acuerdosComision) }
+        : null,
+    };
+  }
+
+  /**
+   * Sobre qué se calcula. Siempre el neto, sin IVA.
+   *
+   * Un abono mensual se toma por 12 meses (o la vigencia de la propuesta):
+   * tomar un solo mes subvaluaba la comisión doce veces. Si en un caso se
+   * pactó otra cosa, la marca guarda una base cargada a mano.
+   */
+  function baseOperacion(origenTipo, op, marca) {
+    const moneda = op?.economico?.moneda || "USD";
+    if (marca?.baseManual != null) {
+      return { base: marca.baseManual, moneda, detalle: "base cargada a mano" };
+    }
+    if (!op) return { base: 0, moneda, detalle: "operación no encontrada" };
+    if (origenTipo === "Propuesta") {
+      const eco = op.economico || {};
+      const canon = eco.incluyeIVA ? eco.canonMensual / (1 + (eco.ivaPct ?? 21) / 100) : eco.canonMensual;
+      const meses = op.vigenciaPropuesta?.meses || 12;
+      return { base: E.money(canon * meses), moneda,
+        detalle: `canon neto × ${meses} meses` };
+    }
+    if (op.economico?.recurrencia === "mensual") {
+      return { base: E.money(op.neto * 12), moneda, detalle: "abono neto × 12 meses" };
+    }
+    return { base: E.money(op.neto), moneda, detalle: "neto sin IVA" };
+  }
+
+  /** En qué quedó la operación: Abierta, Ganada o Perdida, y desde cuándo. */
+  function etapaOperacion(origenTipo, op) {
+    if (!op) return { etapa: "Abierta", fecha: null };
+    if (origenTipo === "Propuesta") {
+      if (op.estado === "Aceptada") return { etapa: "Ganada", fecha: op.fechas?.resuelto || op.fechas?.enviado || op.fechas?.creado };
+      if (op.estado === "Rechazada") return { etapa: "Perdida", fecha: op.fechas?.resuelto || null };
+      return { etapa: "Abierta", fecha: op.fechas?.enviado || null };
+    }
+    // El historial guarda los estados como los escribe la pantalla ("ganado").
+    const hist = (op.historialEstados || []);
+    const cuando = (...ests) => [...hist].reverse().find((h) => ests.includes(h.estado))?.fecha || null;
+    if (op.estado === "Aprobado") return { etapa: "Ganada", fecha: cuando("ganado", "Aprobado") || op.fechaEnvio || op.fecha };
+    if (op.estado === "Rechazado" || op.estado === "Anulado") {
+      return { etapa: "Perdida", fecha: cuando("perdido", "anulado", "Rechazado", "Anulado") };
+    }
+    return { etapa: "Abierta", fecha: op.fechaEnvio || null };
+  }
+
+  /**
+   * Primer cobro registrado de la operación. Registrar un cobro en
+   * Facturación es lo que pasa la comisión a "a cobrar". Una nota de
+   * crédito no es un cobro.
+   */
+  function fechaCobro(origenTipo, op, facturaciones) {
+    if (!op) return null;
+    const f = (facturaciones || [])
+      .filter((x) => x.tipoComprobante !== "NotaCredito" &&
+        (x.presupuestoId === op.id || (op.contratoId && x.contratoId === op.contratoId)))
+      .map((x) => x.fechaEmision).sort();
+    return f[0] || null;
+  }
+
+  /**
+   * Las comisiones de una operación, una por beneficiario, con su estado
+   * deducido. Sin comisión, no hay líneas.
+   */
+  function lineas(marca, ctx, hoy = E.hoy()) {
+    if (!marca.lleva) return [];
+    const op = operacionDe(marca, ctx);
+    if (!op && marca.baseManual == null) return [];
+    const { base, moneda, detalle } = baseOperacion(marca.origenTipo, op, marca);
+    const etapa = etapaOperacion(marca.origenTipo, op);
+    const cobro = fechaCobro(marca.origenTipo, op, ctx.facturaciones);
+
+    const items = [];
+    if (marca.externo) {
+      const v = (ctx.vendedores || []).find((x) => x.id === marca.externo.vendedorId);
+      items.push({ clave: claveBeneficiario("Externo", marca.externo.vendedorId), tipo: "Externo",
+        nombre: v?.nombre || marca.externo.vendedorId, vendedorId: marca.externo.vendedorId,
+        porcentaje: marca.externo.porcentaje });
+    }
+    if (marca.area) {
+      for (const r of REPARTO_INTERNO) {
+        items.push({ clave: claveBeneficiario("Area", r.area), tipo: "Area", nombre: r.area,
+          porcentaje: r.porcentaje });
+      }
+    }
+
+    return items.map((it) => {
+      const monto = E.money((base * it.porcentaje) / 100);
+      const pagos = marca.pagos.filter((p) => p.beneficiario === it.clave);
+      const pagado = E.money(pagos.reduce((s, p) => s + p.monto, 0));
+      let estado, desde;
+      if (monto > 0 && pagado >= monto - 0.01) {
+        estado = "Pagada"; desde = pagos.map((p) => p.fecha).sort().pop();
+      } else if (etapa.etapa === "Perdida") {
+        estado = "Anulada"; desde = etapa.fecha;
+      } else if (etapa.etapa === "Ganada" && cobro) {
+        estado = "ACobrar"; desde = cobro;
+      } else if (etapa.etapa === "Ganada") {
+        estado = "Devengada"; desde = etapa.fecha;
+      } else {
+        estado = "Prevista"; desde = marca.fecha;
+      }
+      return {
+        ...it, base, moneda, monto, pagado,
+        pendiente: E.money(Math.max(0, monto - pagado)),
+        estado, desde: desde || null,
+        dias: desde ? diasEntre(desde, hoy) : null,
+        detalle: `${String(it.porcentaje).replace(".", ",")}% sobre ${detalle}`,
+      };
+    });
+  }
+
+  const marcaDe = (origenTipo, origenId, marcas) =>
+    (marcas || []).find((m) => m.origenTipo === origenTipo && m.origenId === origenId) || null;
+
+  /** Una fila por operación marcada, con sus comisiones. */
+  function filasSeguimiento(ctx, hoy = E.hoy()) {
+    const clientes = new Map((ctx.clientes || []).map((c) => [c.id, c]));
+    return (ctx.marcasComision || []).map((m) => {
+      const op = operacionDe(m, ctx);
+      const cli = clientes.get(m.clienteId || op?.clienteId);
+      return {
+        marca: m,
+        op,
+        numero: m.origenNumero || op?.numero || "",
+        cliente: cli?.nombreComercial || "—",
+        pais: op?.pais || "",
+        tipo: m.origenTipo === "Propuesta" ? "Acuerdo"
+          : (op?.tipo === "venta" ? "Venta" : "Servicio"),
+        fecha: op ? fechaOperacion(m.origenTipo, op) : m.fecha,
+        etapa: etapaOperacion(m.origenTipo, op).etapa,
+        lineas: lineas(m, ctx, hoy),
+      };
+    }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  }
+
+  /**
+   * Totales por estado, separados por moneda. Lo pagado suma lo pagado; el
+   * resto suma lo que falta pagar, para que un pago parcial no cuente dos veces.
+   */
+  function totalesSeguimiento(filas) {
+    const out = {};
+    for (const e of E.COMISION_SEGUIMIENTO) out[e] = {};
+    for (const f of filas) {
+      for (const l of f.lineas) {
+        const v = l.estado === "Pagada" ? l.monto : l.pendiente;
+        out[l.estado][l.moneda] = E.money((out[l.estado][l.moneda] || 0) + v);
+        if (l.estado !== "Pagada" && l.pagado > 0) {
+          out.Pagada[l.moneda] = E.money((out.Pagada[l.moneda] || 0) + l.pagado);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Operaciones enviadas o ganadas desde el corte que nunca se marcaron con
+   * o sin comisión. Las anteriores al corte no se reclaman: el área comercial
+   * no comisiona con clientes de antes.
+   */
+  function operacionesPendientesDeMarca(ctx) {
+    const marcas = ctx.marcasComision || [];
+    const out = [];
+    const revisar = (origenTipo, op, enviada) => {
+      if (!enviada) return;
+      if (fechaOperacion(origenTipo, op) < FECHA_CLIENTE_NUEVO) return;
+      if (marcaDe(origenTipo, op.id, marcas)) return;
+      out.push({ origenTipo, op, numero: op.numero, etapa: etapaOperacion(origenTipo, op) });
+    };
+    for (const p of ctx.presupuestos || []) revisar("Presupuesto", p, ["Enviado", "Aprobado"].includes(p.estado));
+    for (const p of ctx.propuestas || []) revisar("Propuesta", p, ["Enviada", "Aceptada"].includes(p.estado));
+    return out;
+  }
+
+  /**
+   * Comisiones colgadas. Pasa seguido que nadie la reclama y queda ahí:
+   * estas alertas son las que la sacan a la luz.
+   */
+  function alertas(ctx, hoy = E.hoy(), plazos = PLAZOS_ALERTA) {
+    const out = [];
+    const sim = (m) => ({ USD: "US$", UF: "UF", ARS: "$" }[m] || m);
+    const fmt = (v, m) => `${sim(m)} ${Math.round(v).toLocaleString("es-AR")}`;
+    for (const f of filasSeguimiento(ctx, hoy)) {
+      // Una alerta por operación, no por beneficiario: si no, una venta con
+      // reparto de área llenaba la lista con cuatro avisos iguales.
+      const colgadas = f.lineas.filter((l) => l.estado === "ACobrar" && l.dias > plazos.aCobrarDias);
+      if (colgadas.length) {
+        const porMoneda = {};
+        for (const l of colgadas) porMoneda[l.moneda] = (porMoneda[l.moneda] || 0) + l.pendiente;
+        out.push({ tipo: "SinReclamar", numero: f.numero, origenId: f.marca.origenId,
+          origenTipo: f.marca.origenTipo, dias: colgadas[0].dias,
+          quienes: colgadas.map((l) => l.nombre),
+          texto: `${f.numero} (${f.cliente}): ${Object.entries(porMoneda).map(([m, v]) => fmt(v, m)).join(" + ")} ` +
+            `para pagar hace ${colgadas[0].dias} días a ${colgadas.map((l) => l.nombre).join(", ")}.` });
+      }
+      const sinCobro = f.lineas.find((l) => l.estado === "Devengada" && l.dias > plazos.sinCobroDias);
+      if (sinCobro) {
+        out.push({ tipo: "SinCobro", numero: f.numero, origenId: f.marca.origenId,
+          origenTipo: f.marca.origenTipo, dias: sinCobro.dias,
+          texto: `${f.numero} (${f.cliente}) se ganó hace ${sinCobro.dias} días y no tiene cobro registrado.` });
+      }
+    }
+    for (const p of operacionesPendientesDeMarca(ctx)) {
+      if (p.etapa.etapa !== "Ganada") continue;
+      out.push({ tipo: "SinMarcar", numero: p.numero, origenId: p.op.id, origenTipo: p.origenTipo, dias: null,
+        texto: `${p.numero} se ganó y nunca se marcó si lleva comisión.` });
+    }
+    const orden = { SinReclamar: 0, SinMarcar: 1, SinCobro: 2 };
+    return out.sort((a, b) => orden[a.tipo] - orden[b.tipo] || (b.dias || 0) - (a.dias || 0));
+  }
+
   global.NEXO_COMISIONES = {
     rigeEn, alcanzaPais, acuerdoVigente, acuerdosDeArea, seSolapa, validarEscalones,
     calcular, calcularEscalonada, baseSegunAcuerdo,
     devengarPorContrato, puedeLiquidarse,
     resumen, resumenPorArea, panelVendedores,
     REPARTO_INTERNO, PAISES_REPARTO, acuerdosReparto,
+    PORCENTAJE_AREA, PROPORCION_AREA,
+    FECHA_CLIENTE_NUEVO, ANIOS_AISLADO, PLAZOS_ALERTA,
+    actividadesCliente, elegibilidad, sugerirMarca, baseOperacion, etapaOperacion,
+    fechaCobro, lineas, filasSeguimiento, totalesSeguimiento, alertas,
+    operacionesPendientesDeMarca, porcentajeHabitual, marcaDe, claveBeneficiario,
   };
 })(typeof window !== "undefined" ? window : globalThis);

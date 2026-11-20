@@ -130,6 +130,16 @@
       marketing:              { crear: null, leer: null, editar: null, borrar: null },
       admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
     },
+    // La decisión de si una operación lleva comisión la toma quien la envía,
+    // así que un vendedor puede crearla. Verla entera y editarla, no.
+    marcasComision: {
+      vendedor:               { crear: "todos", leer: null, editar: null, borrar: null },
+      gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: null },
+      gerente_administrativo: { crear: null, leer: "todos", editar: "todos", borrar: null },
+      direccion:              { crear: "todos", leer: "todos", editar: "todos", borrar: null },
+      marketing:              { crear: null, leer: null, editar: null, borrar: null },
+      admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
+    },
     leads: {
       vendedor:               { crear: null, leer: "propios", editar: null, borrar: null },
       gerente_comercial:      { crear: null, leer: "todos", editar: "todos", borrar: null },

@@ -142,6 +142,21 @@
   const CATALOGO_AUDITORIA = ["Pendiente", "Confirmado"];
 
   const COMISION_ORIGEN = ["Contrato", "Presupuesto", "Facturacion"];
+  /**
+   * Seguimiento de comisiones por operación. Lo que se guarda es la DECISIÓN
+   * (lleva o no, quién cobra, con qué porcentaje) y los pagos; el estado de
+   * cada comisión se deduce de la operación y de la facturación. Guardarlo
+   * aparte obligaba a alguien a acordarse de "devengar" a mano en cada firma,
+   * y por eso nadie lo hacía.
+   */
+  const MARCA_ORIGEN = ["Presupuesto", "Propuesta"];
+  /**
+   * Por qué una operación lleva o no comisión. "Consulta" es el cliente que
+   * tuvo algo aislado hace años: la app no decide sola, pregunta.
+   */
+  const MARCA_CRITERIO = ["ClienteNuevo", "ClienteExistente", "Consulta", "Historico"];
+  /** Estados de una comisión, en el orden en que avanzan. */
+  const COMISION_SEGUIMIENTO = ["Prevista", "Devengada", "ACobrar", "Pagada", "Anulada"];
   const COMISION_ESTADO = ["Devengada", "Aprobada", "Liquidada", "Anulada"];
   const ROL = ["vendedor", "gerente_comercial", "gerente_administrativo", "direccion", "marketing", "admin"];
 
@@ -254,6 +269,15 @@
           vendedor: esTexto(r.vendedor) || esTexto(r.usuario),
           campanaId: esTexto(r.campanaId) || null,
           leadId: esTexto(r.leadId) || null,
+          // Quién trajo el lead (id de vendedor). Vacío = propio de Nexo. De
+          // esto depende la comisión de un externo: si no está asignado acá,
+          // nadie puede agregarlo después a mano en el presupuesto.
+          traidoPor: esTexto(r.traidoPor) || null,
+          // Quién lo asignó y cuándo: una comisión de un externo tiene que
+          // poder rastrearse hasta una decisión con nombre y fecha.
+          traidoPorAsignacion: r.traidoPorAsignacion?.fecha
+            ? { por: esTexto(r.traidoPorAsignacion.por), fecha: fecha(r.traidoPorAsignacion.fecha) }
+            : null,
           estado,
           tipo: enumerado(r.tipo, TICKET_TIPO, "Servicio"),
           prioridad: enumerado(r.prioridad, PRIORIDAD, "Media"),
@@ -783,6 +807,58 @@
       },
     },
 
+    /**
+     * Comisión de una operación: la decisión tomada al enviar el presupuesto
+     * o la propuesta, más los pagos. Una por operación.
+     *
+     * No guarda montos ni estados: se calculan contra la operación cada vez.
+     * Si el presupuesto se edita antes de aprobarse, la comisión acompaña sin
+     * que nadie tenga que recalcular nada.
+     */
+    marcasComision: {
+      archivo: "marcas-comision",
+      particionado: false,
+      idPrefijo: "mco_",
+      normalizar(r) {
+        const ext = r.externo || {};
+        return {
+          id: esTexto(r.id) || nuevoId("mco_"),
+          origenTipo: enumerado(r.origenTipo, MARCA_ORIGEN, "Presupuesto"),
+          origenId: esTexto(r.origenId),
+          origenNumero: esTexto(r.origenNumero),
+          clienteId: esTexto(r.clienteId),
+          lleva: esBool(r.lleva),
+          criterio: enumerado(r.criterio, MARCA_CRITERIO, "Consulta"),
+          // Por qué se decidió así. Obligatorio cuando la decisión va contra
+          // lo que dice la historia del cliente o cuando hubo que preguntar.
+          motivo: esTexto(r.motivo),
+          // Primera actividad del cliente con Nexo, tal como se vio al decidir.
+          primeraActividad: fecha(r.primeraActividad),
+          externo: esTexto(ext.vendedorId)
+            ? { vendedorId: esTexto(ext.vendedorId), porcentaje: esNumero(ext.porcentaje) }
+            : null,
+          // El 4,5% del área comercial. Sigue a `lleva` salvo decisión explícita.
+          area: r.area === undefined ? esBool(r.lleva) : esBool(r.area),
+          // null = la base sale de la operación. money(null) daría 0, que
+          // dejaría la comisión en cero sin que nadie lo note.
+          baseManual: r.baseManual == null || r.baseManual === "" ? null : money(r.baseManual),
+          // Cargada después de los hechos (operaciones anteriores al seguimiento).
+          historico: esBool(r.historico),
+          pagos: esLista(r.pagos).map((p) => ({
+            beneficiario: esTexto(p.beneficiario),
+            fecha: fecha(p.fecha) || hoy(),
+            monto: money(p.monto),
+            moneda: esTexto(p.moneda) || "USD",
+            referencia: esTexto(p.referencia),
+            registradoPor: esTexto(p.registradoPor),
+          })).filter((p) => p.beneficiario),
+          decididoPor: esTexto(r.decididoPor),
+          fecha: fecha(r.fecha) || hoy(),
+          notas: esTexto(r.notas),
+        };
+      },
+    },
+
     /** Comisión devengada sobre una operación concreta. */
     comisiones: {
       archivo: "comisiones",
@@ -978,6 +1054,7 @@
     RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_PRESUPUESTO, MONEDA_LIQUIDACION, PESO_ETAPA,
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
     COMISION_ORIGEN, COMISION_ESTADO, COMISION_ALCANCE, AREAS_COMISION,
+    MARCA_ORIGEN, MARCA_CRITERIO, COMISION_SEGUIMIENTO,
     PAIS, PAIS_NOMBRE, COMPROBANTE_TIPO, CONDICION_IVA,
     CATALOGO_TIPO, CATALOGO_CONDICION, CATALOGO_DISPONIBILIDAD, CATALOGO_PROCEDENCIA,
     CATALOGO_AUDITORIA,

@@ -21,7 +21,7 @@ contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
 | Lectura/escritura particionada, índice, conflictos | `nucleo/almacen.js` | 4k |
 | Traducción forma vieja ↔ modelo v3 | `nucleo/adaptador.js` | 4k |
 | Tipos de cambio, conversión, facturación | `nucleo/cambio.js` | 3k |
-| Comisiones, acuerdos, reparto interno | `nucleo/comisiones.js` | 5k |
+| Comisiones: seguimiento por operación, cliente nuevo, alertas, reparto 6:2:1 | `nucleo/comisiones.js` · `vistas/comisiones.js` | 9k · 6k |
 | Capa de datos de la app sobre el almacén | `nucleo/repositorio.js` | 3k |
 | Filtros, paginación, CSV, selector de país | `nucleo/tabla.js` | 2k |
 | Catálogo de partes/equipos: parts.json, importación, auditoría | `nucleo/catalogo.js` | 4k |
@@ -109,6 +109,24 @@ fotos nuevas en el repo **público** `nexolibre/nexolibre`, en un solo commit.
   etiqueta no se guarda: tiene el SN, que es interno.
 - `NEXO_CATALOGO` (planes.js) es el catálogo comercial de planes; el de partes
   es `NEXO_CATALOGO_PARTES`.
+
+## Seguimiento de comisiones
+
+- Al **enviar** un presupuesto o una propuesta se pregunta "¿Lleva comisión?" y
+  se guarda una marca (`marcasComision`, en `data/v3/marcas-comision.json`):
+  la decisión, quién cobra y los pagos. **El estado no se guarda**: Prevista →
+  Ganada (Devengada) → A cobrar (cobro registrado en Facturación) → Pagada, o
+  Anulada si la operación se pierde. Lo calcula `lineas()`.
+- Área comercial: 4,5% del neto repartido 6:2:1 (Gerencia 3 · Diseño 1 ·
+  Marketing 0,5), **solo con clientes nuevos**: sin actividad con Nexo antes del
+  2026-03-01 (`elegibilidad()`, mira también las sedes del mismo grupo). Si lo
+  anterior tiene más de 2 años, la app pregunta en vez de decidir.
+- Un externo cobra solo si el ticket tiene `traidoPor` con su id (lo asigna
+  gerencia). Las cargas históricas se exceptúan, con motivo.
+- Para decidir si un cliente es nuevo hace falta todo el historial:
+  `asegurarHistorico()` (app/datos.js) carga las particiones viejas.
+- El circuito anterior (devengar por contrato → aprobar → liquidar) queda solo
+  en el legajo del vendedor, para cerrar lo que hubiera de antes.
 
 ## Convenciones
 

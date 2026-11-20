@@ -78,7 +78,7 @@ const VIEW_WS = {
   mktablero: "marketing", campanas: "marketing", campdetalle: "marketing", campform: "marketing",
   leads: "marketing", leadform: "marketing", canales: "marketing",
   semana: "marketing", importar: "marketing",
-  vendedores: "equipo", vnddetalle: "equipo", vndform: "equipo", comisiones: "equipo",
+  vendedores: "equipo", vnddetalle: "equipo", vndform: "equipo", comisiones: "equipo", comhistorico: "equipo",
   catalogo: "catalogo", catform: "catalogo", catauditoria: "catalogo", catpublicar: "catalogo", catrapida: "catalogo",
 };
 const WS_HOME = { contratos: "dashboard", presupuestos: "ptablero", marketing: "semana", equipo: "vendedores", catalogo: "catalogo" };
@@ -124,8 +124,13 @@ function router() {
 // Sub-nav contextual del área activa + estado del switch de área.
 function renderSubnav(name) {
   const nav = document.getElementById("nav");
+  // Las comisiones colgadas se ven en el menú: si hay que entrar a buscarlas,
+  // nadie las encuentra.
+  const alertasCom = state.ws === "equipo" && window.cantidadAlertasComision ? window.cantidadAlertasComision() : 0;
+  const etiqueta = (v, l) => (v === "comisiones" && alertasCom
+    ? `${l} <span class="badge vencida" title="Comisiones para revisar">${alertasCom}</span>` : l);
   nav.innerHTML = (SUBNAV[state.ws] || []).map(([v, l]) =>
-    `<button type="button" data-view="${v}" class="${v === name ? "active" : ""}"${v === name ? ' aria-current="page"' : ""}>${l}</button>`).join("");
+    `<button type="button" data-view="${v}" class="${v === name ? "active" : ""}"${v === name ? ' aria-current="page"' : ""}>${etiqueta(v, l)}</button>`).join("");
   nav.querySelectorAll("button").forEach((b) => (b.onclick = () => go(b.dataset.view)));
   document.querySelectorAll("#wsSwitch button").forEach((b) => {
     const on = b.dataset.ws === state.ws;
