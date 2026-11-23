@@ -117,8 +117,18 @@ fotos nuevas en el repo **público** `nexolibre/nexolibre`, en un solo commit.
   la decisión, quién cobra y los pagos. **El estado no se guarda**: Prevista →
   Ganada (Devengada) → A cobrar (cobro registrado en Facturación) → Pagada, o
   Anulada si la operación se pierde. Lo calcula `lineas()`.
-- Área comercial: 4,5% del neto repartido 6:2:1 (Gerencia 3 · Diseño 1 ·
-  Marketing 0,5), **solo con clientes nuevos**: sin actividad con Nexo antes del
+- Base: precio sin IVA, menos `costos` si se cargaron (venta de equipo). La
+  comisión se **libera a medida que el cliente paga** (cuotas, abono mes a mes)
+  según los cobros de Facturación; una nota de crédito resta.
+- Pagos en USD o ARS (TC BNA vendedor de la factura al cliente, guardado en el
+  pago). Lo pagado de una operación que se anula queda **a compensar** y se
+  descuenta de la próxima de esa persona (pago `Compensacion` + `Ajuste`
+  negativo en la otra). `pagadoEfectivo` cuenta solo los `Pago`.
+- El reparto va a personas: `vendedores.areaComision`. Cada usuario con rol
+  vendedor o marketing ve solo sus líneas.
+- Área comercial: 4,5% sin IVA repartido 6:2:1 (Gerencia 3 · Diseño 1 ·
+  Marketing 0,5), **solo con clientes nuevos**: sin trabajos efectuados con
+  Nexo (presupuesto aprobado, propuesta aceptada, contrato firmado) antes del
   2026-03-01 (`elegibilidad()`, mira también las sedes del mismo grupo). Si lo
   anterior tiene más de 2 años, la app pregunta en vez de decidir.
 - Un externo cobra solo si el ticket tiene `traidoPor` con su id (lo asigna

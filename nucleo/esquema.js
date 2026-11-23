@@ -157,6 +157,9 @@
   const MARCA_CRITERIO = ["ClienteNuevo", "ClienteExistente", "Consulta", "Historico"];
   /** Estados de una comisión, en el orden en que avanzan. */
   const COMISION_SEGUIMIENTO = ["Prevista", "Devengada", "ACobrar", "Pagada", "Anulada"];
+  const PAGO_TIPO = ["Pago", "Compensacion", "Ajuste"];
+  /** La comisión se paga en dólares (efectivo) o en pesos al TC de la factura. */
+  const PAGO_MONEDA = ["USD", "ARS"];
   const COMISION_ESTADO = ["Devengada", "Aprobada", "Liquidada", "Anulada"];
   const ROL = ["vendedor", "gerente_comercial", "gerente_administrativo", "direccion", "marketing", "admin"];
 
@@ -745,6 +748,9 @@
           estado,
           fechaAlta: fecha(r.fechaAlta) || hoy(),
           fechaBaja: estado === "Inactivo" ? fecha(r.fechaBaja) : null,
+          // Parte del reparto del área comercial que cobra esta persona
+          // ("Gerencia comercial", "Diseño", "Marketing"). Vacío = ninguna.
+          areaComision: esTexto(r.areaComision),
           // Cuota comercial. Sirve para medir cumplimiento; 0 = sin cuota.
           metaMensual: money(r.metaMensual),
           metaMoneda: enumerado(r.metaMoneda, MONEDA_COTIZACION, "USD"),
@@ -842,16 +848,37 @@
           // null = la base sale de la operación. money(null) daría 0, que
           // dejaría la comisión en cero sin que nadie lo note.
           baseManual: r.baseManual == null || r.baseManual === "" ? null : money(r.baseManual),
+          // Costos que se descuentan antes de calcular (venta de equipo: parte,
+          // flete, importación). null = no se cargaron.
+          costos: r.costos == null || r.costos === "" ? null : money(r.costos),
           // Cargada después de los hechos (operaciones anteriores al seguimiento).
           historico: esBool(r.historico),
-          pagos: esLista(r.pagos).map((p) => ({
-            beneficiario: esTexto(p.beneficiario),
-            fecha: fecha(p.fecha) || hoy(),
-            monto: money(p.monto),
-            moneda: esTexto(p.moneda) || "USD",
-            referencia: esTexto(p.referencia),
-            registradoPor: esTexto(p.registradoPor),
-          })).filter((p) => p.beneficiario),
+          pagos: esLista(r.pagos).map((p) => {
+            const monedaPago = enumerado(p.monedaPago, PAGO_MONEDA, "USD");
+            return {
+              beneficiario: esTexto(p.beneficiario),
+              // A quién se le pagó, con nombre: la parte del reparto puede
+              // cambiar de persona y el pago tiene que seguir explicándose.
+              beneficiarioNombre: esTexto(p.beneficiarioNombre),
+              // Pago: plata que sale. Compensacion: se descuenta de un saldo
+              // pagado de más en otra operación. Ajuste: corrección con motivo
+              // (la única que puede ser negativa).
+              tipo: enumerado(p.tipo, PAGO_TIPO, "Pago"),
+              fecha: fecha(p.fecha) || hoy(),
+              // En la moneda de la comisión (la de la operación).
+              monto: money(p.monto),
+              moneda: esTexto(p.moneda) || "USD",
+              // Cómo se pagó de verdad: en pesos se guarda el TC usado.
+              monedaPago,
+              montoPagado: p.montoPagado == null || p.montoPagado === "" ? money(p.monto) : money(p.montoPagado),
+              tcValor: monedaPago === "ARS" ? esNumero(p.tcValor) : null,
+              tcFecha: monedaPago === "ARS" ? fecha(p.tcFecha) : null,
+              facturaComercial: esTexto(p.facturaComercial),
+              referencia: esTexto(p.referencia),
+              compensaOrigen: esTexto(p.compensaOrigen),
+              registradoPor: esTexto(p.registradoPor),
+            };
+          }).filter((p) => p.beneficiario),
           decididoPor: esTexto(r.decididoPor),
           fecha: fecha(r.fecha) || hoy(),
           notas: esTexto(r.notas),
@@ -1054,7 +1081,7 @@
     RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_PRESUPUESTO, MONEDA_LIQUIDACION, PESO_ETAPA,
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
     COMISION_ORIGEN, COMISION_ESTADO, COMISION_ALCANCE, AREAS_COMISION,
-    MARCA_ORIGEN, MARCA_CRITERIO, COMISION_SEGUIMIENTO,
+    MARCA_ORIGEN, MARCA_CRITERIO, COMISION_SEGUIMIENTO, PAGO_TIPO, PAGO_MONEDA,
     PAIS, PAIS_NOMBRE, COMPROBANTE_TIPO, CONDICION_IVA,
     CATALOGO_TIPO, CATALOGO_CONDICION, CATALOGO_DISPONIBILIDAD, CATALOGO_PROCEDENCIA,
     CATALOGO_AUDITORIA,

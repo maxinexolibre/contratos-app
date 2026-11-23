@@ -452,6 +452,16 @@
   }
 
   function validarVendedor(nuevo, anterior, ctx) {
+    // Cada parte del reparto la cobra una sola persona: con dos asignadas,
+    // no se sabría a quién pagarle.
+    if (nuevo.areaComision && nuevo.estado === "Activo") {
+      const otro = (ctx.vendedores || []).find((v) => v.id !== nuevo.id &&
+        v.estado === "Activo" && v.areaComision === nuevo.areaComision);
+      if (otro) {
+        fallar("NX-040", `${otro.nombre} ya cobra la parte de ${nuevo.areaComision}`,
+          "Sacásela a esa persona antes de asignarla a otra");
+      }
+    }
     if (!nuevo.nombre) fallar("NX-040", "El vendedor necesita nombre");
 
     // Dos vendedores con el mismo nombre hacen imposible saber a quién se le
@@ -695,10 +705,20 @@
         for (const p of nuevo.pagos) {
           const l = lineas.find((x) => x.clave === p.beneficiario);
           if (!l) fallar("NX-041", `Pago a alguien que no cobra en esta operación (${p.beneficiario})`);
-          if (!(p.monto > 0)) fallar("NX-040", "El pago tiene que ser mayor que cero");
+          // Solo un ajuste puede restar: es como se cierra un saldo compensado.
+          if (p.tipo === "Ajuste") {
+            if (!p.monto) fallar("NX-040", "Un ajuste no puede ser cero");
+            if (!p.referencia) fallar("NX-092", "Un ajuste necesita un motivo en la referencia");
+          } else if (!(p.monto > 0)) {
+            fallar("NX-040", "El pago tiene que ser mayor que cero");
+          }
+          if (p.monedaPago === "ARS" && !(p.tcValor > 0)) {
+            fallar("NX-040", "Un pago en pesos necesita el tipo de cambio usado");
+          }
         }
         for (const l of lineas) {
-          if (l.pagado > l.monto + 0.01) {
+          // En un abono no hay tope: se sigue pagando mientras el cliente pague.
+          if (!l.abono && l.pagado > l.monto + 0.01) {
             fallar("NX-094", `A ${l.nombre} le corresponden ${l.monto} y se registraron ${l.pagado}`);
           }
         }

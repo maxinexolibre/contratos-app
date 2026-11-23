@@ -563,7 +563,13 @@
     op?.ticketId ? (ctx.tickets || []).find((t) => t.id === op.ticketId) || null : null;
 
   /**
-   * Todo lo que el cliente (o su grupo) tuvo con Nexo, ordenado por fecha.
+   * Trabajos efectuados del cliente (o su grupo) con Nexo, ordenados por fecha.
+   *
+   * Solo cuentan trabajos hechos (Maxi, 2026-11-23): presupuestos aprobados,
+   * propuestas aceptadas y contratos firmados. Un ticket o un presupuesto
+   * rechazado es una consulta, no un cliente. No se exige el cobro: antes de
+   * Facturación no se registraba, y exigirlo volvía "nuevos" a todos los
+   * clientes viejos.
    *
    * Se excluye la operación misma y lo que viene del mismo pedido: el ticket
    * que la originó y las otras versiones del presupuesto. Si no, un lead que
@@ -582,10 +588,17 @@
       if (r.numero && numerosFuera.has(r.numero)) return;
       out.push({ tipo, id: r.id, numero: r.numero || "", fecha: f });
     };
-    for (const t of ctx.tickets || []) sumar("Ticket", t, t.fecha);
-    for (const p of ctx.presupuestos || []) sumar("Presupuesto", p, p.fecha);
-    for (const p of ctx.propuestas || []) sumar("Propuesta", p, p.fechas?.creado);
-    for (const c of ctx.contratos || []) sumar("Contrato", c, c.fechaFirma || c.fechas?.creado || c.vigencia?.inicio);
+    for (const p of ctx.presupuestos || []) {
+      if (p.estado === "Aprobado") sumar("Presupuesto", p, p.fecha);
+    }
+    for (const p of ctx.propuestas || []) {
+      if (p.estado === "Aceptada") sumar("Propuesta", p, p.fechas?.creado);
+    }
+    for (const c of ctx.contratos || []) {
+      if (["Firmado", "Activo", "Finalizado"].includes(c.estado)) {
+        sumar("Contrato", c, c.fechaFirma || c.fechas?.creado || c.vigencia?.inicio);
+      }
+    }
     return out.sort((a, b) => a.fecha.localeCompare(b.fecha));
   }
 
@@ -661,30 +674,57 @@
     };
   }
 
+  /** ¿Se cobra mes a mes? */
+  const esAbono = (origenTipo, op) =>
+    origenTipo === "Propuesta" || op?.economico?.recurrencia === "mensual";
+
+  /** Factor para pasar un importe cotizado a sin IVA. */
+  function factorSinIVA(origenTipo, op) {
+    if (origenTipo === "Propuesta") {
+      const eco = op.economico || {};
+      return eco.incluyeIVA ? 1 / (1 + (eco.ivaPct ?? 21) / 100) : 1;
+    }
+    return op.total > 0 ? op.neto / op.total : 1;
+  }
+
   /**
-   * Sobre qué se calcula. Siempre el neto, sin IVA.
+   * Sobre qué se calcula: el precio sin IVA (Maxi, 2026-11-23). En una venta
+   * de equipo se descuentan antes los costos (parte, flete, importación):
+   * el 10% sobre el precio se comía el margen.
    *
-   * Un abono mensual se toma por 12 meses (o la vigencia de la propuesta):
-   * tomar un solo mes subvaluaba la comisión doce veces. Si en un caso se
+   * Un abono se toma por 12 meses (o la vigencia de la propuesta) para mostrar
+   * lo esperado, pero se libera mes a mes con cada cobro. Si en un caso se
    * pactó otra cosa, la marca guarda una base cargada a mano.
+   *
+   * @returns {{base, bruto, costos, moneda, mensual, detalle}}
+   *   bruto: total sin IVA esperado; base: bruto menos costos; mensual: lo de
+   *   un mes en un abono, null si es una venta única.
    */
   function baseOperacion(origenTipo, op, marca) {
     const moneda = op?.economico?.moneda || "USD";
+    const costos = marca?.costos ?? 0;
     if (marca?.baseManual != null) {
-      return { base: marca.baseManual, moneda, detalle: "base cargada a mano" };
+      return { base: marca.baseManual, bruto: marca.baseManual, costos: 0, moneda, mensual: null,
+        detalle: "base cargada a mano" };
     }
-    if (!op) return { base: 0, moneda, detalle: "operación no encontrada" };
+    if (!op) return { base: 0, bruto: 0, costos: 0, moneda, mensual: null, detalle: "operación no encontrada" };
+    let bruto, mensual = null, detalle;
     if (origenTipo === "Propuesta") {
-      const eco = op.economico || {};
-      const canon = eco.incluyeIVA ? eco.canonMensual / (1 + (eco.ivaPct ?? 21) / 100) : eco.canonMensual;
       const meses = op.vigenciaPropuesta?.meses || 12;
-      return { base: E.money(canon * meses), moneda,
-        detalle: `canon neto × ${meses} meses` };
+      mensual = E.money((op.economico?.canonMensual || 0) * factorSinIVA(origenTipo, op));
+      bruto = E.money(mensual * meses);
+      detalle = `canon sin IVA × ${meses} meses`;
+    } else if (op.economico?.recurrencia === "mensual") {
+      mensual = op.neto;
+      bruto = E.money(op.neto * 12);
+      detalle = "abono sin IVA × 12 meses";
+    } else {
+      bruto = op.neto;
+      detalle = "precio sin IVA";
     }
-    if (op.economico?.recurrencia === "mensual") {
-      return { base: E.money(op.neto * 12), moneda, detalle: "abono neto × 12 meses" };
-    }
-    return { base: E.money(op.neto), moneda, detalle: "neto sin IVA" };
+    const base = E.money(Math.max(0, bruto - costos));
+    if (costos > 0) detalle += ` menos costos ${Math.round(costos).toLocaleString("es-AR")}`;
+    return { base, bruto, costos, moneda, mensual, detalle };
   }
 
   /** En qué quedó la operación: Abierta, Ganada o Perdida, y desde cuándo. */
@@ -706,30 +746,56 @@
   }
 
   /**
-   * Primer cobro registrado de la operación. Registrar un cobro en
-   * Facturación es lo que pasa la comisión a "a cobrar". Una nota de
-   * crédito no es un cobro.
+   * Cobros registrados de la operación, en orden, sin IVA y en la moneda en
+   * que se cotizó. Una nota de crédito resta. Registrar un cobro en
+   * Facturación es lo que libera la comisión.
    */
+  function cobros(origenTipo, op, facturaciones) {
+    if (!op) return [];
+    const factor = factorSinIVA(origenTipo, op);
+    return (facturaciones || [])
+      .filter((x) => x.presupuestoId === op.id || (op.contratoId && x.contratoId === op.contratoId))
+      .map((x) => ({
+        fecha: x.fechaEmision,
+        periodo: x.periodoCobrado,
+        monto: E.money((x.tipoComprobante === "NotaCredito" ? -1 : 1) * x.montoCotizado * factor),
+        // TC con que se facturó: es el que rige si la comisión se paga en pesos.
+        tcValor: x.monedaLiquidacion === "ARS" && x.tcUnidad === "USD" ? x.tcValor : null,
+        tcFecha: x.tcFecha,
+        comprobante: x.numeroComprobante,
+      }))
+      .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+  }
+
+  /** Fecha del primer cobro, o null. */
   function fechaCobro(origenTipo, op, facturaciones) {
-    if (!op) return null;
-    const f = (facturaciones || [])
-      .filter((x) => x.tipoComprobante !== "NotaCredito" &&
-        (x.presupuestoId === op.id || (op.contratoId && x.contratoId === op.contratoId)))
-      .map((x) => x.fechaEmision).sort();
-    return f[0] || null;
+    return cobros(origenTipo, op, facturaciones).find((c) => c.monto > 0)?.fecha || null;
   }
 
   /**
-   * Las comisiones de una operación, una por beneficiario, con su estado
-   * deducido. Sin comisión, no hay líneas.
+   * Las comisiones de una operación, una por beneficiario.
+   *
+   * Se pagan a medida que el cliente paga (Maxi, 2026-11-23): lo "liberado"
+   * es el porcentaje de lo cobrado, en proporción a la base si hubo costos.
+   * En una venta única no pasa del total; en un abono sigue mes a mes
+   * mientras el cliente pague (una renovación vuelve a comisionar).
+   *
+   *   Prevista    la propuesta salió y no se cerró
+   *   Devengada   ganada; falta que el cliente pague (todo o una parte)
+   *   ACobrar     hay comisión liberada sin pagar
+   *   Pagada      se pagó todo lo liberado (en un abono: al día)
+   *   Anulada     la operación se perdió; si algo se había pagado, queda
+   *               como saldo a compensar con la próxima comisión
    */
   function lineas(marca, ctx, hoy = E.hoy()) {
     if (!marca.lleva) return [];
     const op = operacionDe(marca, ctx);
     if (!op && marca.baseManual == null) return [];
-    const { base, moneda, detalle } = baseOperacion(marca.origenTipo, op, marca);
+    const b = baseOperacion(marca.origenTipo, op, marca);
     const etapa = etapaOperacion(marca.origenTipo, op);
-    const cobro = fechaCobro(marca.origenTipo, op, ctx.facturaciones);
+    const cs = cobros(marca.origenTipo, op, ctx.facturaciones);
+    const abono = esAbono(marca.origenTipo, op);
+    const proporcion = b.bruto > 0 ? b.base / b.bruto : 0;
 
     const items = [];
     if (marca.externo) {
@@ -740,33 +806,66 @@
     }
     if (marca.area) {
       for (const r of REPARTO_INTERNO) {
-        items.push({ clave: claveBeneficiario("Area", r.area), tipo: "Area", nombre: r.area,
-          porcentaje: r.porcentaje });
+        // El reparto va a personas: quien esté asignado a esa parte en Vendedores.
+        const v = (ctx.vendedores || []).find((x) => x.areaComision === r.area && x.estado !== "Inactivo");
+        items.push({ clave: claveBeneficiario("Area", r.area), tipo: "Area", area: r.area,
+          nombre: v ? `${r.area} · ${v.nombre}` : `${r.area} · sin asignar`,
+          vendedorId: v?.id || null, porcentaje: r.porcentaje });
       }
     }
 
     return items.map((it) => {
-      const monto = E.money((base * it.porcentaje) / 100);
+      const pct = it.porcentaje / 100;
+      const monto = E.money(b.base * pct);
+      // Liberado: acumulado cobro a cobro, para saber desde cuándo está pendiente.
+      let acum = 0;
+      const tramos = cs.map((c) => {
+        acum = E.money(acum + c.monto * proporcion * pct);
+        return { fecha: c.fecha, acum };
+      });
+      let liberado = Math.max(0, acum);
+      if (!abono) liberado = Math.min(liberado, monto);
+      liberado = E.money(liberado);
       const pagos = marca.pagos.filter((p) => p.beneficiario === it.clave);
       const pagado = E.money(pagos.reduce((s, p) => s + p.monto, 0));
+      const perdida = etapa.etapa === "Perdida";
+      // Si la operación se perdió, no hay nada liberado: lo pagado se compensa.
+      const pendiente = E.money((perdida ? 0 : liberado) - pagado);
+
       let estado, desde;
-      if (monto > 0 && pagado >= monto - 0.01) {
-        estado = "Pagada"; desde = pagos.map((p) => p.fecha).sort().pop();
-      } else if (etapa.etapa === "Perdida") {
+      if (perdida) {
         estado = "Anulada"; desde = etapa.fecha;
-      } else if (etapa.etapa === "Ganada" && cobro) {
-        estado = "ACobrar"; desde = cobro;
+      } else if (pendiente > 0.01) {
+        estado = "ACobrar";
+        desde = tramos.find((t) => t.acum > pagado + 0.01)?.fecha || null;
+      } else if (pagado > 0 && (abono || pagado >= monto - 0.01)) {
+        estado = "Pagada"; desde = pagos.map((p) => p.fecha).sort().pop();
       } else if (etapa.etapa === "Ganada") {
         estado = "Devengada"; desde = etapa.fecha;
+      } else if (pagado > 0) {
+        estado = "Pagada"; desde = pagos.map((p) => p.fecha).sort().pop();
       } else {
         estado = "Prevista"; desde = marca.fecha;
       }
+      const ultimoCobro = [...cs].reverse().find((c) => c.monto > 0) || null;
       return {
-        ...it, base, moneda, monto, pagado,
-        pendiente: E.money(Math.max(0, monto - pagado)),
+        ...it, base: b.base, bruto: b.bruto, costos: b.costos, moneda: b.moneda, abono,
+        monto, mensual: b.mensual != null ? E.money(b.mensual * proporcion * pct) : null,
+        cobrado: E.money(cs.reduce((s, c) => s + c.monto, 0)),
+        liberado, pagado,
+        pendiente: Math.max(0, pendiente),
+        // Pagado de más (operación anulada, o un adelanto que no se cobró):
+        // se descuenta de la próxima comisión de la misma persona.
+        aCompensar: pendiente < -0.01 ? E.money(-pendiente) : 0,
+        // Plata que efectivamente salió: una compensación o un ajuste no son
+        // pagos nuevos, solo mueven saldo entre operaciones.
+        pagadoEfectivo: E.money(pagos.filter((p) => p.tipo === "Pago").reduce((s, p) => s + p.monto, 0)),
+        // TC del último cobro en pesos: el que rige si se le paga en pesos.
+        tcSugerido: ultimoCobro?.tcValor ? { valor: ultimoCobro.tcValor, fecha: ultimoCobro.tcFecha,
+          comprobante: ultimoCobro.comprobante } : null,
         estado, desde: desde || null,
         dias: desde ? diasEntre(desde, hoy) : null,
-        detalle: `${String(it.porcentaje).replace(".", ",")}% sobre ${detalle}`,
+        detalle: `${String(it.porcentaje).replace(".", ",")}% sobre ${b.detalle}`,
       };
     });
   }
@@ -796,18 +895,40 @@
   }
 
   /**
-   * Totales por estado, separados por moneda. Lo pagado suma lo pagado; el
-   * resto suma lo que falta pagar, para que un pago parcial no cuente dos veces.
+   * Totales separados por moneda, por concepto:
+   *   Prevista    lo que pagarían las propuestas abiertas
+   *   Devengada   lo ganado que el cliente todavía no pagó
+   *   ACobrar     liberado sin pagar
+   *   Pagada      plata que efectivamente salió
+   *   ACompensar  pagado de más, a descontar de la próxima
+   * Una misma línea puede aportar a varios (un pago parcial de una venta en
+   * cuotas): por eso se suma por concepto y no por estado.
    */
   function totalesSeguimiento(filas) {
-    const out = {};
-    for (const e of E.COMISION_SEGUIMIENTO) out[e] = {};
+    const out = { Prevista: {}, Devengada: {}, ACobrar: {}, Pagada: {}, ACompensar: {} };
+    const sumar = (k, m, v) => { if (v > 0.005) out[k][m] = E.money((out[k][m] || 0) + v); };
     for (const f of filas) {
       for (const l of f.lineas) {
-        const v = l.estado === "Pagada" ? l.monto : l.pendiente;
-        out[l.estado][l.moneda] = E.money((out[l.estado][l.moneda] || 0) + v);
-        if (l.estado !== "Pagada" && l.pagado > 0) {
-          out.Pagada[l.moneda] = E.money((out.Pagada[l.moneda] || 0) + l.pagado);
+        if (l.estado === "Prevista") sumar("Prevista", l.moneda, l.monto);
+        else if (l.estado !== "Anulada") sumar("Devengada", l.moneda, Math.max(0, l.monto - l.liberado));
+        sumar("ACobrar", l.moneda, l.pendiente);
+        sumar("Pagada", l.moneda, l.pagadoEfectivo);
+        sumar("ACompensar", l.moneda, l.aCompensar);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Saldos a compensar de una persona (o una parte del reparto), para
+   * descontarlos cuando se le paga la próxima comisión.
+   */
+  function saldosACompensar(ctx, clave, moneda) {
+    const out = [];
+    for (const f of filasSeguimiento(ctx)) {
+      for (const l of f.lineas) {
+        if (l.clave === clave && l.moneda === moneda && l.aCompensar > 0) {
+          out.push({ marcaId: f.marca.id, numero: f.numero, monto: l.aCompensar });
         }
       }
     }
@@ -854,7 +975,7 @@
           texto: `${f.numero} (${f.cliente}): ${Object.entries(porMoneda).map(([m, v]) => fmt(v, m)).join(" + ")} ` +
             `para pagar hace ${colgadas[0].dias} días a ${colgadas.map((l) => l.nombre).join(", ")}.` });
       }
-      const sinCobro = f.lineas.find((l) => l.estado === "Devengada" && l.dias > plazos.sinCobroDias);
+      const sinCobro = f.lineas.find((l) => l.estado === "Devengada" && l.cobrado <= 0 && l.dias > plazos.sinCobroDias);
       if (sinCobro) {
         out.push({ tipo: "SinCobro", numero: f.numero, origenId: f.marca.origenId,
           origenTipo: f.marca.origenTipo, dias: sinCobro.dias,
@@ -879,7 +1000,7 @@
     PORCENTAJE_AREA, PROPORCION_AREA,
     FECHA_CLIENTE_NUEVO, ANIOS_AISLADO, PLAZOS_ALERTA,
     actividadesCliente, elegibilidad, sugerirMarca, baseOperacion, etapaOperacion,
-    fechaCobro, lineas, filasSeguimiento, totalesSeguimiento, alertas,
+    fechaCobro, cobros, lineas, saldosACompensar, filasSeguimiento, totalesSeguimiento, alertas,
     operacionesPendientesDeMarca, porcentajeHabitual, marcaDe, claveBeneficiario,
   };
 })(typeof window !== "undefined" ? window : globalThis);

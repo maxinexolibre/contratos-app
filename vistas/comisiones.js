@@ -38,7 +38,16 @@
     Pagada: "comisión pagada",
     Anulada: "la operación se rechazó o se anuló",
   };
-  const CLASE = { Prevista: "", Devengada: "", ACobrar: " warn", Pagada: "", Anulada: "" };
+  const CLASE = { Prevista: "", Devengada: "", ACobrar: " warn", Pagada: "", Anulada: "", ACompensar: " warn" };
+  ETIQUETA.ACompensar = "A compensar";
+  /** Qué suma cada total (un pago parcial aporta a más de uno). */
+  const TOTAL_AYUDA = {
+    Prevista: "si se cierran las propuestas abiertas",
+    Devengada: "ganado; falta que el cliente pague",
+    ACobrar: "el cliente pagó: listo para pagarle al comercial",
+    Pagada: "lo que efectivamente se pagó",
+    ACompensar: "pagado de más: se descuenta de la próxima",
+  };
 
   /** Contexto en modelo v3: lo que el núcleo necesita para calcular. */
   function ctx() {
@@ -135,6 +144,8 @@
       primeraActividad: sug.primeraActividad, historico, motivo: "", pagos: [],
     };
     const conPagos = (existente?.pagos || []).length > 0;
+    // En una venta de equipo la comisión va sobre el precio menos los costos.
+    const esEquipo = origenTipo === "Presupuesto" && op.tipo === "venta" && /equipo/i.test(op.subtipo || "");
 
     return new Promise((resolver) => {
       const ov = document.createElement("div");
@@ -172,7 +183,7 @@
         <div id="mcQuienes">
           <div class="field"><label style="font-weight:400">
             <input type="checkbox" id="mcArea"${d.area ? " checked" : ""}${conPagos ? " disabled" : ""}>
-            Área comercial · ${pct(CM.PORCENTAJE_AREA)} del neto
+            Área comercial · ${pct(CM.PORCENTAJE_AREA)} del precio sin IVA
             <span class="muted">(${CM.REPARTO_INTERNO.map((r) => `${esc(r.area)} ${pct(r.porcentaje)}`).join(" · ")})</span>
           </label></div>
 
@@ -180,19 +191,24 @@
             <div class="field"><label for="mcExt">Comercial externo</label>
               <select id="mcExt"${conPagos ? " disabled" : ""}><option value="">— Ninguno —</option>${externos.map((v) =>
                 `<option value="${esc(v.id)}"${d.externo?.vendedorId === v.id ? " selected" : ""}>${esc(v.nombre)}</option>`).join("")}</select></div>
-            <div class="field"><label for="mcPct">% del neto</label>
+            <div class="field"><label for="mcPct">% sin IVA</label>
               <input type="number" id="mcPct" min="0" max="100" step="0.5" value="${d.externo?.porcentaje ?? ""}"${conPagos ? " disabled" : ""}></div>
           </div>` : traido ? `<div class="form-grid">
             <div class="field"><label style="font-weight:400">
               <input type="checkbox" id="mcExtOn"${d.externo ? " checked" : ""}${conPagos ? " disabled" : ""}>
               <b>${esc(traido.nombre)}</b> · trajo el lead</label></div>
-            <div class="field"><label for="mcPct">% del neto</label>
+            <div class="field"><label for="mcPct">% sin IVA</label>
               <input type="number" id="mcPct" min="0" max="100" step="0.5" value="${d.externo?.porcentaje ?? ""}"${conPagos ? " disabled" : ""}
                 placeholder="sin acuerdo cargado"></div>
           </div>` : `<p class="muted" style="font-size:13px">
             El lead es propio de Nexo: no tiene asignado un comercial externo.
             ${sug.ticketId ? `Si lo trajo un externo, asignáselo en el <a href="#tkdetalle/${esc(sug.ticketId)}">ticket</a> antes de enviar.`
               : "Para que cobre un externo, la operación tiene que salir de un ticket con quién trajo el lead."}</p>`}
+
+          <div class="field"><label for="mcCostos">Costos a descontar <span class="muted">${esEquipo
+            ? "· venta de equipo: parte, flete, importación" : "· opcional"}</span></label>
+            <input type="number" id="mcCostos" min="0" step="1" value="${d.costos ?? ""}"${conPagos ? " disabled" : ""}
+              placeholder="${esc(op.economico?.moneda || "USD")} · se restan antes de calcular"></div>
         </div>
 
         <div class="field"><label for="mcMotivo">Motivo <span class="muted" id="mcMotivoAyuda"></span></label>
@@ -213,7 +229,9 @@
         const v = document.querySelector('input[name="mcLleva"]:checked')?.value;
         d.lleva = v === "si" ? true : v === "no" ? false : null;
         d.motivo = $("mcMotivo").value.trim();
-        if (!d.lleva) { d.area = false; d.externo = null; return; }
+        if (!d.lleva) { d.area = false; d.externo = null; d.costos = null; return; }
+        const cst = $("mcCostos").value;
+        d.costos = cst === "" ? null : Number(cst);
         d.area = $("mcArea").checked;
         const p = Number($("mcPct")?.value);
         if (historico) {
@@ -239,7 +257,9 @@
         prev.innerHTML = ls.length ? `<table class="data"><tbody>${ls.map((l) => `<tr>
             <td>${esc(l.nombre)}</td><td class="num">${pct(l.porcentaje)}</td>
             <td class="num"><b>${money(l.monto, l.moneda)}</b></td></tr>`).join("")}
-          </tbody></table><p class="muted" style="font-size:12px;margin:6px 0 0">Sobre ${esc(ls[0].detalle.split(" sobre ")[1] || "")}: ${money(ls[0].base, ls[0].moneda)}</p>`
+          </tbody></table><p class="muted" style="font-size:12px;margin:6px 0 0">Sobre ${esc(ls[0].detalle.split(" sobre ")[1] || "")}: ${money(ls[0].base, ls[0].moneda)}.
+          ${ls[0].abono ? `Se paga mes a mes: ${money(ls[0].mensual, ls[0].moneda)} por mes al ${pct(ls[0].porcentaje)}, con cada cobro.`
+            : "Se libera a medida que el cliente paga."}</p>`
           : `<span class="muted">Marcá quién cobra.</span>`;
       };
       ov.addEventListener("input", refrescar);
@@ -269,29 +289,62 @@
   // Registrar el pago
   // ==========================================================================
 
+  /**
+   * Registrar el pago de una comisión.
+   *
+   * Se paga en dólares o en pesos. En pesos rige el TC BNA vendedor de la
+   * factura al cliente (Maxi, 2026-11-23): se propone el del último cobro y
+   * queda guardado con el pago. Si la persona tiene saldo pagado de más en
+   * otra operación, se ofrece descontarlo acá.
+   */
   function registrarPago(marcaId, clave) {
     const c = ctx();
     const m = c.marcasComision.find((x) => x.id === marcaId);
     if (!m) return;
     const l = CM.lineas(m, c).find((x) => x.clave === clave);
     if (!l) return;
+    const saldos = CM.saldosACompensar(c, clave, l.moneda).filter((x) => x.marcaId !== m.id);
+    const totalSaldo = E.money(saldos.reduce((s2, x) => s2 + x.monto, 0));
+    const C = global.NEXO_CAMBIO;
+    const tcSerie = C?.cotizacion?.(global.state?.tiposCambio || [], "USD", E.hoy());
+    const tc = l.tcSugerido || (tcSerie ? { valor: tcSerie.tasa, fecha: tcSerie.fecha, comprobante: "" } : null);
+    const sugerido = l.pendiente > 0 ? l.pendiente : Math.max(0, E.money(l.monto - l.pagado));
+
     const ov = document.createElement("div");
     ov.className = "overlay";
     ov.id = "ovComision";
-    ov.innerHTML = `<div class="modal">
+    ov.innerHTML = `<div class="modal" style="max-width:600px">
       <div class="kicker">Registrar pago</div>
       <h2>${esc(l.nombre)}</h2>
-      <p class="muted" style="margin:2px 0 14px">${esc(m.origenNumero)} · le corresponden ${money(l.monto, l.moneda)}
-        ${l.pagado ? ` · ya se pagaron ${money(l.pagado, l.moneda)}` : ""}</p>
-      ${l.estado === "Devengada" ? `<p class="card interno" style="font-size:13px">El cliente todavía no pagó esta operación.
-        Se puede registrar igual si la comisión se adelantó.</p>` : ""}
+      <p class="muted" style="margin:2px 0 14px">${esc(m.origenNumero)} · ${l.abono
+        ? `${money(l.mensual, l.moneda)} por mes` : `le corresponden ${money(l.monto, l.moneda)}`}
+        · liberado ${money(l.liberado, l.moneda)}${l.pagado ? ` · ya pagado ${money(l.pagado, l.moneda)}` : ""}</p>
+      ${l.pendiente <= 0 ? `<p class="card interno" style="font-size:13px">El cliente todavía no pagó lo que liberaría esta comisión.
+        Se puede registrar igual si se adelanta: quedará como saldo a compensar si la operación se cae.</p>` : ""}
+      ${totalSaldo > 0 ? `<div class="card" style="margin-bottom:12px;border-left:4px solid var(--orange)">
+        <label style="font-weight:400"><input type="checkbox" id="pgCompensar" checked>
+        Descontar ${money(totalSaldo, l.moneda)} pagados de más (${saldos.map((x) => esc(x.numero)).join(", ")})</label></div>` : ""}
       <div class="form-grid">
         <div class="field"><label for="pgFecha">Fecha de pago</label><input type="date" id="pgFecha" value="${E.hoy()}"></div>
-        <div class="field"><label for="pgMonto">Monto (${esc(l.moneda)})</label>
-          <input type="number" id="pgMonto" min="0" step="0.01" value="${l.pendiente}"></div>
+        <div class="field"><label for="pgMonto">Comisión que se cancela (${esc(l.moneda)})</label>
+          <input type="number" id="pgMonto" min="0" step="0.01" value="${sugerido}"></div>
       </div>
-      <div class="field"><label for="pgRef">Referencia</label>
-        <input id="pgRef" placeholder="Transferencia, recibo, factura del comercial…"></div>
+      <div class="form-grid">
+        <div class="field"><label for="pgMoneda">Se paga en</label>
+          <select id="pgMoneda"><option value="USD">Dólares</option><option value="ARS">Pesos</option></select></div>
+        <div class="field" id="pgTcCampo" style="display:none"><label for="pgTc">TC BNA vendedor</label>
+          <input type="number" id="pgTc" min="0" step="0.01" value="${tc?.valor ?? ""}">
+          <p class="muted" style="font-size:12px;margin:4px 0 0">${tc
+            ? `${l.tcSugerido ? "De la factura al cliente" : "Último de la serie"}${tc.comprobante ? ` ${esc(tc.comprobante)}` : ""}, ${esc(tc.fecha || "")}`
+            : "Cargá el de la fecha de la factura al cliente"}</p></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="pgFactura">Factura del comercial</label>
+          <input id="pgFactura" placeholder="N° de factura, si facturó"></div>
+        <div class="field"><label for="pgRef">Referencia del pago</label>
+          <input id="pgRef" placeholder="Transferencia, recibo, efectivo…"></div>
+      </div>
+      <div class="card interno" id="pgResumen" style="margin:8px 0"></div>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
         <button class="btn ghost" onclick="cerrarModalComision()">Cancelar</button>
         <button class="btn primary" id="pgOk">Registrar</button>
@@ -299,21 +352,67 @@
     </div>`;
     document.body.appendChild(ov);
     ov.style.display = "flex";
-    document.getElementById("pgOk").onclick = async () => {
-      const pago = {
-        beneficiario: clave,
-        fecha: document.getElementById("pgFecha").value,
-        monto: Number(document.getElementById("pgMonto").value),
-        moneda: l.moneda,
-        referencia: document.getElementById("pgRef").value.trim(),
-        registradoPor: global.state?.user || "",
+    const $ = (id) => document.getElementById(id);
+
+    const calcular = () => {
+      const monto = Number($("pgMonto").value) || 0;
+      const compensa = $("pgCompensar")?.checked ? Math.min(totalSaldo, monto) : 0;
+      const efectivo = E.money(monto - compensa);
+      const ars = $("pgMoneda").value === "ARS";
+      const tcv = Number($("pgTc").value) || 0;
+      return { monto, compensa, efectivo, ars, tcv, enPesos: ars ? E.money(efectivo * tcv) : null };
+    };
+    const refrescar = () => {
+      const x = calcular();
+      $("pgTcCampo").style.display = x.ars ? "" : "none";
+      $("pgResumen").innerHTML = `${x.compensa ? `Se descuentan ${money(x.compensa, l.moneda)} del saldo a compensar. ` : ""}
+        Se paga <b>${x.ars ? (x.tcv ? money(x.enPesos, "ARS") + ` (${money(x.efectivo, l.moneda)} × ${num(x.tcv, 2)})` : "— falta el TC")
+          : money(x.efectivo, l.moneda)}</b>.`;
+    };
+    ov.addEventListener("input", refrescar);
+    ov.addEventListener("change", refrescar);
+    refrescar();
+
+    $("pgOk").onclick = async () => {
+      const x = calcular();
+      if (!(x.monto > 0)) { global.toast("Indicá cuánto de la comisión se cancela", true, true); return; }
+      const comun = {
+        beneficiario: clave, beneficiarioNombre: l.nombre,
+        fecha: $("pgFecha").value, moneda: l.moneda, registradoPor: global.state?.user || "",
       };
-      if (await guardarMarca({ ...m, pagos: [...m.pagos, pago] },
-          `Pago de comisión ${m.origenNumero} · ${l.nombre}`)) {
-        cerrarModal();
-        global.toast("Pago registrado");
-        global.router();
+      const nuevos = [];
+      // Compensación: cuenta como pagado acá y cierra el saldo en la otra
+      // operación con un ajuste negativo, para que no se descuente dos veces.
+      const cierres = [];
+      if (x.compensa > 0) {
+        let resto = x.compensa;
+        for (const sd of saldos) {
+          if (resto <= 0) break;
+          const parte = E.money(Math.min(resto, sd.monto));
+          resto = E.money(resto - parte);
+          nuevos.push({ ...comun, tipo: "Compensacion", monto: parte, compensaOrigen: sd.numero,
+            referencia: `Descontado de lo pagado de más en ${sd.numero}` });
+          cierres.push({ marcaId: sd.marcaId, pago: { ...comun, tipo: "Ajuste", monto: -parte,
+            referencia: `Compensado en ${m.origenNumero}` } });
+        }
       }
+      if (x.efectivo > 0) {
+        nuevos.push({ ...comun, tipo: "Pago", monto: x.efectivo,
+          monedaPago: x.ars ? "ARS" : "USD",
+          montoPagado: x.ars ? x.enPesos : x.efectivo,
+          tcValor: x.ars ? x.tcv : null, tcFecha: x.ars ? (l.tcSugerido?.fecha || tc?.fecha || $("pgFecha").value) : null,
+          facturaComercial: $("pgFactura").value.trim(), referencia: $("pgRef").value.trim() });
+      }
+      if (!(await guardarMarca({ ...m, pagos: [...m.pagos, ...nuevos] },
+          `Pago de comisión ${m.origenNumero} · ${l.nombre}`))) return;
+      for (const ci of cierres) {
+        const otra = (global.state.marcasComision || []).find((z) => z.id === ci.marcaId);
+        if (otra) await guardarMarca({ ...otra, pagos: [...otra.pagos, ci.pago] },
+          `Compensación de comisión ${otra.origenNumero} en ${m.origenNumero}`);
+      }
+      cerrarModal();
+      global.toast("Pago registrado");
+      global.router();
     };
   }
 
@@ -324,11 +423,27 @@
   const filtro = () => (global.state.filtroCom = global.state.filtroCom ||
     { persona: "", estado: "", pais: "", q: "", sinComision: false });
 
-  /** Filas filtradas: por persona y estado se filtran las líneas, no la operación. */
+  /**
+   * Quién es el usuario como beneficiario. Un comercial o quien cobra una
+   * parte del reparto ve solo sus líneas: transparente entre las partes, sin
+   * mostrarle a cada uno lo de los demás.
+   */
+  function soloPropias() {
+    const a = P.alcance ? P.alcance(rol(), "marcasComision", "leer") : null;
+    if (a !== "propios") return null;
+    const u = global.state?.user || "";
+    const yo = (global.state?.vendedores || []).find((v) => v.usuarioId === u || v.nombre === u);
+    return yo?.id || "—";
+  }
+
+  /** Filas visibles: por persona y estado se filtran las líneas, no la operación. */
   function filasFiltradas(c) {
     const f = filtro();
     const q = E.claveCliente(f.q || "");
+    const yo = soloPropias();
     return CM.filasSeguimiento(c)
+      .map((r) => (yo ? { ...r, lineas: r.lineas.filter((l) => l.vendedorId === yo) } : r))
+      .filter((r) => !yo || r.lineas.length)
       .filter((r) => !f.pais || r.pais === f.pais)
       .filter((r) => !q || E.claveCliente(`${r.numero} ${r.cliente}`).includes(q))
       .map((r) => ({ ...r, lineas: r.lineas.filter((l) =>
@@ -354,12 +469,14 @@
 
     const c = ctx();
     const f = filtro();
-    const todas = CM.filasSeguimiento(c);
+    const yo = soloPropias();
+    const todas = yo ? filasFiltradas({ ...c }) : CM.filasSeguimiento(c);
     const filas = filasFiltradas(c);
     const tot = CM.totalesSeguimiento(filas);
-    const alertas = CM.alertas(c);
+    const alertas = yo ? [] : CM.alertas(c);
     const personas = [...new Set(todas.flatMap((r) => r.lineas.map((l) => l.nombre)))].sort((a, b) => a.localeCompare(b, "es"));
-    const paga = P.capacidad(rol(), "liquidar_comision");
+    const paga = !yo && P.capacidad(rol(), "liquidar_comision");
+    const edita = !yo && P.puede(rol(), "marcasComision", "editar");
     const sinMarca = todas.filter((r) => !r.marca.lleva).length;
 
     el.innerHTML = `
@@ -369,7 +486,7 @@
           <h1>Comi<span class="hl">siones</span></h1>
         </div>
         <button class="btn" onclick="exportarComisionesCSV()">⬇ Excel</button>
-        <a class="btn ghost" href="#comhistorico">Cargar históricas</a>
+        ${edita ? `<a class="btn ghost" href="#comhistorico">Cargar históricas</a>` : ""}
       </div>
 
       ${alertas.length ? `<div class="card" style="margin-top:16px;border-left:4px solid var(--orange)">
@@ -384,10 +501,11 @@
       </div>` : ""}
 
       <div class="grid-kpi" style="margin:18px 0">
-        ${["Prevista", "Devengada", "ACobrar", "Pagada"].map((e) => `<div class="kpi${Object.keys(tot[e]).length ? CLASE[e] : ""}">
+        ${["Prevista", "Devengada", "ACobrar", "Pagada", ...(Object.keys(tot.ACompensar).length ? ["ACompensar"] : [])]
+          .map((e) => `<div class="kpi${Object.keys(tot[e]).length ? CLASE[e] || "" : ""}">
           <div class="label">${ETIQUETA[e]}</div>
           <div class="num num-${K.textoMonedas(tot[e]).length > 15 ? "sm" : "md"}">${K.textoMonedas(tot[e]) || "—"}</div>
-          <div class="sub">${esc(AYUDA[e])}</div>
+          <div class="sub">${esc(TOTAL_AYUDA[e])}</div>
         </div>`).join("")}
       </div>
 
@@ -418,7 +536,7 @@
           if (!r.marca.lleva) {
             return `<tr><td>${op}</td><td>${esc(r.cliente)}</td><td>${esc(r.tipo)}</td><td></td>
               <td colspan="3" class="muted">Sin comisión${r.marca.motivo ? ` · ${esc(r.marca.motivo)}` : ""}</td>
-              <td><button class="btn sm ghost" onclick="marcarComisionYVolver('${esc(r.marca.origenTipo)}','${esc(r.marca.origenId)}')">Editar</button></td></tr>`;
+              <td>${edita ? `<button class="btn sm ghost" onclick="marcarComisionYVolver('${esc(r.marca.origenTipo)}','${esc(r.marca.origenId)}')">Editar</button>` : ""}</td></tr>`;
           }
           return r.lineas.map((l, i) => `<tr>
             ${i === 0 ? `<td rowspan="${r.lineas.length}">${op}</td>
@@ -426,15 +544,17 @@
               <td rowspan="${r.lineas.length}">${esc(r.tipo)}</td>
               <td rowspan="${r.lineas.length}" class="num">${money(l.base, l.moneda)}</td>` : ""}
             <td>${esc(l.nombre)} <span class="muted">${pct(l.porcentaje)}</span></td>
-            <td class="num"><b>${money(l.monto, l.moneda)}</b>${l.pagado && l.estado !== "Pagada"
-              ? `<br><span class="muted" style="font-size:11px">pagado ${money(l.pagado, l.moneda)}</span>` : ""}</td>
+            <td class="num"><b>${l.abono ? `${money(l.mensual, l.moneda)}/mes` : money(l.monto, l.moneda)}</b>
+              ${l.liberado > 0 && (l.abono || l.liberado < l.monto) ? `<br><span class="muted" style="font-size:11px">liberado ${money(l.liberado, l.moneda)}</span>` : ""}
+              ${l.pagado ? `<br><span class="muted" style="font-size:11px">pagado ${money(l.pagado, l.moneda)}</span>` : ""}
+              ${l.aCompensar ? `<br><span class="badge vencida" style="font-size:11px">a compensar ${money(l.aCompensar, l.moneda)}</span>` : ""}</td>
             <td><span class="pill" title="${esc(AYUDA[l.estado])}">${ETIQUETA[l.estado]}</span>
               ${l.dias != null && ["Devengada", "ACobrar"].includes(l.estado)
                 ? `<br><span class="muted" style="font-size:11px">hace ${l.dias} días</span>` : ""}</td>
             <td style="white-space:nowrap">
-              ${paga && ["Devengada", "ACobrar"].includes(l.estado)
+              ${paga && (["Devengada", "ACobrar"].includes(l.estado) || (l.abono && l.estado === "Pagada"))
                 ? `<button class="btn sm${l.estado === "ACobrar" ? " primary" : " ghost"}" onclick="registrarPagoComision('${esc(r.marca.id)}','${esc(l.clave)}')">Pagar</button>` : ""}
-              ${i === 0 && !r.marca.pagos.length
+              ${edita && i === 0 && !r.marca.pagos.length
                 ? `<button class="btn sm ghost" onclick="marcarComisionYVolver('${esc(r.marca.origenTipo)}','${esc(r.marca.origenId)}')">Editar</button>` : ""}
             </td>
           </tr>`).join("");
@@ -445,8 +565,9 @@
 
       <p class="muted" style="font-size:13px;margin-top:12px;max-width:80ch">
         El estado avanza solo: <b>Prevista</b> cuando sale la propuesta, <b>Ganada</b> cuando el cliente
-        acepta, <b>A cobrar</b> cuando se registra el cobro en Facturación, y <b>Pagada</b> cuando se carga el pago.
-        Se calcula sobre el neto, sin IVA; un abono mensual, sobre 12 meses. Los totales nunca suman monedas distintas.
+        acepta, <b>A cobrar</b> a medida que se registran los cobros en Facturación, y <b>Pagada</b> cuando se carga el pago.
+        Se calcula sobre el precio sin IVA, menos los costos si se cargaron; un abono se paga mes a mes.
+        Lo pagado de una operación que se anula queda <b>a compensar</b> con la próxima. Los totales nunca suman monedas distintas.
       </p>`;
 
     const set = (k, v) => { f[k] = v; renderComisiones(); };
@@ -474,7 +595,10 @@
       { titulo: "moneda", valor: (x) => x.l?.moneda || "" },
       { titulo: "base", valor: (x) => (x.l ? String(x.l.base).replace(".", ",") : "") },
       { titulo: "comision", valor: (x) => (x.l ? String(x.l.monto).replace(".", ",") : "") },
+      { titulo: "liberado", valor: (x) => (x.l ? String(x.l.liberado).replace(".", ",") : "") },
       { titulo: "pagado", valor: (x) => (x.l ? String(x.l.pagado).replace(".", ",") : "") },
+      { titulo: "a_compensar", valor: (x) => (x.l ? String(x.l.aCompensar).replace(".", ",") : "") },
+      { titulo: "costos", valor: (x) => (x.l ? String(x.l.costos || 0).replace(".", ",") : "") },
       { titulo: "estado", valor: (x) => (x.l ? ETIQUETA[x.l.estado] : "") },
       { titulo: "desde", valor: (x) => x.l?.desde || "" },
     ], "comisiones");
@@ -568,7 +692,7 @@
 
   /** Cantidad de alertas, para el menú. */
   function cantidadAlertas() {
-    try { return CM.alertas(ctx()).length; } catch { return 0; }
+    try { return soloPropias() ? 0 : CM.alertas(ctx()).length; } catch { return 0; }
   }
 
   // ==========================================================================

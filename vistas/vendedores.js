@@ -371,6 +371,10 @@
           <div class="field"><label for="vZona">Zona o territorio</label>
             <input id="vZona" value="${esc(d.zona)}" placeholder="AMBA · Litoral · Chile" /></div>
         </div>
+        <div class="field"><label for="vArea">Parte del reparto del área comercial</label>
+          <select id="vArea"><option value="">Ninguna</option>${CM.REPARTO_INTERNO.map((r) =>
+            `<option value="${esc(r.area)}"${d.areaComision === r.area ? " selected" : ""}>${esc(r.area)} · ${String(r.porcentaje).replace(".", ",")}%</option>`).join("")}</select>
+          <p class="muted" style="font-size:12px;margin:4px 0 0">Si la persona deja de estar, lo pendiente queda para el área hasta que se asigne a otra.</p></div>
         <div class="form-grid">
           <div class="field"><label for="vUsuario">Usuario de la aplicación</label>
             <input id="vUsuario" value="${esc(d.usuarioId || "")}" placeholder="gabriel" />
@@ -412,6 +416,7 @@
       nombre: val("vNombre"), relacion: val("vRelacion"),
       email: val("vEmail"), telefono: val("vTel"), documento: val("vDoc"),
       zona: val("vZona"), usuarioId: val("vUsuario") || null,
+      areaComision: val("vArea"),
       estado: val("vEstado"),
       metaMensual: val("vMeta"), metaMoneda: val("vMetaMon"),
       fechaAlta: val("vAlta"), fechaBaja: val("vBaja"),

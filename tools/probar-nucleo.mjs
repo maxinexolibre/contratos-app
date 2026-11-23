@@ -1832,6 +1832,11 @@ const presuGanado = (over = {}) => presuBase({
   historialEstados: [{ estado: "enviado", fecha: "2026-08-02" }, { estado: "ganado", fecha: "2026-08-10" }],
   ...over,
 });
+// Cobro registrado en Facturación (sin IVA: el presupuesto de prueba no lo incluye).
+const COBRO = (fechaEmision, montoCotizado = 10000, over = {}) => E.ENTIDADES.facturaciones.normalizar({
+  presupuestoId: "pre_1", fechaEmision, montoCotizado, tipoComprobante: "Factura", ...over,
+});
+const porArea = (ls) => Object.fromEntries(ls.map((l) => [l.area || l.nombre, l]));
 const ctxSeg = (over = {}) => ({
   ...ADMIN,
   clientes: [E.ENTIDADES.clientes.normalizar({ id: "cli_1", nombreComercial: "Clínica Ficticia" })],
@@ -1844,7 +1849,7 @@ const ctxSeg = (over = {}) => ({
 
 prueba("seguimiento · el caso tipo: 10% del externo + 4,5% del área en 6:2:1", () => {
   const ls = CM.lineas(MARCA(), ctxSeg(), "2026-08-15");
-  const m = Object.fromEntries(ls.map((l) => [l.nombre, l.monto]));
+  const m = Object.fromEntries(Object.entries(porArea(ls)).map(([k, l]) => [k, l.monto]));
   igual(m["Comercial Externo Ejemplo"], 1000, "10% de 10.000");
   igual(m["Gerencia comercial"], 300, "6/9 de 450");
   igual(m["Diseño"], 100, "2/9 de 450");
@@ -1861,8 +1866,7 @@ prueba("seguimiento · los estados avanzan solos con la operación y el cobro", 
     items: [{ detalle: "x", cantidad: 1, unitario: 10000 }] })] });
   igual(CM.lineas(MARCA(), abierto)[0].estado, "Prevista");
 
-  const cobrado = ctxSeg({ facturaciones: [E.ENTIDADES.facturaciones.normalizar({
-    presupuestoId: "pre_1", fechaEmision: "2026-09-01", tipoComprobante: "Factura" })] });
+  const cobrado = ctxSeg({ facturaciones: [COBRO("2026-09-01")] });
   const l = CM.lineas(MARCA(), cobrado, "2026-09-11")[0];
   igual(l.estado, "ACobrar");
   igual(l.desde, "2026-09-01");
@@ -1871,7 +1875,7 @@ prueba("seguimiento · los estados avanzan solos con la operación y el cobro", 
   const pagada = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", fecha: "2026-09-20", monto: 1000 }] });
   const ls = CM.lineas(pagada, cobrado);
   igual(ls.find((x) => x.tipo === "Externo").estado, "Pagada");
-  igual(ls.find((x) => x.nombre === "Diseño").estado, "ACobrar", "cada uno se paga por separado");
+  igual(ls.find((x) => x.area === "Diseño").estado, "ACobrar", "cada uno se paga por separado");
 
   const perdido = ctxSeg({ presupuestos: [presuBase({ estado: "Rechazado",
     items: [{ detalle: "x", cantidad: 1, unitario: 10000 }] })] });
@@ -1879,14 +1883,13 @@ prueba("seguimiento · los estados avanzan solos con la operación y el cobro", 
 });
 
 prueba("seguimiento · una nota de crédito no cuenta como cobro", () => {
-  const c = ctxSeg({ facturaciones: [E.ENTIDADES.facturaciones.normalizar({
-    presupuestoId: "pre_1", fechaEmision: "2026-09-01", tipoComprobante: "NotaCredito" })] });
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01", 10000, { tipoComprobante: "NotaCredito" })] });
   igual(CM.lineas(MARCA(), c)[0].estado, "Devengada");
 });
 
 prueba("seguimiento · un pago parcial no se cuenta dos veces en los totales", () => {
   const c = ctxSeg({
-    facturaciones: [E.ENTIDADES.facturaciones.normalizar({ presupuestoId: "pre_1", fechaEmision: "2026-09-01" })],
+    facturaciones: [COBRO("2026-09-01")],
     marcasComision: [MARCA({ area: false, pagos: [{ beneficiario: "vnd:vnd_ext", monto: 400 }] })],
   });
   const t = CM.totalesSeguimiento(CM.filasSeguimiento(c));
@@ -1925,7 +1928,7 @@ prueba("seguimiento · una propuesta se comisiona sobre canon neto × meses", ()
   igual(CM.baseOperacion("Propuesta", prop, null).base, 12000);
   const c = ctxSeg({ propuestas: [prop] });
   const ls = CM.lineas(MARCA({ origenTipo: "Propuesta", origenId: "prop_1", externo: null }), c);
-  igual(ls.find((l) => l.nombre === "Gerencia comercial").monto, 360);
+  igual(porArea(ls)["Gerencia comercial"].monto, 360);
   igual(ls[0].estado, "Devengada");
 });
 
@@ -1947,14 +1950,14 @@ prueba("cliente nuevo · su propio ticket y las otras versiones del presupuesto 
 });
 
 prueba("cliente nuevo · con actividad reciente antes del corte, no corresponde", () => {
-  const c = ctxSeg({ presupuestos: [presuBase({ id: "pre_v", numero: "P20251105", ticketId: "", fecha: "2025-11-05" })] });
+  const c = ctxSeg({ presupuestos: [presuBase({ id: "pre_v", numero: "P20251105", ticketId: "", fecha: "2025-11-05", estado: "Aprobado" })] });
   const el = CM.elegibilidad("Presupuesto", presuBase(), c);
   igual(el.criterio, "ClienteExistente");
   igual(el.lleva, false);
 });
 
 prueba("cliente nuevo · algo aislado de hace más de 2 años: pregunta", () => {
-  const c = ctxSeg({ contratos: [{ id: "ct_v", numero: "C-2022", clienteId: "cli_1", fechaFirma: "2022-05-01" }] });
+  const c = ctxSeg({ contratos: [{ id: "ct_v", numero: "C-2022", clienteId: "cli_1", estado: "Finalizado", fechaFirma: "2022-05-01" }] });
   const el = CM.elegibilidad("Presupuesto", presuBase(), c);
   igual(el.criterio, "Consulta");
   igual(el.lleva, null, "no decide sola");
@@ -1966,7 +1969,7 @@ prueba("cliente nuevo · la historia de otra sede del mismo grupo cuenta", () =>
       E.ENTIDADES.clientes.normalizar({ id: "cli_1", nombreComercial: "Sede Norte", grupo: "Red Ficticia" }),
       E.ENTIDADES.clientes.normalizar({ id: "cli_2", nombreComercial: "Sede Sur", grupo: "Red Ficticia" }),
     ],
-    presupuestos: [presuBase({ id: "pre_s", numero: "P20251201", clienteId: "cli_2", ticketId: "", fecha: "2025-12-01" })],
+    presupuestos: [presuBase({ id: "pre_s", numero: "P20251201", clienteId: "cli_2", ticketId: "", fecha: "2025-12-01", estado: "Aprobado" })],
   });
   igual(CM.elegibilidad("Presupuesto", presuBase(), c).criterio, "ClienteExistente");
 });
@@ -2021,12 +2024,13 @@ prueba("reglas · sin comisión no puede tener a quién pagarle", () => {
     MARCA({ lleva: false, area: false, externo: null, criterio: "ClienteExistente" }), null, ctxSeg()));
 });
 
-prueba("reglas · registrar pagos es de administración y no supera lo que corresponde", () => {
+prueba("reglas · registrar pagos es del gerente o administración y no supera lo que corresponde", () => {
   const ant = MARCA();
   const conPago = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1000 }] });
   rechaza("NX-011", () => R.validar("marcasComision", "editar", conPago, ant,
-    ctxSeg({ rol: "gerente_comercial" })));
-  cierto(R.validar("marcasComision", "editar", conPago, ant, ctxSeg({ rol: "gerente_administrativo" })));
+    ctxSeg({ rol: "direccion" })));
+  cierto(R.validar("marcasComision", "editar", conPago, ant, ctxSeg({ rol: "gerente_comercial" })),
+    "el gerente registra los pagos");
   rechaza("NX-094", () => R.validar("marcasComision", "editar",
     MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1500 }] }), ant, ctxSeg()));
   rechaza("NX-041", () => R.validar("marcasComision", "editar",
@@ -2061,7 +2065,7 @@ prueba("adaptador · quién trajo el lead sobrevive al ida y vuelta", () => {
 
 prueba("alertas · comisión a cobrar hace más de 30 días que nadie reclamó", () => {
   const c = ctxSeg({
-    facturaciones: [E.ENTIDADES.facturaciones.normalizar({ presupuestoId: "pre_1", fechaEmision: "2026-09-01" })],
+    facturaciones: [COBRO("2026-09-01")],
     marcasComision: [MARCA({ area: false })],
   });
   igual(CM.alertas(c, "2026-09-20").length, 0, "todavía en plazo");
@@ -2073,7 +2077,7 @@ prueba("alertas · comisión a cobrar hace más de 30 días que nadie reclamó",
 
 prueba("alertas · una por operación aunque cobren varios", () => {
   const c = ctxSeg({
-    facturaciones: [E.ENTIDADES.facturaciones.normalizar({ presupuestoId: "pre_1", fechaEmision: "2026-09-01" })],
+    facturaciones: [COBRO("2026-09-01")],
     marcasComision: [MARCA()],
   });
   const a = CM.alertas(c, "2026-10-15");
@@ -2096,6 +2100,130 @@ prueba("alertas · venta ganada desde el corte que nunca se marcó", () => {
   igual(a.map((x) => x.numero), ["P20260801"], "lo anterior al corte no se reclama");
   igual(a[0].tipo, "SinMarcar");
   igual(CM.operacionesPendientesDeMarca(ctxSeg({ marcasComision: [MARCA()] })).length, 0);
+});
+
+// --- Respuestas de Maxi (2026-11-23) --------------------------------------
+
+prueba("venta de equipo · los costos se descuentan antes de calcular", () => {
+  const ls = CM.lineas(MARCA({ costos: 4000 }), ctxSeg());
+  igual(porArea(ls)["Comercial Externo Ejemplo"].monto, 600, "10% de (10.000 − 4.000)");
+  igual(E.ENTIDADES.marcasComision.normalizar({ origenId: "x" }).costos, null, "sin costos no es costo 0");
+});
+
+prueba("cuotas · se libera la parte de lo que el cliente pagó", () => {
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01", 4000)] });
+  const ext = porArea(CM.lineas(MARCA(), c, "2026-09-05"))["Comercial Externo Ejemplo"];
+  igual(ext.liberado, 400, "10% de 4.000 cobrados");
+  igual(ext.pendiente, 400);
+  igual(ext.estado, "ACobrar");
+  // Se paga lo liberado: queda esperando la próxima cuota.
+  const pagada = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 400 }] });
+  const l2 = porArea(CM.lineas(pagada, c))["Comercial Externo Ejemplo"];
+  igual(l2.estado, "Devengada", "faltan cuotas");
+  const t = CM.totalesSeguimiento([{ lineas: CM.lineas(pagada, c) }]);
+  igual(t.Pagada.USD, 400);
+  igual(t.Devengada.USD, 600 + 270, "lo que falta liberar: externo 600 + área 4,5% de 6.000");
+});
+
+prueba("cuotas · con costos, cada cuota libera en proporción", () => {
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01", 5000)] });
+  const ext = porArea(CM.lineas(MARCA({ costos: 4000 }), c))["Comercial Externo Ejemplo"];
+  igual(ext.liberado, 300, "mitad cobrada de una comisión de 600");
+});
+
+prueba("cuotas · una venta única no libera más que el total", () => {
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01"), COBRO("2026-09-02", 2000)] });
+  igual(porArea(CM.lineas(MARCA(), c))["Comercial Externo Ejemplo"].liberado, 1000);
+});
+
+prueba("abono · se libera mes a mes y sigue mientras el cliente pague", () => {
+  const abono = presuGanado({ economico: { moneda: "USD", recurrencia: "mensual" },
+    items: [{ detalle: "Abono", cantidad: 1, unitario: 1000 }] });
+  const meses = ["2026-09", "2026-10", "2026-11"].map((m) => COBRO(`${m}-05`, 1000, { periodoCobrado: m }));
+  const c = ctxSeg({ presupuestos: [abono], facturaciones: meses });
+  const ext = porArea(CM.lineas(MARCA(), c))["Comercial Externo Ejemplo"];
+  igual(ext.mensual, 100, "10% de un mes");
+  igual(ext.liberado, 300, "tres meses cobrados");
+  const al = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 300 }] });
+  igual(porArea(CM.lineas(al, c))["Comercial Externo Ejemplo"].estado, "Pagada", "al día");
+  const trece = Array.from({ length: 13 }, (_, i) => COBRO(`2027-${String((i % 12) + 1).padStart(2, "0")}-05`, 1000));
+  igual(porArea(CM.lineas(MARCA(), ctxSeg({ presupuestos: [abono], facturaciones: trece })))["Comercial Externo Ejemplo"].liberado,
+    1300, "sin tope: una renovación vuelve a comisionar");
+});
+
+prueba("una nota de crédito resta lo liberado", () => {
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01"), COBRO("2026-09-10", 3000, { tipoComprobante: "NotaCredito" })] });
+  igual(porArea(CM.lineas(MARCA(), c))["Comercial Externo Ejemplo"].liberado, 700);
+});
+
+prueba("a compensar · pagado y después anulado queda como saldo de la persona", () => {
+  const perdido = presuBase({ estado: "Anulado", items: [{ detalle: "x", cantidad: 1, unitario: 10000 }] });
+  const m = MARCA({ area: false, pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1000 }] });
+  const c = ctxSeg({ presupuestos: [perdido], marcasComision: [m] });
+  const l = CM.lineas(m, c)[0];
+  igual(l.estado, "Anulada");
+  igual(l.aCompensar, 1000);
+  igual(CM.saldosACompensar(c, "vnd:vnd_ext", "USD"), [{ marcaId: "mco_1", numero: "P20260801", monto: 1000 }]);
+  igual(CM.totalesSeguimiento(CM.filasSeguimiento(c)).ACompensar.USD, 1000);
+  // Se compensa: un ajuste negativo en la operación perdida cierra el saldo.
+  const cerrada = { ...m, pagos: [...m.pagos, { beneficiario: "vnd:vnd_ext", tipo: "Ajuste", monto: -1000, referencia: "Compensado en P2" }] };
+  igual(CM.lineas(E.ENTIDADES.marcasComision.normalizar(cerrada), c)[0].aCompensar, 0);
+  igual(CM.lineas(E.ENTIDADES.marcasComision.normalizar(cerrada), c)[0].pagadoEfectivo, 1000,
+    "el ajuste no devuelve la plata: la que salió, salió");
+});
+
+prueba("a compensar · la compensación cuenta como pagado pero no como plata que salió", () => {
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01")] });
+  const m = MARCA({ area: false, pagos: [
+    { beneficiario: "vnd:vnd_ext", tipo: "Compensacion", monto: 300, compensaOrigen: "P1" },
+    { beneficiario: "vnd:vnd_ext", monto: 700 }] });
+  const l = CM.lineas(m, c)[0];
+  igual(l.estado, "Pagada");
+  igual(l.pagadoEfectivo, 700);
+});
+
+prueba("pagos · en pesos guarda el TC; sin TC no se acepta", () => {
+  const ant = MARCA();
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01")] });
+  const sinTc = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1000, monedaPago: "ARS", montoPagado: 1450000 }] });
+  rechaza("NX-040", () => R.validar("marcasComision", "editar", sinTc, ant, c));
+  const ok = MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 1000, monedaPago: "ARS", montoPagado: 1450000,
+    tcValor: 1450, tcFecha: "2026-09-01", facturaComercial: "C-0001-00000012" }] });
+  cierto(R.validar("marcasComision", "editar", ok, ant, c));
+  igual(ok.pagos[0].tcValor, 1450);
+  igual(ok.pagos[0].facturaComercial, "C-0001-00000012");
+  igual(MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: 10 }] }).pagos[0].tcValor, null, "en dólares no lleva TC");
+});
+
+prueba("pagos · solo un ajuste puede restar, y con motivo", () => {
+  const ant = MARCA();
+  rechaza("NX-040", () => R.validar("marcasComision", "editar",
+    MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", monto: -100 }] }), ant, ctxSeg()));
+  rechaza("NX-092", () => R.validar("marcasComision", "editar",
+    MARCA({ pagos: [{ beneficiario: "vnd:vnd_ext", tipo: "Ajuste", monto: -100 }] }), ant, ctxSeg()));
+});
+
+prueba("el TC del cobro en pesos se sugiere para pagar la comisión", () => {
+  const c = ctxSeg({ facturaciones: [COBRO("2026-09-01", 10000, { monedaLiquidacion: "ARS", tcUnidad: "USD",
+    tcValor: 1450, tcFecha: "2026-09-01", numeroComprobante: "A-0001-00000077" })] });
+  igual(CM.lineas(MARCA(), c)[0].tcSugerido, { valor: 1450, fecha: "2026-09-01", comprobante: "A-0001-00000077" });
+});
+
+prueba("el reparto del área va a personas", () => {
+  const ana = E.ENTIDADES.vendedores.normalizar({ id: "vnd_dis", nombre: "Persona Diseño", areaComision: "Diseño" });
+  const ls = porArea(CM.lineas(MARCA(), ctxSeg({ vendedores: [EXT, ana] })));
+  igual(ls["Diseño"].nombre, "Diseño · Persona Diseño");
+  igual(ls["Diseño"].vendedorId, "vnd_dis");
+  igual(ls["Marketing"].nombre, "Marketing · sin asignar");
+  igual(ls["Diseño"].clave, "area:Diseño", "el pago sigue siendo del área si cambia la persona");
+});
+
+prueba("cliente nuevo · un ticket o un presupuesto rechazado no lo hacen cliente", () => {
+  const c = ctxSeg({
+    tickets: [ticketBase(), ticketBase({ id: "tk_v", fecha: "2025-06-01" })],
+    presupuestos: [presuBase(), presuBase({ id: "pre_r", numero: "P20250601", ticketId: "tk_v", fecha: "2025-06-01", estado: "Rechazado" })],
+  });
+  igual(CM.elegibilidad("Presupuesto", presuBase(), c).criterio, "ClienteNuevo");
 });
 
 // ===========================================================================
