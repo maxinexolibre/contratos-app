@@ -41,7 +41,11 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      - uses: actions/upload-pages-artifact@v3
+      # v3 dejó de funcionar el 2026-11-24: subía el paquete, pero
+      # deploy-pages no lo encontraba ("No artifacts named github-pages") y
+      # fallaron varios despliegues seguidos. Con v4 el paquete se sube por
+      # el camino que espera deploy-pages.
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: .
 
