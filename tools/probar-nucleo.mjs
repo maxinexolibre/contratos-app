@@ -2110,6 +2110,38 @@ prueba("venta de equipo · los costos se descuentan antes de calcular", () => {
   igual(E.ENTIDADES.marcasComision.normalizar({ origenId: "x" }).costos, null, "sin costos no es costo 0");
 });
 
+prueba("costos en pesos · se restan al TC de la factura", () => {
+  // 3.000 USD facturados a 1.537 = 4.611.000 ARS; viáticos 611.000 ARS.
+  const presu = presuGanado({ items: [{ detalle: "Servicio", cantidad: 1, unitario: 3000 }] });
+  const cobro = COBRO("2026-09-01", 3000, { monedaLiquidacion: "ARS", tcUnidad: "USD", tcValor: 1537 });
+  const c = ctxSeg({ presupuestos: [presu], facturaciones: [cobro] });
+  const ls = porArea(CM.lineas(MARCA({ costos: 611000, costosMoneda: "ARS" }), c));
+  const g = ls["Gerencia comercial"];
+  igual(E.money(g.base), 2602.47, "3.000 − 611.000/1.537");
+  igual(Math.round(g.base * 1537), 4000000, "en pesos: 4.611.000 − 611.000");
+  igual(g.montoPesos, 120000, "3% de 4.000.000, sin el desvío del redondeo a centavos");
+  igual(ls["Diseño"].montoPesos, 40000);
+  igual(ls["Marketing"].montoPesos, 20000);
+  igual(g.costosTC, 1537);
+  cierto(g.detalle.includes("$ 611.000 al TC 1.537"), g.detalle);
+});
+
+prueba("costos en pesos · con TC cargado a mano manda ese", () => {
+  const c = ctxSeg({ presupuestos: [presuGanado({ items: [{ detalle: "Servicio", cantidad: 1, unitario: 3000 }] })] });
+  const l = porArea(CM.lineas(MARCA({ costos: 600000, costosMoneda: "ARS", costosTC: 1500 }), c))["Gerencia comercial"];
+  igual(E.money(l.base), 2600);
+  igual(l.montoPesos, 117000, "3% de 3.900.000");
+});
+
+prueba("costos en pesos · sin factura ni TC no se restan y se avisa", () => {
+  const c = ctxSeg({ presupuestos: [presuGanado({ items: [{ detalle: "Servicio", cantidad: 1, unitario: 3000 }] })] });
+  const l = porArea(CM.lineas(MARCA({ costos: 600000, costosMoneda: "ARS" }), c))["Gerencia comercial"];
+  igual(l.base, 3000, "no se inventa un TC");
+  cierto(l.costosSinTC);
+  igual(E.ENTIDADES.marcasComision.normalizar({ origenId: "x" }).costosMoneda, null, "marcas viejas: moneda de la operación");
+  igual(E.ENTIDADES.marcasComision.normalizar({ origenId: "x" }).costosTC, null);
+});
+
 prueba("cuotas · se libera la parte de lo que el cliente pagó", () => {
   const c = ctxSeg({ facturaciones: [COBRO("2026-09-01", 4000)] });
   const ext = porArea(CM.lineas(MARCA(), c, "2026-09-05"))["Comercial Externo Ejemplo"];

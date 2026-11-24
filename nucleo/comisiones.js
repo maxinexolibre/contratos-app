@@ -700,9 +700,10 @@
    *   bruto: total sin IVA esperado; base: bruto menos costos; mensual: lo de
    *   un mes en un abono, null si es una venta única.
    */
-  function baseOperacion(origenTipo, op, marca) {
+  function baseOperacion(origenTipo, op, marca, tcFactura = null) {
     const moneda = op?.economico?.moneda || "USD";
-    const costos = marca?.costos ?? 0;
+    const cc = costosEnMoneda(marca, moneda, tcFactura);
+    const costos = cc.monto;
     if (marca?.baseManual != null) {
       return { base: marca.baseManual, bruto: marca.baseManual, costos: 0, moneda, mensual: null,
         detalle: "base cargada a mano" };
@@ -722,9 +723,32 @@
       bruto = op.neto;
       detalle = "precio sin IVA";
     }
-    const base = E.money(Math.max(0, bruto - costos));
-    if (costos > 0) detalle += ` menos costos ${Math.round(costos).toLocaleString("es-AR")}`;
-    return { base, bruto, costos, moneda, mensual, detalle };
+    const base = cc.tc ? Math.round(Math.max(0, bruto - costos) * 1e6) / 1e6 : E.money(Math.max(0, bruto - costos));
+    if (cc.texto) detalle += ` menos costos ${cc.texto}`;
+    return { base, bruto, costos, moneda, mensual, detalle, costosSinTC: cc.sinTC, costosTC: cc.tc };
+  }
+
+  /**
+   * Los costos llevados a la moneda de la operación. Una venta en USD se
+   * factura en pesos al TC del día de la factura, y los viáticos se pagan en
+   * pesos: se pasan a USD con ese mismo TC, así la base da lo mismo que
+   * restar en pesos (ej.: 3.000 USD a 1.500 = 4.500.000 ARS, menos 600.000
+   * ARS de viáticos, da 3.900.000 ARS = 2.600 USD).
+   *
+   * Sin TC todavía (no se facturó y no se cargó a mano) los costos no se
+   * restan y se avisa: restar con un TC inventado sería peor.
+   */
+  function costosEnMoneda(marca, moneda, tcFactura) {
+    const monto = marca?.costos ?? 0;
+    if (!(monto > 0)) return { monto: 0, texto: "", sinTC: false, tc: null };
+    const enPesos = marca.costosMoneda === "ARS" && moneda !== "ARS";
+    if (!enPesos) return { monto, texto: Math.round(monto).toLocaleString("es-AR"), sinTC: false, tc: null };
+    const tc = marca.costosTC > 0 ? marca.costosTC : tcFactura > 0 ? tcFactura : null;
+    const ars = `$ ${Math.round(monto).toLocaleString("es-AR")}`;
+    if (!tc) return { monto: 0, texto: `${ars} (sin restar: falta el TC)`, sinTC: true, tc: null };
+    // Sin redondear a centavos: a 1.535 pesos por dólar, un centavo son
+    // 15 pesos, y la comisión en pesos tiene que dar lo mismo que restar en pesos.
+    return { monto: Math.round((monto / tc) * 1e6) / 1e6, texto: `${ars} al TC ${tc.toLocaleString("es-AR")}`, sinTC: false, tc };
   }
 
   /** En qué quedó la operación: Abierta, Ganada o Perdida, y desde cuándo. */
@@ -767,6 +791,9 @@
       .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
   }
 
+  /** TC de la primera factura en pesos: el que pesificó la venta. */
+  const tcDeFactura = (cs) => cs.find((c) => c.monto > 0 && c.tcValor > 0)?.tcValor || null;
+
   /** Fecha del primer cobro, o null. */
   function fechaCobro(origenTipo, op, facturaciones) {
     return cobros(origenTipo, op, facturaciones).find((c) => c.monto > 0)?.fecha || null;
@@ -791,9 +818,9 @@
     if (!marca.lleva) return [];
     const op = operacionDe(marca, ctx);
     if (!op && marca.baseManual == null) return [];
-    const b = baseOperacion(marca.origenTipo, op, marca);
-    const etapa = etapaOperacion(marca.origenTipo, op);
     const cs = cobros(marca.origenTipo, op, ctx.facturaciones);
+    const b = baseOperacion(marca.origenTipo, op, marca, tcDeFactura(cs));
+    const etapa = etapaOperacion(marca.origenTipo, op);
     const abono = esAbono(marca.origenTipo, op);
     const proporcion = b.bruto > 0 ? b.base / b.bruto : 0;
 
@@ -850,6 +877,11 @@
       const ultimoCobro = [...cs].reverse().find((c) => c.monto > 0) || null;
       return {
         ...it, base: b.base, bruto: b.bruto, costos: b.costos, moneda: b.moneda, abono,
+        costosSinTC: b.costosSinTC, costosTC: b.costosTC,
+        // Lo que da en pesos al TC de los costos o de la factura: las
+        // comisiones se liquidan casi siempre en pesos.
+        montoPesos: b.moneda !== "ARS" && (b.costosTC || ultimoCobro?.tcValor)
+          ? E.money(b.base * pct * (b.costosTC || ultimoCobro.tcValor)) : null,
         monto, mensual: b.mensual != null ? E.money(b.mensual * proporcion * pct) : null,
         cobrado: E.money(cs.reduce((s, c) => s + c.monto, 0)),
         liberado, pagado,

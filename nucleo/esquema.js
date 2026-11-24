@@ -851,6 +851,14 @@
           // Costos que se descuentan antes de calcular (venta de equipo: parte,
           // flete, importación). null = no se cargaron.
           costos: r.costos == null || r.costos === "" ? null : money(r.costos),
+          // Los costos se pagan casi siempre en pesos (viáticos, flete local)
+          // aunque la operación se cotice en USD. null = en la moneda de la
+          // operación, como se cargaba antes.
+          costosMoneda: r.costosMoneda == null ? null : enumerado(r.costosMoneda, PAGO_MONEDA, null),
+          // Pesos por dólar para pasar los costos a la moneda de la operación.
+          // null = se usa el TC de la factura al cliente, que es el que pesificó
+          // la venta (Maxi, 2026-11-24).
+          costosTC: r.costosTC == null || r.costosTC === "" ? null : esNumero(r.costosTC, null),
           // Cargada después de los hechos (operaciones anteriores al seguimiento).
           historico: esBool(r.historico),
           pagos: esLista(r.pagos).map((p) => {
