@@ -77,12 +77,25 @@
    * documento.
    */
   function verDocumento(tipo, id) {
+    const doc = htmlDocumento(tipo, id);
+    if (!doc) return;
+    abrir(doc.titulo, `<div class="visor-doc" id="visorDoc">${doc.html}</div>`, `
+      <button class="btn sm" onclick="imprimirDesdeVisor()">🖨 Imprimir</button>
+      <button class="btn sm" onclick="${doc.descarga}">⬇ .docx</button>`);
+  }
+
+  /**
+   * El documento armado, sin abrir el visor. Lo usa también la ventana de
+   * «¿Lleva comisión?» para mostrar el presupuesto sin salir de ahí.
+   * @returns {{html, titulo, descarga}|null}
+   */
+  function htmlDocumento(tipo, id) {
     const st = global.state;
     let html, titulo, descarga;
 
     if (tipo === "contrato") {
       const c = (st.data || []).find((x) => x.id === id);
-      if (!c) return;
+      if (!c) return null;
       const m = global.NEXO_CONTRATO.construirContrato(c, { plantilla: false });
       html = global.renderContratoHTML(m);
       titulo = `${c.numero} · ${c.cliente?.nombreComercial || ""}`;
@@ -90,7 +103,7 @@
     } else if (tipo === "propuesta") {
       // Primera etapa comercial: documento propio, sin cláusulas (propuesta.js).
       const p = (st.propuestas || []).find((x) => x.id === id);
-      if (!p) return;
+      if (!p) return null;
       const cli = (st.clientes || []).find((c) => c.id === p.clienteId) || {};
       const m = global.NEXO_PROPUESTA.construirPropuesta(p, cli);
       html = global.NEXO_PROPUESTA.renderPropuestaHTML(m);
@@ -98,16 +111,13 @@
       descarga = `generarPropuestaDocx('${esc(id)}')`;
     } else {
       const p = (st.presupuestos || []).find((x) => x.id === id);
-      if (!p) return;
+      if (!p) return null;
       const m = global.NEXO_PRESUPUESTO.construirPresupuesto(p, { plantilla: false });
       html = global.renderPresupuestoHTML(m);
       titulo = `${p.numero} · ${p.cliente?.nombreComercial || ""}`;
       descarga = `generarPresupuestoDocx('${esc(id)}')`;
     }
-
-    abrir(titulo, `<div class="visor-doc" id="visorDoc">${html}</div>`, `
-      <button class="btn sm" onclick="imprimirDesdeVisor()">🖨 Imprimir</button>
-      <button class="btn sm" onclick="${descarga}">⬇ .docx</button>`);
+    return { html, titulo, descarga };
   }
 
   /**
@@ -206,7 +216,7 @@
   }
 
   Object.assign(global, {
-    verDocumento, verArchivo, descargarArchivo,
+    verDocumento, htmlDocumento, verArchivo, descargarArchivo,
     cerrarVisor: cerrar, imprimirDesdeVisor,
   });
 })(typeof window !== "undefined" ? window : globalThis);

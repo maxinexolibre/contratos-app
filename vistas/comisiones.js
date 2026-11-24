@@ -98,6 +98,58 @@
     return normalizado;
   }
 
+  /**
+   * Alta rápida de un comercial desde la ventana de la comisión. Si se carga
+   * un %, queda como acuerdo vigente desde la fecha de la operación, así se
+   * propone también acá.
+   */
+  async function altaComercial(datos, porcentaje, desde, moneda) {
+    const c = ctx();
+    const v = E.ENTIDADES.vendedores.normalizar({ ...datos, estado: "Activo", fechaAlta: E.hoy() });
+    try { R.validar("vendedores", "crear", v, null, c); } catch (e) {
+      global.toast(e.sugerencia ? `${e.message} — ${e.sugerencia}` : e.message, true, true);
+      return null;
+    }
+    let acuerdo = null;
+    if (porcentaje != null) {
+      acuerdo = E.ENTIDADES.acuerdosComision.normalizar({
+        vendedorId: v.id, modalidad: "Porcentaje", porcentaje, base: "Neto", moneda,
+        nombre: `Acuerdo ${E.hoy()}`, vigenciaDesde: desde < E.hoy() ? desde : E.hoy(), pagoTrasCobro: true,
+      });
+      try { R.validar("acuerdosComision", "crear", acuerdo, null, { ...c, vendedores: [...c.vendedores, v] }); } catch (e) {
+        global.toast(e.sugerencia ? `${e.message} — ${e.sugerencia}` : e.message, true, true);
+        return null;
+      }
+    }
+    global.state.vendedores = [...(global.state.vendedores || []), v];
+    try {
+      await global.persist(`Vendedor ${v.nombre}`, "vendedores", v);
+      if (acuerdo) {
+        global.state.acuerdosComision = [...(global.state.acuerdosComision || []), acuerdo];
+        await global.persist(`Acuerdo de comisión · ${v.nombre}`, "acuerdosComision", acuerdo);
+      }
+    } catch (e) {
+      global.toast("Error al guardar: " + e.message, true, true);
+      return null;
+    }
+    return v;
+  }
+
+  /** Asigna en el ticket quién trajo el lead, con quién y cuándo. */
+  async function asignarLead(ticket, vendedorId) {
+    const antes = { traidoPor: ticket.traidoPor, traidoPorAsignacion: ticket.traidoPorAsignacion };
+    ticket.traidoPor = vendedorId;
+    ticket.traidoPorAsignacion = vendedorId ? { por: global.state?.user || "—", fecha: E.hoy() } : null;
+    try {
+      await global.persist(`Ticket ${ticket.numero}: trajo el lead ${vendedorId || "Nexo"}`, "tickets", ticket);
+      return true;
+    } catch (e) {
+      Object.assign(ticket, antes);
+      global.toast("No se pudo asignar en el ticket: " + e.message, true, true);
+      return false;
+    }
+  }
+
   function cerrarModal() {
     document.getElementById("ovComision")?.remove();
   }
@@ -132,8 +184,6 @@
     const historico = !!(opciones.historico || existente?.historico);
     const sug = CM.sugerirMarca(origenTipo, op, c);
     const cliente = c.clientes.find((x) => x.id === op.clienteId);
-    const externos = c.vendedores.filter((v) => v.estado === "Activo" || v.id === existente?.externo?.vendedorId);
-    const traido = c.vendedores.find((v) => v.id === sug.traidoPor);
 
     // Borrador de la decisión: lo existente, o lo que propone la app.
     const d = existente ? structuredClone(existente) : {
@@ -144,6 +194,21 @@
       primeraActividad: sug.primeraActividad, historico, motivo: "", pagos: [],
     };
     const conPagos = (existente?.pagos || []).length > 0;
+
+    // Quién trajo el lead se asigna desde acá mismo (Maxi, 2026-11-24): antes
+    // había que salir, buscar el ticket, editarlo y volver a empezar.
+    const ticket = sug.ticketId ? (global.state.tickets || []).find((t) => t.id === sug.ticketId) || null : null;
+    const puedeAsignar = P.capacidad(rol(), "asignar_vendedor");
+    const puedeAlta = !!P.puede(rol(), "vendedores", "crear");
+    // Sin ticket no hay dónde asentar quién trajo el lead. En una carga
+    // histórica alcanza con la comisión: la regla del ticket no se le aplica.
+    // Quien no puede asignar igual elige si el que figura en el ticket cobra o no.
+    const soloElTicket = !historico && !!ticket && !puedeAsignar;
+    const extEditable = !conPagos && (historico || (!!ticket && (puedeAsignar || !!ticket.traidoPor)));
+    const fechaOp = (origenTipo === "Propuesta" ? op.fechas?.creado : op.fecha) || E.hoy();
+    const comerciales = () => (global.state.vendedores || [])
+      .filter((v) => soloElTicket ? v.id === ticket.traidoPor
+        : v.estado !== "Inactivo" || v.id === d.externo?.vendedorId || v.id === sug.traidoPor);
     // En una venta de equipo la comisión va sobre el precio menos los costos.
     const esEquipo = origenTipo === "Presupuesto" && op.tipo === "venta" && /equipo/i.test(op.subtipo || "");
     // Una venta en USD se factura en pesos al TC del día: los costos en pesos
@@ -160,10 +225,15 @@
         ClienteNuevo: "✓ Corresponde", ClienteExistente: "✕ No corresponde", Consulta: "? Hay que decidir",
       }[sug.criterio];
 
-      ov.innerHTML = `<div class="modal" style="max-width:620px">
+      ov.innerHTML = `<div class="modal" style="max-width:620px" id="mcModal">
+        <div id="mcSub" style="display:none"></div>
+        <div id="mcPrincipal">
         <div class="kicker">${historico ? "Carga histórica" : "Antes de enviar"}</div>
         <h2>¿Lleva comisión?</h2>
-        <p class="muted" style="margin:2px 0 14px">${esc(op.numero)} · ${esc(cliente?.nombreComercial || "cliente sin identificar")}</p>
+        <div style="display:flex;align-items:center;gap:10px;margin:2px 0 14px;flex-wrap:wrap">
+          <span class="muted" style="flex:1">${esc(op.numero)} · ${esc(cliente?.nombreComercial || "cliente sin identificar")}</span>
+          <button class="btn sm ghost" type="button" id="mcVerDoc">Ver ${origenTipo === "Propuesta" ? "propuesta" : "presupuesto"}</button>
+        </div>
 
         <div class="card interno" style="margin-bottom:14px">
           <b>${criterioTxt}</b> · ${esc(sug.explicacion)}
@@ -192,23 +262,14 @@
             <span class="muted">(${CM.REPARTO_INTERNO.map((r) => `${esc(r.area)} ${pct(r.porcentaje)}`).join(" · ")})</span>
           </label></div>
 
-          ${historico ? `<div class="form-grid">
-            <div class="field"><label for="mcExt">Comercial externo</label>
-              <select id="mcExt"${conPagos ? " disabled" : ""}><option value="">— Ninguno —</option>${externos.map((v) =>
-                `<option value="${esc(v.id)}"${d.externo?.vendedorId === v.id ? " selected" : ""}>${esc(v.nombre)}</option>`).join("")}</select></div>
-            <div class="field"><label for="mcPct">% sin IVA</label>
-              <input type="number" id="mcPct" min="0" max="100" step="0.5" value="${d.externo?.porcentaje ?? ""}"${conPagos ? " disabled" : ""}></div>
-          </div>` : traido ? `<div class="form-grid">
-            <div class="field"><label style="font-weight:400">
-              <input type="checkbox" id="mcExtOn"${d.externo ? " checked" : ""}${conPagos ? " disabled" : ""}>
-              <b>${esc(traido.nombre)}</b> · trajo el lead</label></div>
+          <div class="form-grid">
+            <div class="field"><label for="mcExt">Comercial que trajo el lead</label>
+              <select id="mcExt"${extEditable ? "" : " disabled"}></select>
+              <p class="muted" id="mcExtAyuda" style="font-size:12px;margin:4px 0 0"></p></div>
             <div class="field"><label for="mcPct">% sin IVA</label>
               <input type="number" id="mcPct" min="0" max="100" step="0.5" value="${d.externo?.porcentaje ?? ""}"${conPagos ? " disabled" : ""}
                 placeholder="sin acuerdo cargado"></div>
-          </div>` : `<p class="muted" style="font-size:13px">
-            El lead es propio de Nexo: no tiene asignado un comercial externo.
-            ${sug.ticketId ? `Si lo trajo un externo, asignáselo en el <a href="#tkdetalle/${esc(sug.ticketId)}">ticket</a> antes de enviar.`
-              : "Para que cobre un externo, la operación tiene que salir de un ticket con quién trajo el lead."}</p>`}
+          </div>
 
           <div class="form-grid">
             <div class="field"><label for="mcCostos">Costos a descontar <span class="muted">${esEquipo
@@ -236,6 +297,7 @@
           <button class="btn ghost" id="mcCancelar">Cancelar</button>
           <button class="btn primary" id="mcGuardar">${opciones.alGuardar || "Guardar"}</button>
         </div>
+        </div>
       </div>`;
       document.body.appendChild(ov);
       ov.style.display = "flex";
@@ -253,18 +315,14 @@
         const tcv = $("mcCostosTC").value;
         d.costosTC = d.costosMoneda === "ARS" && tcv !== "" ? Number(tcv) : null;
         d.area = $("mcArea").checked;
-        const p = Number($("mcPct")?.value);
-        if (historico) {
-          const id = $("mcExt").value;
-          d.externo = id ? { vendedorId: id, porcentaje: p } : null;
-        } else if (traido) {
-          d.externo = $("mcExtOn").checked ? { vendedorId: traido.id, porcentaje: p } : null;
-        } else {
-          d.externo = null;
-        }
+        const id = $("mcExt").value;
+        const pv = $("mcPct").value;
+        d.externo = id ? { vendedorId: id, porcentaje: pv === "" ? null : Number(pv) } : null;
       };
       const refrescar = () => {
+        if (!$("mcExt") || $("mcPrincipal").style.display === "none") return;
         leer();
+        ayudaComercial();
         $("mcQuienes").style.display = d.lleva ? "" : "none";
         $("mcTCCampo").style.display = d.costosMoneda === "ARS" ? "" : "none";
         const contradice = (sug.criterio === "ClienteNuevo" && d.lleva === false) ||
@@ -289,6 +347,115 @@
             : "Se libera a medida que el cliente paga."}</p>`
           : `<span class="muted">Marcá quién cobra.</span>`;
       };
+      // --- Comercial que trajo el lead ---------------------------------
+      const NUEVO = "__nuevo";
+      const pintarComerciales = (elegido) => {
+        const sel = $("mcExt");
+        sel.innerHTML = `<option value="">Ninguno · propio de Nexo</option>${comerciales().map((v) =>
+          `<option value="${esc(v.id)}"${v.id === elegido ? " selected" : ""}>${esc(v.nombre)} · ${esc(v.relacion)}</option>`).join("")}${
+          extEditable && puedeAlta && !soloElTicket ? `<option value="${NUEVO}">+ Dar de alta un comercial…</option>` : ""}`;
+        sel.dataset.anterior = sel.value;
+      };
+      const ayudaComercial = () => {
+        const id = $("mcExt").value || null;
+        const nombreTk = ticket ? `el ticket ${esc(ticket.numero)}` : "";
+        let txt;
+        if (conPagos) txt = "Ya tiene pagos: no se puede cambiar.";
+        else if (!ticket && !historico) txt = "La operación no salió de un ticket: no hay dónde asignar quién trajo el lead.";
+        else if (!ticket) txt = "Carga histórica: queda solo en la comisión.";
+        else if (!puedeAsignar) txt = `Quién trajo el lead lo asigna gerencia comercial en ${nombreTk}.`;
+        else if (id === (ticket.traidoPor || null)) txt = id ? `Asignado en ${nombreTk}.` : "";
+        else txt = `Al guardar queda asignado en ${nombreTk}.`;
+        $("mcExtAyuda").innerHTML = txt;
+      };
+      // El % sale del acuerdo vigente del comercial; si no tiene, se carga a mano.
+      const sugerirPct = (id) => {
+        const habitual = id ? CM.porcentajeHabitual(id, fechaOp, global.state.acuerdosComision || []) : null;
+        $("mcPct").value = habitual ?? "";
+      };
+      pintarComerciales(d.externo?.vendedorId || "");
+      $("mcExt").addEventListener("change", (ev) => {
+        const sel = ev.target;
+        if (sel.value === NUEVO) {
+          sel.value = sel.dataset.anterior || "";
+          abrirAlta();
+          return;
+        }
+        sel.dataset.anterior = sel.value;
+        sugerirPct(sel.value);
+      });
+
+      // --- Navegación interna: se abre algo encima y se vuelve al mismo punto
+      const abrirSub = (html, ancho = 620) => {
+        $("mcPrincipal").style.display = "none";
+        $("mcSub").innerHTML = html;
+        $("mcSub").style.display = "";
+        $("mcModal").style.maxWidth = ancho + "px";
+        $("mcModal").scrollTop = 0;
+      };
+      const volver = () => {
+        $("mcSub").style.display = "none";
+        $("mcSub").innerHTML = "";
+        $("mcPrincipal").style.display = "";
+        $("mcModal").style.maxWidth = "620px";
+        refrescar();
+      };
+      const barraVolver = (titulo) => `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <button class="btn sm ghost" type="button" id="mcVolver">← Volver</button>
+          <b style="flex:1">${esc(titulo)}</b></div>`;
+
+      $("mcVerDoc").onclick = () => {
+        const doc = global.htmlDocumento?.(origenTipo === "Propuesta" ? "propuesta" : "presupuesto", origenId);
+        abrirSub(`${barraVolver(doc?.titulo || op.numero)}
+          ${doc ? `<div class="visor-doc" style="margin:0;max-height:70vh;overflow:auto;padding:24px 28px">${doc.html}</div>`
+            : `<p class="muted">No se pudo armar el documento.</p>`}`, 900);
+        $("mcVolver").onclick = volver;
+      };
+
+      function abrirAlta() {
+        abrirSub(`${barraVolver("Nuevo comercial")}
+          <div class="form-grid">
+            <div class="field"><label for="mcNvNombre">Nombre y apellido</label><input id="mcNvNombre"></div>
+            <div class="field"><label for="mcNvRel">Relación</label>
+              <select id="mcNvRel">${E.VENDEDOR_RELACION.map((x) =>
+                `<option${x === "Externo" ? " selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label for="mcNvEmail">Email</label><input type="email" id="mcNvEmail"></div>
+            <div class="field"><label for="mcNvTel">Teléfono</label><input id="mcNvTel"></div>
+          </div>
+          <div class="field"><label for="mcNvPct">Comisión acordada <span class="muted">· % sin IVA, opcional</span></label>
+            <input type="number" id="mcNvPct" min="0" max="100" step="0.5" placeholder="10">
+            <p class="muted" style="font-size:12px;margin:4px 0 0">Queda como su acuerdo vigente y se propone en sus próximas operaciones.
+            El resto de los datos se completa después en Vendedores.</p></div>
+          <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+            <button class="btn ghost" type="button" id="mcNvCancelar">Cancelar</button>
+            <button class="btn primary" type="button" id="mcNvGuardar">Dar de alta y volver</button>
+          </div>`);
+        $("mcVolver").onclick = volver;
+        $("mcNvCancelar").onclick = volver;
+        $("mcNvNombre").focus();
+        $("mcNvGuardar").onclick = async () => {
+          const nombre = $("mcNvNombre").value.trim();
+          if (!nombre) { global.toast("Falta el nombre", true, true); return; }
+          const pctNv = $("mcNvPct").value;
+          const nuevo = await altaComercial({
+            nombre, relacion: $("mcNvRel").value, email: $("mcNvEmail").value.trim(),
+            telefono: $("mcNvTel").value.trim(),
+          }, pctNv === "" ? null : Number(pctNv), fechaOp, monedaOp);
+          if (!nuevo) return;
+          // El contexto de la vista previa se armó al abrir: sin esto, el
+          // nuevo aparecía con su id en lugar del nombre.
+          c.vendedores = global.state.vendedores;
+          c.acuerdos = c.acuerdosComision = global.state.acuerdosComision;
+          volver();
+          pintarComerciales(nuevo.id);
+          sugerirPct(nuevo.id);
+          refrescar();
+          global.toast(`${nuevo.nombre} dado de alta`);
+        };
+      }
+
       ov.addEventListener("input", refrescar);
       ov.addEventListener("change", refrescar);
       refrescar();
@@ -297,6 +464,13 @@
       $("mcGuardar").onclick = async () => {
         leer();
         if (d.lleva == null) { global.toast("Elegí si lleva comisión o no", true, true); return; }
+        // Primero el ticket: la regla de la comisión controla que el externo
+        // sea el que figura ahí. Solo si lleva comisión; un «no» no le quita
+        // a nadie el lead.
+        const elegido = d.externo?.vendedorId || null;
+        if (d.lleva && ticket && puedeAsignar && !conPagos && elegido !== (ticket.traidoPor || null)) {
+          if (!(await asignarLead(ticket, elegido))) return;
+        }
         const marca = {
           ...d,
           criterio: historico ? "Historico" : sug.criterio,
