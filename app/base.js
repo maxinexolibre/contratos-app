@@ -39,6 +39,7 @@ const state = {
   vendedores: [], vendedoresSha: null,
   acuerdosComision: [], acuerdosSha: null,
   comisiones: [], comisionesSha: null,
+  marcasComision: [], marcasComisionSha: null,
   catalogo: [], catalogoSha: null,
   rol: "admin",      // sin servidor el rol es preferencia de interfaz, no permiso real
   // País activo en los tableros. "" = consolidado. Cada país tiene su moneda,

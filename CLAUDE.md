@@ -21,7 +21,7 @@ contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
 | Lectura/escritura particionada, índice, conflictos | `nucleo/almacen.js` | 4k |
 | Traducción forma vieja ↔ modelo v3 | `nucleo/adaptador.js` | 4k |
 | Tipos de cambio, conversión, facturación | `nucleo/cambio.js` | 3k |
-| Comisiones, acuerdos, reparto interno | `nucleo/comisiones.js` | 5k |
+| Comisiones: seguimiento por operación, cliente nuevo, alertas, reparto 6:2:1 | `nucleo/comisiones.js` · `vistas/comisiones.js` | 9k · 6k |
 | Capa de datos de la app sobre el almacén | `nucleo/repositorio.js` | 3k |
 | Filtros, paginación, CSV, selector de país | `nucleo/tabla.js` | 2k |
 | Catálogo de partes/equipos: parts.json, importación, auditoría | `nucleo/catalogo.js` | 4k |
@@ -109,6 +109,34 @@ fotos nuevas en el repo **público** `nexolibre/nexolibre`, en un solo commit.
   etiqueta no se guarda: tiene el SN, que es interno.
 - `NEXO_CATALOGO` (planes.js) es el catálogo comercial de planes; el de partes
   es `NEXO_CATALOGO_PARTES`.
+
+## Seguimiento de comisiones
+
+- Al **enviar** un presupuesto o una propuesta se pregunta "¿Lleva comisión?" y
+  se guarda una marca (`marcasComision`, en `data/v3/marcas-comision.json`):
+  la decisión, quién cobra y los pagos. **El estado no se guarda**: Prevista →
+  Ganada (Devengada) → A cobrar (cobro registrado en Facturación) → Pagada, o
+  Anulada si la operación se pierde. Lo calcula `lineas()`.
+- Base: precio sin IVA, menos `costos` si se cargaron (venta de equipo). La
+  comisión se **libera a medida que el cliente paga** (cuotas, abono mes a mes)
+  según los cobros de Facturación; una nota de crédito resta.
+- Pagos en USD o ARS (TC BNA vendedor de la factura al cliente, guardado en el
+  pago). Lo pagado de una operación que se anula queda **a compensar** y se
+  descuenta de la próxima de esa persona (pago `Compensacion` + `Ajuste`
+  negativo en la otra). `pagadoEfectivo` cuenta solo los `Pago`.
+- El reparto va a personas: `vendedores.areaComision`. Cada usuario con rol
+  vendedor o marketing ve solo sus líneas.
+- Área comercial: 4,5% sin IVA repartido 6:2:1 (Gerencia 3 · Diseño 1 ·
+  Marketing 0,5), **solo con clientes nuevos**: sin trabajos efectuados con
+  Nexo (presupuesto aprobado, propuesta aceptada, contrato firmado) antes del
+  2026-03-01 (`elegibilidad()`, mira también las sedes del mismo grupo). Si lo
+  anterior tiene más de 2 años, la app pregunta en vez de decidir.
+- Un externo cobra solo si el ticket tiene `traidoPor` con su id (lo asigna
+  gerencia). Las cargas históricas se exceptúan, con motivo.
+- Para decidir si un cliente es nuevo hace falta todo el historial:
+  `asegurarHistorico()` (app/datos.js) carga las particiones viejas.
+- El circuito anterior (devengar por contrato → aprobar → liquidar) queda solo
+  en el legajo del vendedor, para cerrar lo que hubiera de antes.
 
 ## Convenciones
 
