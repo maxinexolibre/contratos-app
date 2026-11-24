@@ -68,6 +68,7 @@
     "NX-092": "La decisión sobre la comisión necesita un motivo",
     "NX-093": "La comisión ya tiene pagos registrados",
     "NX-094": "El pago supera lo que corresponde",
+    "NX-095": "TC de los costos inválido",
     // Catálogo
     "NX-080": "La referencia ya existe en el catálogo",
     "NX-081": "Referencia con formato inválido",
@@ -683,6 +684,11 @@
               : "La operación no tiene ticket: creá el ticket y asignale quién lo trajo");
         }
       }
+    }
+
+    if (nuevo.costosTC != null && !(nuevo.costosTC > 0)) {
+      fallar("NX-095", "El TC de los costos tiene que ser mayor que cero",
+        "Dejalo vacío para usar el de la factura al cliente");
     }
 
     // Lo pagado no se rediscute: cambiar la decisión deja pagos sin respaldo.

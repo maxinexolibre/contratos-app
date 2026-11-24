@@ -146,6 +146,11 @@
     const conPagos = (existente?.pagos || []).length > 0;
     // En una venta de equipo la comisión va sobre el precio menos los costos.
     const esEquipo = origenTipo === "Presupuesto" && op.tipo === "venta" && /equipo/i.test(op.subtipo || "");
+    // Una venta en USD se factura en pesos al TC del día: los costos en pesos
+    // se convierten con ese TC si no se carga otro.
+    const monedaOp = op.economico?.moneda || "USD";
+    const tcFactura = CM.cobros(origenTipo, op, c.facturaciones).find((x) => x.monto > 0 && x.tcValor > 0) || null;
+    if (d.costosMoneda == null && d.costos == null && monedaOp !== "ARS") d.costosMoneda = "ARS";
 
     return new Promise((resolver) => {
       const ov = document.createElement("div");
@@ -205,10 +210,21 @@
             ${sug.ticketId ? `Si lo trajo un externo, asignáselo en el <a href="#tkdetalle/${esc(sug.ticketId)}">ticket</a> antes de enviar.`
               : "Para que cobre un externo, la operación tiene que salir de un ticket con quién trajo el lead."}</p>`}
 
-          <div class="field"><label for="mcCostos">Costos a descontar <span class="muted">${esEquipo
-            ? "· venta de equipo: parte, flete, importación" : "· opcional"}</span></label>
-            <input type="number" id="mcCostos" min="0" step="1" value="${d.costos ?? ""}"${conPagos ? " disabled" : ""}
-              placeholder="${esc(op.economico?.moneda || "USD")} · se restan antes de calcular"></div>
+          <div class="form-grid">
+            <div class="field"><label for="mcCostos">Costos a descontar <span class="muted">${esEquipo
+              ? "· parte, flete, importación, viáticos" : "· viáticos, flete · opcional"}</span></label>
+              <div style="display:flex;gap:6px">
+                ${monedaOp !== "ARS" ? `<select id="mcCostosMon" style="width:auto"${conPagos ? " disabled" : ""}>
+                  <option value="ARS"${d.costosMoneda === "ARS" ? " selected" : ""}>ARS</option>
+                  <option value="${esc(monedaOp)}"${d.costosMoneda !== "ARS" ? " selected" : ""}>${esc(monedaOp)}</option></select>` : ""}
+                <input type="number" id="mcCostos" min="0" step="1" value="${d.costos ?? ""}"${conPagos ? " disabled" : ""}
+                  placeholder="se restan antes de calcular"></div></div>
+            <div class="field" id="mcTCCampo"><label for="mcCostosTC">TC pesos por ${esc(monedaOp)} <span class="muted">${tcFactura
+              ? `· vacío: el de la factura ${esc(tcFactura.comprobante || "")} (${esc(String(tcFactura.tcValor).replace(".", ","))})`
+              : "· todavía no hay factura en pesos"}</span></label>
+              <input type="number" id="mcCostosTC" min="0" step="0.01" value="${d.costosTC ?? ""}"${conPagos ? " disabled" : ""}
+                placeholder="${tcFactura ? esc(String(tcFactura.tcValor)) : "el del día de la factura"}"></div>
+          </div>
         </div>
 
         <div class="field"><label for="mcMotivo">Motivo <span class="muted" id="mcMotivoAyuda"></span></label>
@@ -229,9 +245,13 @@
         const v = document.querySelector('input[name="mcLleva"]:checked')?.value;
         d.lleva = v === "si" ? true : v === "no" ? false : null;
         d.motivo = $("mcMotivo").value.trim();
-        if (!d.lleva) { d.area = false; d.externo = null; d.costos = null; return; }
+        if (!d.lleva) { d.area = false; d.externo = null; d.costos = null; d.costosTC = null; return; }
         const cst = $("mcCostos").value;
         d.costos = cst === "" ? null : Number(cst);
+        d.costosMoneda = $("mcCostosMon") ? $("mcCostosMon").value : null;
+        if (d.costosMoneda === monedaOp) d.costosMoneda = null;
+        const tcv = $("mcCostosTC").value;
+        d.costosTC = d.costosMoneda === "ARS" && tcv !== "" ? Number(tcv) : null;
         d.area = $("mcArea").checked;
         const p = Number($("mcPct")?.value);
         if (historico) {
@@ -246,6 +266,7 @@
       const refrescar = () => {
         leer();
         $("mcQuienes").style.display = d.lleva ? "" : "none";
+        $("mcTCCampo").style.display = d.costosMoneda === "ARS" ? "" : "none";
         const contradice = (sug.criterio === "ClienteNuevo" && d.lleva === false) ||
           (sug.criterio === "ClienteExistente" && d.lleva === true);
         $("mcMotivoAyuda").textContent = contradice || sug.criterio === "Consulta" || historico
@@ -254,10 +275,16 @@
         if (d.lleva == null) { prev.innerHTML = `<span class="muted">Elegí sí o no.</span>`; return; }
         if (!d.lleva) { prev.innerHTML = `<b>Sin comisión.</b> <span class="muted">Queda registrado para que no se reclame después.</span>`; return; }
         const ls = CM.lineas(E.ENTIDADES.marcasComision.normalizar(d), c);
+        // Las comisiones se liquidan casi siempre en pesos: se muestra lo que
+        // da al TC de la factura (o al que se cargó para los costos).
+        const tcPesos = ls[0]?.moneda !== "ARS" ? (ls[0]?.costosTC || ls[0]?.tcSugerido?.valor || null) : null;
         prev.innerHTML = ls.length ? `<table class="data"><tbody>${ls.map((l) => `<tr>
             <td>${esc(l.nombre)}</td><td class="num">${pct(l.porcentaje)}</td>
-            <td class="num"><b>${money(l.monto, l.moneda)}</b></td></tr>`).join("")}
-          </tbody></table><p class="muted" style="font-size:12px;margin:6px 0 0">Sobre ${esc(ls[0].detalle.split(" sobre ")[1] || "")}: ${money(ls[0].base, ls[0].moneda)}.
+            <td class="num"><b>${money(l.monto, l.moneda)}</b></td>${tcPesos
+              ? `<td class="num">${money(l.montoPesos, "ARS")}</td>` : ""}</tr>`).join("")}
+          </tbody></table><p class="muted" style="font-size:12px;margin:6px 0 0">Sobre ${esc(ls[0].detalle.split(" sobre ")[1] || "")}: ${money(ls[0].base, ls[0].moneda)}${
+            ls[0].costosTC && ls[0].moneda !== "ARS" ? ` (${money(E.money(ls[0].base * ls[0].costosTC), "ARS")} al TC ${esc(ls[0].costosTC.toLocaleString("es-AR"))})` : ""}.
+          ${ls[0].costosSinTC ? `<b>Los costos en pesos no se restaron: falta el TC.</b> Cargalo o esperá la factura.` : ""}
           ${ls[0].abono ? `Se paga mes a mes: ${money(ls[0].mensual, ls[0].moneda)} por mes al ${pct(ls[0].porcentaje)}, con cada cobro.`
             : "Se libera a medida que el cliente paga."}</p>`
           : `<span class="muted">Marcá quién cobra.</span>`;
