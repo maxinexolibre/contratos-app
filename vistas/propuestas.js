@@ -279,6 +279,8 @@
         ${p.notas ? `<p class="muted" style="margin-top:14px"><b>Notas:</b> ${esc(p.notas)}</p>` : ""}
       </div>
 
+      ${global.tarjetaComision ? `<div style="margin-top:18px">${global.tarjetaComision("Propuesta", p.id)}</div>` : ""}
+
       ${p.motivoRechazo ? `<div class="card" style="margin-top:18px">
         <h3>Motivo del rechazo</h3>
         <p style="margin-top:8px">${esc(p.motivoRechazo)}</p>
@@ -491,6 +493,10 @@
   async function enviarPropuesta(id) {
     const p = propuestas().find((x) => x.id === id);
     if (!p) return;
+    // Al enviar se decide si lleva comisión (ver vistas/comisiones.js).
+    if (global.marcarComision &&
+        !global.NEXO_COMISIONES.marcaDe("Propuesta", p.id, global.state?.marcasComision) &&
+        !(await global.marcarComision("Propuesta", p.id, { alGuardar: "Guardar y enviar" }))) return;
     if (await guardar({ ...p, estado: "Enviada", fechas: { ...p.fechas, enviado: E.hoy() } },
         `Propuesta ${p.numero} enviada`)) {
       global.toast("Propuesta marcada como enviada");

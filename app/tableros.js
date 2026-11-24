@@ -141,6 +141,15 @@ function chartFunnel(stages) {
       <span class="fn-val">${s.text != null ? s.text : s.value}</span></div>`).join("")}</div>`;
 }
 // ---- Tablero del área de Presupuestos ----
+// Comisiones colgadas: pasa seguido que nadie la reclama y queda ahí. Se
+// avisa en el tablero que se mira todos los días, no solo en Equipo.
+function avisoComisiones() {
+  const n = window.cantidadAlertasComision ? window.cantidadAlertasComision() : 0;
+  if (!n || !NEXO_PERMISOS.puede(state.rol, "marcasComision", "leer")) return "";
+  return `<div class="card" style="margin:14px 0;border-left:4px solid var(--orange)">
+    <b>⚠ ${n} comisión(es) para revisar</b> · sin reclamar, sin cobro o sin marcar.
+    <a href="#comisiones">Ver comisiones</a></div>`;
+}
 function renderPTablero() {
   const el = document.getElementById("view-ptablero");
   const k = kpisDireccion();
@@ -186,6 +195,7 @@ function renderPTablero() {
       ${kpi("Win-rate", k.winRate == null ? "—" : Math.round(k.winRate * 100) + "%", `${k.ganados.length}✓ / ${k.perdidos.length}✕`, k.winRate != null && k.winRate < 0.4 ? "warn" : "")}
       ${kpi("Validez vencida", vencidos, vencidos ? "rehacer oferta" : "todo vigente", vencidos ? "warn" : "")}
     </div>
+    ${avisoComisiones()}
     <div class="dir-2col">
       <div class="card"><h3>Pipeline por etapa <span class="muted" style="font-weight:400">· anualizado</span></h3>
         ${funnelData.some((s) => s.value) ? chartFunnel(funnelData) : `<p class="muted">Sin presupuestos cargados.</p>`}</div>

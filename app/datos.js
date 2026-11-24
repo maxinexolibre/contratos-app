@@ -52,6 +52,7 @@ const STORE_DEF = {
   acuerdosComision: { path: () => CFG.acuerdosComisionPath, key: "acuerdosComision", shaKey: "acuerdosSha", ls: "nexo_demo_acu", seed: () => [], migrate: (a) => normalizar("acuerdosComision", a) },
   catalogo: { path: () => CFG.catalogoPath, key: "catalogo", shaKey: "catalogoSha", ls: "nexo_demo_catalogo", seed: () => DEMO_CATALOGO, migrate: (a) => normalizar("catalogo", a) },
   comisiones: { path: () => CFG.comisionesPath, key: "comisiones", shaKey: "comisionesSha", ls: "nexo_demo_com", seed: () => [], migrate: (a) => normalizar("comisiones", a) },
+  marcasComision: { path: () => CFG.marcasComisionPath, key: "marcasComision", shaKey: "marcasComisionSha", ls: "nexo_demo_mco", seed: () => [], migrate: (a) => normalizar("marcasComision", a) },
 };
 
 // Normaliza una colección con el esquema del núcleo. Los registros ilegibles
@@ -122,6 +123,24 @@ async function cargarDesdeRepositorio() {
     `presupuestos de los últimos 12 meses (${r.periodosDisponibles} períodos disponibles).`);
   return r;
 }
+/**
+ * Trae el histórico completo de tickets y presupuestos, una sola vez.
+ *
+ * El arranque carga solo los últimos 12 meses. Para saber si un cliente es
+ * nuevo hay que mirar toda su historia: con 12 meses, un cliente de 2024
+ * aparecía como nuevo y se le pagaba comisión que no correspondía.
+ */
+let historicoCargado = false;
+async function asegurarHistorico() {
+  if (historicoCargado) return false;
+  if (state.mode === "connected" && repo) {
+    await Promise.all([repo.cargarHistorico("presupuestos"), repo.cargarHistorico("tickets")]);
+  }
+  historicoCargado = true;
+  return true;
+}
+window.asegurarHistorico = asegurarHistorico;
+
 async function ghUploadFile(path, base64, msg) {
   const url = `https://api.github.com/repos/${CFG.owner}/${CFG.dataRepo}/contents/${path}`;
   // averiguar sha si ya existe
