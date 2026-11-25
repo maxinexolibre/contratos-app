@@ -30,8 +30,10 @@ function elegirPais(p) {
 
 function kpisDireccion() {
   const vig = porPaisActivo(state.data).filter((c) => ACTIVOS.has(c.estado));
-  const mrr = vig.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
-  const equipos = vig.reduce((s, c) => s + (c.equipos || []).length, 0);
+  // Por moneda y por lo que se factura hoy (ver mrrPorMoneda en contratos.js).
+  const mrr = mrrPorMoneda(vig);
+  // Solo los que tienen servicio hoy: dados de baja, en pausa o por ingresar no cuentan.
+  const equipos = vig.reduce((s, c) => s + NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length, 0);
 
   const abiertos = porPaisActivo(state.presupuestos).filter((p) => PRE_ABIERTOS.has(p.estado));
   const pipeAnual = abiertos.reduce((s, p) => s + valorPresu(p).anual, 0);
@@ -244,7 +246,7 @@ function imprimirDireccion() {
     <h2>Recurrente y pipeline</h2>
     <div class="grid-kpi">
       <div class="k"><div class="lb">Contratos vigentes</div><div class="vl">${k.vig.length}</div><div class="sb">${k.equipos} equipos</div></div>
-      <div class="k"><div class="lb">MRR</div><div class="vl">${money(k.mrr)}</div><div class="sb">${money(k.mrr * 12)} anual</div></div>
+      <div class="k"><div class="lb">MRR</div><div class="vl">${moneyMapa(k.mrr)}</div><div class="sb">${moneyMapa(k.mrr, 12)} anual</div></div>
       <div class="k"><div class="lb">Pipeline anualizado</div><div class="vl">${money(k.pipeAnual)}</div><div class="sb">ponderado ${money(Math.round(k.pipePond))}</div></div>
       <div class="k"><div class="lb">Win-rate</div><div class="vl">${k.winRate == null ? "—" : Math.round(k.winRate * 100) + "%"}</div><div class="sb">${k.ganados.length}✓ / ${k.perdidos.length}✕</div></div>
     </div>

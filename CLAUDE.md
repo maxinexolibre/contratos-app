@@ -80,6 +80,27 @@ El presupuesto lleva **Notas** (una por cada línea del campo) y un **Anexo I ·
 Garantía** de plazo configurable, 90 días por defecto, que se puede apagar por
 presupuesto o reemplazar por un texto propio.
 
+- **Canon por tramos y equipos que entran después.** `economico.tramos`
+  (`{desde, hasta, canonMensual, motivo}`) dice cuánto se factura en un
+  período distinto del canon pleno; `equipos[].ingreso` y `garantiaHasta`
+  marcan un equipo que figura pero se incorpora más adelante (p. ej. al vencer
+  la garantía). Lo que se factura hoy es `canonVigente()` (esquema.js): el MRR
+  lo usa, no `canonMensual`. Un ajuste de canon también ajusta los tramos en curso.
+- **Bajas, pausas y reanudaciones de equipos** sin reescribir el contrato:
+  `equipos[].eventos` (`{fecha, tipo, motivo, canonAntes, canonDespues}`). El
+  estado del equipo no se guarda, lo calcula `estadoEquipo()`; los eventos van
+  en orden y la regla rechaza una historia imposible. Una pausa con canon
+  reducido abre un tramo que la reanudación cierra; una baja con canon nuevo
+  deja el cambio también en `ajuste.historial`.
+- **Moneda y facturación del contrato.** `economico.moneda` (USD/ARS) y
+  `economico.facturacion` (`ConFactura` / `SinFactura`, interno: no se imprime).
+  El tablero muestra la cartera vigente por cada combinación y el listado filtra
+  por las dos.
+- **La propuesta se negocia en versiones.** "Renegociar" congela la versión
+  enviada en `versiones[]` y abre la siguiente en Borrador (`version` + 1);
+  no se puede volver a Borrador sin congelar, ni borrar versiones. La aceptada
+  es el acuerdo final que pasa a contrato (`negociacion.versionPropuesta`).
+  `fechas.enviado` es el primer envío; `fechas.ultimoEnvio`, el de la vigente.
 - **Todo se cotiza en USD** (o UF en Chile). La conversión a moneda local ocurre
   únicamente al facturar, y el tipo de cambio queda congelado en el comprobante.
 - Los importes **nunca se suman entre monedas**. Los KPIs devuelven mapas por

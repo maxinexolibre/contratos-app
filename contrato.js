@@ -24,6 +24,9 @@ const ORDINALES = [
 ];
 
 function construirContrato(c, opts = {}) {
+  // Un equipo dado de baja ya no es parte del servicio: si se regenera el
+  // documento, no puede seguir figurando en las fichas.
+  c = { ...c, equipos: (c.equipos || []).filter((e) => NEXO_ESQUEMA.estadoEquipo(e) !== "Baja") };
   const plantilla = !!opts.plantilla;
   const cov = c.cobertura || {};
   const eco = c.economico || {};
@@ -134,6 +137,16 @@ function construirContrato(c, opts = {}) {
     economico.push(["IVA 21%", "[importe]", false]);
     economico.push(["Total mensual c/ IVA", "[importe]", true]);
   }
+  // Tramos: lo que se factura en un período distinto del canon pleno (un
+  // equipo que sigue en garantía, una bonificación de arranque). Van en el
+  // documento porque son parte de lo que se firma.
+  const tramos = NEXO_ESQUEMA.normalizarTramos(eco.tramos);
+  const rangoTramo = (t) => t.desde && t.hasta ? `del ${fmt(t.desde)} al ${fmt(t.hasta)}`
+    : t.desde ? `desde el ${fmt(t.desde)}` : `hasta el ${fmt(t.hasta)}`;
+  for (const t of tramos) {
+    economico.push([`Canon ${rangoTramo(t)}`,
+      `${money(t.canonMensual, eco.moneda)}${eco.incluyeIVA ? " (IVA incl.)" : " + IVA"}${t.motivo ? ` · ${esc(t.motivo)}` : ""}`, false]);
+  }
   const fp = V(eco.formaPago, "forma de pago");
   if (fp) economico.push(["Forma de pago", fp, false]);
   const aj = c.ajuste?.periodicidad && c.ajuste.periodicidad !== "ninguno"
@@ -159,10 +172,14 @@ function construirContrato(c, opts = {}) {
   const cuitPre = V(rsp.cuit, "CUIT");
   const preambulo = `Entre <b>Nexolibre</b> («El Prestador») y <b>${T(rsp.razonSocial, "razón social")}</b>${cuitPre ? `, CUIT ${cuitPre}` : ""}${domic}${fantasia}${otras} («El Cliente»), se celebra el presente Contrato de Prestación de Servicios bajo el <b>Programa de Continuidad Operativa NexoCare</b> (en adelante, «el Programa»), que se regirá por las cláusulas siguientes:`;
 
+  // Equipos que figuran en el contrato pero entran más adelante (toma
+  // efectiva al vencer la garantía, por ejemplo).
+  const diferidos = (c.equipos || []).filter((e) => e.ingreso && (!c.vigencia?.inicio || e.ingreso > c.vigencia.inicio));
+
   // ---------- Cláusulas ----------
   // `si: false` la deja fuera y renumera el resto automáticamente.
   const defs = [
-    { id: "objeto", titulo: "OBJETO", cuerpo: `El Prestador se obliga a ejecutar el <b>Programa de Continuidad Operativa</b> sobre los equipos de diagnóstico por imágenes de propiedad del Cliente individualizados en la(s) Ficha(s) Técnica(s) (los «Equipos»), comprendiendo los servicios de mantenimiento preventivo y correctivo, conforme al alcance${incluirSLA ? ", niveles de servicio" : ""} y condiciones aquí establecidos.` },
+    { id: "objeto", titulo: "OBJETO", cuerpo: `El Prestador se obliga a ejecutar el <b>Programa de Continuidad Operativa</b> sobre los equipos de diagnóstico por imágenes de propiedad del Cliente individualizados en la(s) Ficha(s) Técnica(s) (los «Equipos»), comprendiendo los servicios de mantenimiento preventivo y correctivo, conforme al alcance${incluirSLA ? ", niveles de servicio" : ""} y condiciones aquí establecidos.${diferidos.length ? ` ${diferidos.map((e) => `El Equipo ${esc([e.marca, e.modelo].filter(Boolean).join(" "))}${e.ubicacion ? ` ubicado en ${esc(e.ubicacion)}` : ""}${e.garantiaHasta ? `, que se encuentra en garantía hasta el ${fmt(e.garantiaHasta)},` : ""} se incorpora al Programa a partir del ${fmt(e.ingreso)}; hasta esa fecha el Prestador no asume obligaciones sobre él.`).join(" ")}` : ""}` },
     { id: "definiciones", titulo: "DEFINICIONES", cuerpo: `<b>Mantenimiento preventivo:</b> controles eléctricos, electrónicos y mecánicos, verificación de diagnósticos, calibración, limpieza técnica y ajustes conforme a las normas del fabricante, en forma programada. <b>Mantenimiento correctivo:</b> mano de obra necesaria para subsanar fallas durante la operación normal. <b>Reparación de componente:</b> recuperación en laboratorio de una pieza crítica (p. ej. bobina de RF) en lugar de su reemplazo. <b>Días y horas hábiles:</b> de lunes a viernes en horario comercial, excluyendo feriados nacionales.` },
     { id: "alcance", titulo: "ALCANCE DEL SERVICIO", cuerpo: `El Programa incluye, para cada Equipo: ${alcance.map((a) => a.replace(/\.$/, "")).join("; ")}.${reparaciones.length ? ` Reparaciones de partes expresamente incluidas: ${reparaciones.map((r) => r.replace(/\.$/, "")).join("; ")}.` : ""}${cupoBobinas} La provisión de repuestos y partes ${cov.partesIncluidas ? "se encuentra incluida según Ficha Técnica" : "<b>no está incluida</b> y se rige por la {{repuestos}}"}.` },
     { id: "sla", si: incluirSLA, titulo: "NIVELES DE SERVICIO (SLA)", cuerpo: `El Prestador se compromete a los siguientes tiempos objetivo, en horas y días hábiles desde la recepción del reclamo: respuesta de soporte remoto ${plantilla ? "[N]" : slaDoc.remoto} horas hábiles; asistencia on-site por equipo detenido ${plantilla ? "[N]" : slaDoc.onsite} horas hábiles; entrega de repuesto disponible en stock ${plantilla ? "[N]" : slaDoc.repuesto} horas hábiles. Los tiempos se suspenden mientras subsistan causas ajenas al Prestador.` },
@@ -171,7 +188,7 @@ function construirContrato(c, opts = {}) {
     { id: "exclusiones", titulo: "EXCLUSIONES", cuerpo: `No se encuentran incluidos: ${exclusiones.map((a) => a.replace(/\.$/, "")).join("; ")}. Todo lo no detallado expresamente en el presente y sus Fichas Técnicas.` },
     { id: "oblCliente", titulo: "OBLIGACIONES DEL CLIENTE", cuerpo: `Garantizar el libre acceso del personal técnico autorizado en los horarios acordados; mantener las condiciones ambientales y eléctricas dentro de las especificaciones del fabricante; abstenerse de permitir la intervención de los Equipos por terceros no autorizados (cuyo incumplimiento faculta a rescindir de inmediato); comunicar por medio fehaciente, dentro de las 48 horas, toda situación que afecte a los Equipos; y abonar el precio en tiempo y forma.` },
     { id: "oblPrestador", titulo: "OBLIGACIONES DEL PRESTADOR", cuerpo: `Prestar los servicios con personal idóneo conforme a las normas del fabricante; ${incluirSLA ? "cumplir los niveles de servicio de la {{sla}}; " : ""}entregar documentación y reporte técnico de cada intervención; y mantener la confidencialidad conforme la {{confidencialidad}}.` },
-    { id: "precio", titulo: "PRECIO, PAGO, AJUSTE Y MORA", cuerpo: `El Cliente abonará un canon mensual de ${canon ? money(canon, eco.moneda) : "[importe]"} ${eco.incluyeIVA ? "(IVA incluido)" : "más IVA"}, aun cuando en el período no se hubiere requerido servicio, ${eco.formaPago ? esc(eco.formaPago) : (plantilla ? "[forma de pago]" : "en la forma pactada")}. Los pagos en pesos se convierten al tipo de cambio vendedor del Banco de la Nación Argentina del día de la factura.${c.ajuste?.periodicidad && c.ajuste.periodicidad !== "ninguno" ? ` El canon se ajustará en forma ${c.ajuste.periodicidad} según ${idx}.` : plantilla ? " El canon se ajustará en forma [periodicidad] según [índice]." : ""} La mora se produce de forma automática, devengando un interés punitorio del ${pctMora}. Ante falta de pago a los 10 días corridos del vencimiento, el Prestador podrá suspender el servicio con previo aviso, sin extensión del plazo, hasta su regularización.` },
+    { id: "precio", titulo: "PRECIO, PAGO, AJUSTE Y MORA", cuerpo: `El Cliente abonará un canon mensual de ${canon ? money(canon, eco.moneda) : "[importe]"} ${eco.incluyeIVA ? "(IVA incluido)" : "más IVA"}, aun cuando en el período no se hubiere requerido servicio, ${eco.formaPago ? esc(eco.formaPago) : (plantilla ? "[forma de pago]" : "en la forma pactada")}.${tramos.length ? ` Por excepción, ${tramos.map((t) => `${rangoTramo(t)} el canon será de ${money(t.canonMensual, eco.moneda)} ${eco.incluyeIVA ? "(IVA incluido)" : "más IVA"}${t.motivo ? ` (${esc(t.motivo)})` : ""}`).join("; ")}; fuera de ese período rige el canon indicado.` : ""} Los pagos en pesos se convierten al tipo de cambio vendedor del Banco de la Nación Argentina del día de la factura.${c.ajuste?.periodicidad && c.ajuste.periodicidad !== "ninguno" ? ` El canon se ajustará en forma ${c.ajuste.periodicidad} según ${idx}.` : plantilla ? " El canon se ajustará en forma [periodicidad] según [índice]." : ""} La mora se produce de forma automática, devengando un interés punitorio del ${pctMora}. Ante falta de pago a los 10 días corridos del vencimiento, el Prestador podrá suspender el servicio con previo aviso, sin extensión del plazo, hasta su regularización.` },
     { id: "responsabilidad", titulo: "RESPONSABILIDAD Y LÍMITE", cuerpo: `La obligación del Prestador se limita a la fiel ejecución de los servicios. No responderá por daños directos o indirectos, lucro cesante, pérdida de ingresos ni por el tiempo de indisponibilidad del Equipo derivados de fallas no causadas por su personal, demoras logísticas o aduaneras de terceros, uso inadecuado o intervención de terceros. La responsabilidad total y acumulada se limita al equivalente a los últimos ${LEGAL.limiteCanones} (tres) cánones mensuales efectivamente abonados.` },
     { id: "confidencialidad", titulo: "CONFIDENCIALIDAD Y PROTECCIÓN DE DATOS", cuerpo: `Cada parte mantendrá la confidencialidad de la información a la que acceda y la usará solo para la ejecución del contrato. El Prestador tratará todo dato personal o de paciente conforme a la Ley 25.326, con medidas técnicas y organizativas de seguridad. Esta obligación subsiste por ${LEGAL.confidAnios} (dos) años tras la finalización.` },
     { id: "cryo", titulo: "SaaS DE GESTIÓN Y MONITOREO CRYO", cuerpo: `${cov.saasMonitoreo ? "El servicio incluye el acceso a la plataforma <b>Nexolibre Cryo</b> de gestión y monitoreo de la base instalada, que releva en forma continua los parámetros criogénicos del Equipo (nivel de helio, presión, temperatura de cold-head y estado del compresor) y emite alertas tempranas ante desvíos. " : ""}Se deja expresa constancia de que la prestación comprende el <b>monitoreo, registro y gestión de la información criogénica</b>, y <b>no constituye servicio de mantenimiento de la cadena de frío</b>: la provisión y recarga de helio o nitrógeno, y toda intervención sobre cold-head, compresores y líneas criogénicas, se encuentran excluidas y se cotizan por separado. La alerta emitida por la plataforma no sustituye las obligaciones de operación y custodia del Equipo a cargo del Cliente. El acceso se otorga como licencia de uso no exclusiva, intransferible y limitada a la vigencia del Programa; la propiedad intelectual permanece en el Prestador, que podrá usar los datos de operación en forma agregada y anonimizada con fines de mantenimiento predictivo.` },
@@ -219,6 +236,8 @@ function construirContrato(c, opts = {}) {
           ["Modalidad", e.modalidad || null],
           ["N.º de serie", V(e.serie, "serie")],
           ["Ubicación", V(e.ubicacion, "ubicación")],
+          ["Incorporación", e.ingreso && diferidos.includes(e) ? `a partir del ${fmt(e.ingreso)}` : null],
+          ["Garantía hasta", e.garantiaHasta ? fmt(e.garantiaHasta) : null],
         ].filter(([, v]) => v !== null && v !== undefined && v !== "");
         const fs = [];
         for (let k = 0; k < cps.length; k += 2) {

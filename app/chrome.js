@@ -201,9 +201,28 @@ function bindChrome() {
 //  Alertas / cálculos de portfolio
 // ============================================================
 function calcAlertas() {
-  const venc = [], aum = [], pend = [];
+  const venc = [], aum = [], pend = [], toma = [];
   for (const c of state.data) {
     if (!ACTIVOS.has(c.estado)) continue;
+    // Equipos que entran al contrato y tramos reducidos que terminan: los dos
+    // cambian lo que se factura, y si nadie se acuerda se sigue cobrando de menos.
+    for (const e of c.equipos || []) {
+      const d = daysUntil(parseDate(e.ingreso));
+      if (d !== null && d >= 0 && d <= 45) toma.push({ c, tipo: "Toma", fecha: parseDate(e.ingreso), dias: d,
+        detalle: `entra ${[e.marca, e.modelo].filter(Boolean).join(" ")}${e.ubicacion ? " (" + e.ubicacion + ")" : ""}` });
+    }
+    // Una pausa larga es plata que no entra (o servicio que se presta sin
+    // cobrar): pasado un mes, se avisa para decidir.
+    for (const e of c.equipos || []) {
+      const dp = NEXO_ESQUEMA.diasEnPausa(e, new Date().toISOString().slice(0, 10));
+      if (dp !== null && dp >= 30) toma.push({ c, tipo: "Pausa", fecha: hoy(), dias: 0,
+        detalle: `${[e.marca, e.modelo].filter(Boolean).join(" ")}${e.ubicacion ? " (" + e.ubicacion + ")" : ""} en pausa hace ${dp} días` });
+    }
+    for (const t of c.economico?.tramos || []) {
+      const d = daysUntil(parseDate(t.hasta));
+      if (d !== null && d >= 0 && d <= 45) toma.push({ c, tipo: "Canon", fecha: parseDate(t.hasta), dias: d,
+        detalle: `termina el tramo de ${money(t.canonMensual, c.economico?.moneda)}${t.motivo ? " · " + t.motivo : ""}` });
+    }
     const fin = computeFin(c), dv = daysUntil(fin);
     if (dv !== null && dv <= 30) venc.push({ c, fin, dias: dv });
     const pa = computeProximoAjuste(c), da = daysUntil(pa);
@@ -214,7 +233,8 @@ function calcAlertas() {
   venc.sort((a, b) => a.dias - b.dias);
   aum.sort((a, b) => a.dias - b.dias);
   pend.sort((a, b) => b.dias - a.dias);
-  return { venc, aum, pend };
+  toma.sort((a, b) => a.dias - b.dias);
+  return { venc, aum, pend, toma };
 }
 
 // ============================================================

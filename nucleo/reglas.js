@@ -244,7 +244,9 @@
   const TRANSICION_PROPUESTA = {
     Borrador: ["Borrador", "Enviada"],
     // Una propuesta se resuelve solo después de haber salido al cliente.
-    Enviada: ["Enviada", "Aceptada", "Rechazada"],
+    // Volver a Borrador solo vale abriendo una versión nueva (contraoferta):
+    // ver validarPropuesta.
+    Enviada: ["Enviada", "Aceptada", "Rechazada", "Borrador"],
     // Resueltas son terminales: para reintentar se hace una propuesta nueva,
     // así queda registro de cuántas hicieron falta.
     Aceptada: ["Aceptada"],
@@ -253,6 +255,23 @@
 
   function validarPropuesta(nuevo, anterior, ctx) {
     if (!nuevo.clienteId) fallar("NX-040", "La propuesta necesita un cliente");
+
+    // Renegociar es abrir una versión nueva, no reescribir la que ya salió:
+    // si se pudiera volver a Borrador sin congelar la anterior, se perdería
+    // lo que efectivamente se le mandó al cliente.
+    if (anterior && anterior.estado === "Enviada" && nuevo.estado === "Borrador") {
+      const congelada = (nuevo.versiones || []).some((v) => v.n === (anterior.version || 1));
+      if (nuevo.version !== (anterior.version || 1) + 1 || !congelada) {
+        fallar("NX-020",
+          `La propuesta ${nuevo.numero} ya se envió`,
+          "Para cambiar condiciones, abrí una versión nueva");
+      }
+    }
+    if (anterior && (nuevo.versiones || []).length < (anterior.versiones || []).length) {
+      fallar("NX-020", `No se pueden borrar versiones de la propuesta ${nuevo.numero}`,
+        "Son el registro de lo que se le mandó al cliente");
+    }
+    validarTramos(nuevo, `La propuesta ${nuevo.numero}`);
 
     if (anterior && nuevo.estado !== anterior.estado) {
       const permitidas = TRANSICION_PROPUESTA[anterior.estado] || [];
@@ -283,7 +302,53 @@
     return true;
   }
 
+  /** Tramos de canon coherentes: con fechas en orden y sin superponerse. */
+  function validarTramos(reg, quien) {
+    const ts = reg.economico?.tramos || [];
+    for (const t of ts) {
+      if (t.desde && t.hasta && t.hasta < t.desde) {
+        fallar("NX-040", `${quien} tiene un tramo de canon que termina antes de empezar`,
+          `Revisá el tramo ${t.desde} → ${t.hasta}`);
+      }
+      if (t.canonMensual < 0) fallar("NX-040", `${quien} tiene un tramo con canon negativo`);
+    }
+    // Dos tramos superpuestos dejan ambiguo cuánto se factura ese mes.
+    for (let i = 0; i < ts.length; i++) {
+      for (let j = i + 1; j < ts.length; j++) {
+        const a = ts[i], b = ts[j];
+        const solapan = (!a.hasta || !b.desde || b.desde <= a.hasta)
+          && (!b.hasta || !a.desde || a.desde <= b.hasta);
+        if (solapan) {
+          fallar("NX-040", `${quien} tiene dos tramos de canon superpuestos`,
+            "Cada mes tiene que caer en un solo tramo");
+        }
+      }
+    }
+  }
+
+  /**
+   * La historia de cada equipo tiene que poder reproducirse: no se pausa uno
+   * dado de baja ni se reanuda uno que no estaba en pausa. Se revisa evento
+   * por evento, como si se fueran registrando en orden.
+   */
+  function validarEventosEquipos(reg) {
+    for (const e of reg.equipos || []) {
+      const evs = E.normalizarEventosEquipo(e.eventos);
+      for (let i = 0; i < evs.length; i++) {
+        const prev = { ...e, eventos: evs.slice(0, i) };
+        const err = E.motivoNoEvento(prev, evs[i].tipo, evs[i].fecha);
+        if (err) {
+          fallar("NX-040",
+            `Equipo ${[e.marca, e.modelo].filter(Boolean).join(" ") || "sin nombre"}: ${E.EVENTO_EQUIPO_LABEL[evs[i].tipo]} del ${evs[i].fecha} inválida`,
+            err);
+        }
+      }
+    }
+  }
+
   function validarContrato(nuevo, anterior, ctx) {
+    validarTramos(nuevo, `El contrato ${nuevo.numero || ""}`.trim());
+    validarEventosEquipos(nuevo);
     if (!nuevo.clienteId && !nuevo.ticketId) {
       fallar("NX-040", "El contrato necesita un cliente");
     }

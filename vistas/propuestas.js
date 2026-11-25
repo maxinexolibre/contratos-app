@@ -158,7 +158,7 @@
           <th class="num">Canon</th><th>Estado</th><th>Contrato</th>
         </tr></thead>
         <tbody>${pag.filas.map((p) => `<tr onclick="location.hash='propdetalle/${esc(p.id)}'">
-          <td><b>${esc(p.numero)}</b>${p.numeroLegado
+          <td><b>${esc(p.numero)}</b>${p.version > 1 ? ` <span class="pill" title="Versión de la negociación">v${p.version}</span>` : ""}${p.numeroLegado
             ? `<br><span class="muted" style="font-size:11px">antes ${esc(p.numeroLegado)}</span>` : ""}</td>
           <td>${esc(nombreCliente(p.clienteId))}</td>
           <td><span class="pill">${esc(p.pais)}</span></td>
@@ -205,7 +205,7 @@
       <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:8px">
         <div style="flex:1">
           <div class="kicker">Propuesta · ${esc(E.PAIS_NOMBRE[p.pais] || p.pais)}</div>
-          <h1>${esc(p.numero)}</h1>
+          <h1>${esc(p.numero)}${p.version > 1 ? ` <span class="muted" style="font-size:.55em">versión ${p.version}</span>` : ""}</h1>
           <p class="muted" style="margin:4px 0 0">
             ${esc(nombreCliente(p.clienteId))}
             ${p.numeroLegado ? ` · circuló como ${esc(p.numeroLegado)}` : ""}
@@ -265,6 +265,8 @@
         </p>
       </div>` : ""}
 
+      ${renderNegociacion(p)}
+
       <div class="card">
         <h3>Lo que se ofrece</h3>
         ${p.plan?.id ? `<p style="margin:8px 0 0"><span class="pill-plan">${esc(p.plan.etiquetaPublica
@@ -273,9 +275,13 @@
           <thead><tr><th>Equipo</th><th>Marca</th><th>Modalidad</th><th>Ubicación</th></tr></thead>
           <tbody>${p.equipos.map((eq) => `<tr>
             <td>${esc(eq.modelo)}</td><td>${esc(eq.marca)}</td>
-            <td>${esc(eq.modalidad)}</td><td>${esc(eq.ubicacion || "—")}</td>
+            <td>${esc(eq.modalidad)}</td><td>${esc(eq.ubicacion || "—")}${eq.ingreso
+              ? `<br><span class="muted" style="font-size:12px">entra el ${esc(fechaCorta(eq.ingreso))}${eq.garantiaHasta ? ` · garantía hasta ${esc(fechaCorta(eq.garantiaHasta))}` : ""}</span>` : ""}</td>
           </tr>`).join("")}</tbody>
         </table>` : `<p class="muted" style="margin-top:12px">Sin equipos cargados.</p>`}
+        ${(p.economico.tramos || []).length ? `<p style="margin-top:14px"><b>Canon por tramos:</b>
+          ${p.economico.tramos.map((t) => `${esc(rangoTramo(t))}, ${money(t.canonMensual, p.economico.moneda)}/mes${t.motivo ? ` (${esc(t.motivo)})` : ""}`).join("; ")}.
+          Fuera de los tramos rige el canon de ${money(p.economico.canonMensual, p.economico.moneda)}.</p>` : ""}
         ${p.notas ? `<p class="muted" style="margin-top:14px"><b>Notas:</b> ${esc(p.notas)}</p>` : ""}
       </div>
 
@@ -296,12 +302,86 @@
     }
     if (p.estado === "Enviada") {
       return `<button class="btn primary" onclick="aceptarPropuesta('${esc(p.id)}')">Aceptar</button>
+              <button class="btn" onclick="nuevaVersionPropuesta('${esc(p.id)}')" title="El cliente pidió cambios: se guarda esta versión tal como salió y se abre la siguiente">↻ Renegociar · versión ${(p.version || 1) + 1}</button>
               <button class="btn ghost" onclick="rechazarPropuesta('${esc(p.id)}')">Rechazar</button>`;
     }
     if (p.estado === "Aceptada" && !contrato) {
       return `<button class="btn primary" onclick="generarContrato('${esc(p.id)}')">Generar contrato</button>`;
     }
     return "";
+  }
+
+  const fechaCorta = (f) => (f ? f.split("-").reverse().join("/") : "—");
+  const rangoTramo = (t) => t.desde && t.hasta ? `del ${fechaCorta(t.desde)} al ${fechaCorta(t.hasta)}`
+    : t.desde ? `desde el ${fechaCorta(t.desde)}` : `hasta el ${fechaCorta(t.hasta)}`;
+
+  /** Lo que cambió de una versión a la siguiente, en una línea. */
+  function diferencias(a, b) {
+    const d = [];
+    const ca = Number(a.economico?.canonMensual) || 0, cb = Number(b.economico?.canonMensual) || 0;
+    if (ca !== cb) d.push(`canon ${money(ca, a.economico?.moneda)} → ${money(cb, b.economico?.moneda)}`);
+    const clave = (e) => [e.marca, e.modelo, e.ubicacion].join("|");
+    const ea = new Set((a.equipos || []).map(clave)), eb = new Set((b.equipos || []).map(clave));
+    const mas = [...eb].filter((x) => !ea.has(x)).length, menos = [...ea].filter((x) => !eb.has(x)).length;
+    if (mas) d.push(`+${mas} equipo${mas > 1 ? "s" : ""}`);
+    if (menos) d.push(`−${menos} equipo${menos > 1 ? "s" : ""}`);
+    if (JSON.stringify(a.economico?.tramos || []) !== JSON.stringify(b.economico?.tramos || [])) d.push("tramos de canon");
+    if ((a.plan?.id || "") !== (b.plan?.id || "")) d.push(`plan ${a.plan?.id || "—"} → ${b.plan?.id || "—"}`);
+    if ((a.vigenciaPropuesta?.meses || 0) !== (b.vigenciaPropuesta?.meses || 0)) d.push(`vigencia ${a.vigenciaPropuesta?.meses || "—"} → ${b.vigenciaPropuesta?.meses || "—"} meses`);
+    if (JSON.stringify(a.cobertura || {}) !== JSON.stringify(b.cobertura || {})) d.push("cobertura");
+    return d.join(" · ") || "sin cambios en las condiciones";
+  }
+
+  /** Historial de la negociación: cada vuelta como salió al cliente. */
+  function renderNegociacion(p) {
+    if (!(p.versiones || []).length) return "";
+    const actual = { n: p.version, enviado: p.estado === "Borrador" ? null : p.fechas.ultimoEnvio,
+      economico: p.economico, equipos: p.equipos, plan: p.plan, cobertura: p.cobertura,
+      vigenciaPropuesta: p.vigenciaPropuesta };
+    const todas = [...p.versiones.slice().sort((a, b) => a.n - b.n), actual];
+    return `<div class="card" style="margin-bottom:18px">
+      <h3>Negociación · ${todas.length} versiones</h3>
+      <table class="data" style="margin-top:10px">
+        <thead><tr><th>Versión</th><th>Enviada</th><th class="num">Canon</th><th>Equipos</th><th>Qué cambió</th><th>Por qué</th></tr></thead>
+        <tbody>${todas.map((v, i) => `<tr${v === actual ? ' style="font-weight:600"' : ""}>
+          <td>v${v.n}${v === actual ? ` <span class="pill">${p.estado === "Aceptada" ? "acuerdo final" : "actual"}</span>` : ""}</td>
+          <td>${v.enviado ? esc(fechaCorta(v.enviado)) : '<span class="muted">sin enviar</span>'}</td>
+          <td class="num">${money(v.economico?.canonMensual, v.economico?.moneda)}</td>
+          <td>${(v.equipos || []).length}</td>
+          <td class="muted">${i ? esc(diferencias(todas[i - 1], v)) : "primera versión"}</td>
+          <td class="muted">${esc((p.versiones.find((x) => x.n === v.n - 1) || {}).motivo || (i ? "" : "—"))}</td>
+        </tr>`).join("")}</tbody>
+      </table>
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">«Por qué» es lo que pidió el cliente para pasar a esa versión. Las versiones anteriores quedan congeladas: el documento de cada una se puede reconstruir con lo que dice esta tabla.</p>
+    </div>`;
+  }
+
+  /**
+   * El cliente contraoferta: se congela la versión que salió y se abre la
+   * siguiente en borrador para editarla. Es la misma propuesta —mismo número,
+   * mismo cliente, misma comisión— en otra vuelta, no una propuesta nueva.
+   */
+  async function nuevaVersionPropuesta(id) {
+    const p = propuestas().find((x) => x.id === id);
+    if (!p || p.estado !== "Enviada") return;
+    const motivo = prompt(
+      `Versión ${(p.version || 1) + 1} de ${p.numero}\n\n¿Qué pidió el cliente o qué se renegocia?\n(Queda en el historial de la negociación.)`);
+    if (motivo === null) return;
+    const congelada = E.normalizarVersion({
+      n: p.version || 1, creado: p.fechas.creado, enviado: p.fechas.ultimoEnvio || p.fechas.enviado,
+      cerrado: E.hoy(), usuario: global.state?.user || "", motivo: motivo.trim(),
+      economico: structuredClone(p.economico), equipos: structuredClone(p.equipos),
+      plan: structuredClone(p.plan), cobertura: structuredClone(p.cobertura),
+      vigenciaPropuesta: structuredClone(p.vigenciaPropuesta), validezDias: p.validezDias, notas: p.notas,
+    });
+    const reg = { ...p, estado: "Borrador", version: (p.version || 1) + 1,
+      versiones: [...(p.versiones || []), congelada],
+      historialEstados: [...(p.historialEstados || []),
+        { estado: "Borrador", fecha: E.hoy(), usuario: global.state?.user || "", nota: `versión ${(p.version || 1) + 1}` }] };
+    if (await guardar(reg, `Propuesta ${p.numero} · versión ${reg.version}`)) {
+      global.toast(`Versión ${reg.version} abierta · editá las condiciones y volvé a enviarla`);
+      global.go("propform/" + p.id);
+    }
   }
 
   // ==========================================================================
@@ -322,6 +402,9 @@
         para cambiar condiciones hay que hacer una propuesta nueva, y así queda
         registro de cuántas hicieron falta.
       </div>` : `
+      ${p && p.version > 1 ? `<div class="card interno" style="margin-top:14px">
+        Estás editando la <b>versión ${p.version}</b>. La versión ${p.version - 1} quedó guardada tal como salió${(p.versiones || []).slice(-1)[0]?.motivo ? `; el cliente pidió: <i>${esc(p.versiones.slice(-1)[0].motivo)}</i>` : ""}.
+      </div>` : ""}
       <div class="card" style="margin-top:16px">
         <div class="form-grid">
           <div class="field"><label for="pfCliente">Cliente</label>
@@ -360,7 +443,8 @@
           <div class="field"><label for="pfInicio">Inicio estimado</label>
             <input type="date" id="pfInicio" value="${esc(d.vigenciaPropuesta.inicioEstimado || "")}" /></div>
         </div>
-        <div class="check-row" style="margin:4px 0 12px">
+        ${global.bloqueTramos ? global.bloqueTramos(d.economico.tramos, "pfTramos") : ""}
+        <div class="check-row" style="margin:12px 0 12px">
           <label><input type="checkbox" id="pfIVA" ${d.economico.incluyeIVA ? "checked" : ""}> El canon incluye IVA</label>
           <label><input type="checkbox" id="pfRelev" ${d.cobertura?.relevamientoInicial !== false ? "checked" : ""}> Relevamiento técnico inicial sin cargo</label>
         </div>
@@ -400,7 +484,8 @@
       <input placeholder="Modelo" data-eq="modelo" value="${esc(e.modelo || "")}">
       <select data-eq="modalidad">${["MRI", "CT"].map((m) =>
         `<option${e.modalidad === m ? " selected" : ""}>${m}</option>`).join("")}</select>
-      <input placeholder="Ubicación" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+      <input placeholder="Ubicación / sede" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+      ${global.camposIngreso ? global.camposIngreso(e) : ""}
       <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
     </div>`;
   }
@@ -439,6 +524,9 @@
       row.querySelectorAll("[data-eq]").forEach((f) => (o[f.dataset.eq] = f.value.trim()));
       return o;
     }).filter((e) => e.marca || e.modelo || e.ubicacion);
+    const tramos = global.leerTramos ? global.leerTramos("pfTramos") : (anterior?.economico?.tramos || []);
+    const errTramo = global.tramosIncoherentes ? global.tramosIncoherentes(tramos) : "";
+    if (errTramo) { global.toast(errTramo, true, true); return; }
 
     const reg = {
       ...(anterior || {}),
@@ -451,6 +539,7 @@
         canonMensual: val("pfCanon"), moneda: val("pfMoneda"),
         formaPago: val("pfFormaPago"), incluyeIVA: document.getElementById("pfIVA").checked,
         valorReferencia: val("pfReferencia") || null, ajuste: val("pfAjuste"),
+        tramos,
       },
       plan, equipos,
       cobertura: { ...cobertura, relevamientoInicial: document.getElementById("pfRelev").checked },
@@ -497,8 +586,11 @@
     if (global.marcarComision &&
         !global.NEXO_COMISIONES.marcaDe("Propuesta", p.id, global.state?.marcasComision) &&
         !(await global.marcarComision("Propuesta", p.id, { alGuardar: "Guardar y enviar" }))) return;
-    if (await guardar({ ...p, estado: "Enviada", fechas: { ...p.fechas, enviado: E.hoy() } },
-        `Propuesta ${p.numero} enviada`)) {
+    // El primer envío no se pisa: mide cuánto tardó en convertirse. Cada
+    // versión guarda el suyo en `ultimoEnvio`.
+    if (await guardar({ ...p, estado: "Enviada",
+        fechas: { ...p.fechas, enviado: p.fechas.enviado || E.hoy(), ultimoEnvio: E.hoy() } },
+        `Propuesta ${p.numero}${p.version > 1 ? ` v${p.version}` : ""} enviada`)) {
       global.toast("Propuesta marcada como enviada");
       global.router();
     }
@@ -545,7 +637,7 @@
     const numero = proximoNumeroContrato();
 
     if (!confirm(
-      `Se va a crear el contrato ${numero} a partir de ${p.numero}.\n\n` +
+      `Se va a crear el contrato ${numero} a partir de ${p.numero}${p.version > 1 ? ` (versión ${p.version}, acuerdo final)` : ""}.\n\n` +
       `Cliente: ${cli?.nombreComercial || "—"}\n` +
       `Canon: ${money(p.economico.canonMensual, p.economico.moneda)}/mes\n` +
       `Vigencia: ${p.vigenciaPropuesta.meses} meses\n\n` +
@@ -573,7 +665,9 @@
       ajuste: {}, archivos: [], notas: "",
       fechas: { creado: E.hoy(), enviado: "", firmado: "" },
       historialEstados: [{ estado: "borrador", fecha: E.hoy(), usuario: global.state?.user || "—" }],
-      negociacion: { desviaciones: [] },
+      // Qué vuelta de la negociación es la que se firma: con varias versiones,
+      // sin esto no se sabe cuál de los documentos enviados es el acuerdo.
+      negociacion: { desviaciones: [], versionPropuesta: p.version || 1 },
     };
 
     global.state.data = [...contratos(), contrato];
@@ -638,6 +732,7 @@
 
   Object.assign(global, {
     filaEquipoProp: filaEquipo, guardarPropuesta, enviarPropuesta, aceptarPropuesta, rechazarPropuesta,
+    nuevaVersionPropuesta,
     generarContrato, exportarPropuestasCSV, limpiarFiltroProp, irPaginaProp,
   });
 })(typeof window !== "undefined" ? window : globalThis);

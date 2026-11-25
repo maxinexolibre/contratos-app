@@ -7,19 +7,76 @@
  * declaradas antes son visibles después. El orden importa.
  */
 
+// ---- Canon que se factura hoy y equipos que entran más adelante ----
+const hoyISO = () => new Date().toISOString().slice(0, 10);
+const canonHoy = (c) => NEXO_ESQUEMA.canonVigente(c, hoyISO());
+/**
+ * MRR por moneda. Nunca se suma entre monedas: un contrato en pesos sumado
+ * como si fueran dólares multiplicaba el ingreso mensual del tablero.
+ */
+function mrrPorMoneda(lista) {
+  const m = {};
+  for (const c of lista) {
+    const mon = c.economico?.moneda || "USD";
+    m[mon] = (m[mon] || 0) + canonHoy(c);
+  }
+  return m;
+}
+const facturacionDe = (c) => c.economico?.facturacion || "ConFactura";
+function pillCobro(c) {
+  const m = c.economico?.moneda || "USD";
+  return `<span class="pill-mon pill-${m.toLowerCase()}">${m}</span>${facturacionDe(c) === "SinFactura" ? ' <span class="pill-mon pill-sf" title="Se cobra sin factura">s/f</span>' : ""}`;
+}
+/**
+ * Cartera vigente abierta por moneda y por con o sin factura. Cada fila es
+ * una combinación: nunca se suman importes de monedas distintas.
+ */
+function carteraPorCobro(lista) {
+  const g = new Map();
+  for (const c of lista) {
+    const k = `${c.economico?.moneda || "USD"}|${facturacionDe(c)}`;
+    const x = g.get(k) || { moneda: c.economico?.moneda || "USD", facturacion: facturacionDe(c), contratos: 0, equipos: 0, mensual: 0 };
+    x.contratos++; x.equipos += NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length; x.mensual += canonHoy(c);
+    g.set(k, x);
+  }
+  return [...g.values()].sort((a, b) => a.moneda.localeCompare(b.moneda) || a.facturacion.localeCompare(b.facturacion));
+}
+function renderCarteraPorCobro(lista) {
+  const filas = carteraPorCobro(lista);
+  if (!filas.length) return "";
+  return `<div class="card"><h3>Cartera vigente por moneda y facturación</h3>
+    <table class="data" style="margin-top:8px"><thead><tr><th>Moneda</th><th>Facturación</th><th class="num">Contratos</th><th class="num">Equipos</th><th class="num">Se factura por mes</th><th class="num">Anualizado</th></tr></thead>
+    <tbody>${filas.map((f) => `<tr style="cursor:pointer" onclick="state.filtro.moneda='${f.moneda}';state.filtro.facturacion='${f.facturacion}';location.hash='listado'">
+      <td><span class="pill-mon pill-${f.moneda.toLowerCase()}">${f.moneda}</span></td>
+      <td>${NEXO_ESQUEMA.FACTURACION_LABEL[f.facturacion]}</td>
+      <td class="num">${f.contratos}</td><td class="num">${f.equipos}</td>
+      <td class="num"><b>${money(Math.round(f.mensual), f.moneda)}</b></td>
+      <td class="num">${money(Math.round(f.mensual * 12), f.moneda)}</td></tr>`).join("")}</tbody></table>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Tocá una fila para ver esos contratos. Los importes no se suman entre monedas.</p></div>`;
+}
+function moneyMapa(mapa, factor = 1) {
+  const e = Object.entries(mapa).filter(([, v]) => v);
+  return e.length ? e.map(([mon, v]) => money(Math.round(v * factor), mon)).join(" · ") : money(0);
+}
+
 function renderDashboard() {
   const el = document.getElementById("view-dashboard");
   const vigentes = state.data.filter((c) => ACTIVOS.has(c.estado));
   const pipeline = [...state.data.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado)),
     ...propuestasAbiertas()];
-  const mrr = vigentes.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
-  const { venc, aum, pend } = calcAlertas();
+  const mrrMap = mrrPorMoneda(vigentes);
+  // La dona es en dólares: mezclar pesos en el mismo gráfico daría porciones
+  // sin sentido. Lo que está en otra moneda se aclara debajo.
+  const vigUSD = vigentes.filter((c) => (c.economico?.moneda || "USD") === "USD");
+  const mrr = mrrMap.USD || 0;
+  const otrasMon = Object.fromEntries(Object.entries(mrrMap).filter(([m, v]) => m !== "USD" && v));
+  const { venc, aum, pend, toma } = calcAlertas();
   // MRR por nivel NexoCare (dona)
   const nivelItems = CAT.PLAN_ORDEN.map((id) => {
-    const v = vigentes.filter((c) => c.plan?.id === id).reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+    const v = vigUSD.filter((c) => c.plan?.id === id).reduce((s, c) => s + canonHoy(c), 0);
     return { label: CAT.PLANES[id].label, value: v, text: moneyK(v) };
   }).filter((i) => i.value > 0);
-  const sinNivel = vigentes.filter((c) => !c.plan?.id).reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+  const sinNivel = vigUSD.filter((c) => !c.plan?.id).reduce((s, c) => s + canonHoy(c), 0);
   if (sinNivel) nivelItems.push({ label: "Sin nivel", value: sinNivel, text: moneyK(sinNivel) });
   // Vencimientos por mes (próximos 6)
   const vmeses = [];
@@ -44,16 +101,18 @@ function renderDashboard() {
     <div class="grid-kpi">
       ${kpi("Contratos vigentes", vigentes.length, "en servicio activo")}
       ${kpi("En pipeline", pipeline.length, "propuestas abiertas")}
-      ${kpi("Ingreso mensual (MRR)", money(mrr), `${money(mrr * 12)} anualizado`)}
+      ${kpi("Ingreso mensual (MRR)", moneyMapa(mrrMap), `${moneyMapa(mrrMap, 12)} anualizado`)}
       ${kpi("Por vencer", venc.length, "≤ 30 días", venc.length ? "warn" : "")}
       ${kpi("Ajustes sin registrar", pend.length, pend.length ? "revisar si se aplicaron" : "todo al día", pend.length ? "danger" : "")}
     </div>
     <div class="dir-2col">
       <div class="card"><h3>MRR por nivel NexoCare</h3>
-        ${nivelItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(nivelItems, { centro: moneyK(mrr) })}${chartLegend(nivelItems)}</div>` : `<p class="muted">Sin contratos vigentes con nivel asignado.</p>`}</div>
+        ${nivelItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(nivelItems, { centro: moneyK(mrr) })}${chartLegend(nivelItems)}</div>` : `<p class="muted">Sin contratos vigentes con nivel asignado.</p>`}
+        ${Object.keys(otrasMon).length ? `<p class="muted" style="font-size:12.5px;margin:8px 0 0">En dólares. Además, en otra moneda: <b>${moneyMapa(otrasMon)}</b>/mes (no se suma al gráfico).</p>` : ""}</div>
       <div class="card"><h3>Vencimientos por mes <span class="muted" style="font-weight:400">· próximos 6</span></h3>
         ${vmeses.some((m) => m.value) ? chartColumns(vmeses) : `<p class="muted">Sin vencimientos en los próximos 6 meses.</p>`}</div>
     </div>
+    ${renderCarteraPorCobro(vigentes)}
     ${pend.length ? `<div class="card alert-panel danger">
       <h3>⚠ Ajustes de canon sin registrar</h3>
       <p class="muted" style="font-size:13.5px;margin:0 0 10px">Estas fechas de ajuste ya pasaron y el sistema no tiene registro de que se hayan aplicado. Un ajuste no aplicado no se recupera y arrastra la base del período siguiente.</p>
@@ -66,9 +125,10 @@ function renderDashboard() {
     </div>` : ""}
     <div class="card alert-panel">
       <h3>🔔 Próximas acciones</h3>
-      ${venc.length || aum.length ? [
+      ${venc.length || aum.length || toma.length ? [
         ...venc.map((v) => alertRow("venc", "Vence", v.c, `${fmt(v.fin)} · faltan ${v.dias} días`)),
         ...aum.map((a) => alertRow("aum", "Aumento", a.c, `${fmt(a.fecha)} · ${a.c.ajuste?.periodicidad} · faltan ${a.dias} días`)),
+        ...toma.map((t) => alertRow("aum", t.tipo, t.c, t.tipo === "Pausa" ? esc(t.detalle) : `${esc(t.detalle)} · ${fmt(t.fecha)} · faltan ${t.dias} días`)),
       ].join("") : `<p class="muted">Sin vencimientos ni aumentos dentro de los umbrales. ✅</p>`}
     </div>
     <div class="card">
@@ -214,6 +274,8 @@ function renderListado() {
       <input type="search" id="fq" placeholder="Buscar cliente o N°…" value="${esc(state.filtro.q)}" />
       <select id="festado"><option value="">Todos los estados</option>${ESTADOS.map((e) => `<option value="${e.id}" ${state.filtro.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
       <select id="fmod"><option value="">Toda modalidad</option><option value="MRI" ${state.filtro.modalidad === "MRI" ? "selected" : ""}>MRI</option><option value="CT" ${state.filtro.modalidad === "CT" ? "selected" : ""}>CT</option></select>
+      <select id="fmon"><option value="">Toda moneda</option>${["USD", "ARS"].map((m) => `<option ${state.filtro.moneda === m ? "selected" : ""}>${m}</option>`).join("")}</select>
+      <select id="ffac"><option value="">Con y sin factura</option>${NEXO_ESQUEMA.FACTURACION_CONTRATO.map((f) => `<option value="${f}" ${state.filtro.facturacion === f ? "selected" : ""}>${NEXO_ESQUEMA.FACTURACION_LABEL[f]}</option>`).join("")}</select>
       <span class="muted" style="font-size:13px">${rows.length} de ${state.data.length}</span>
     </div>
     <div class="overflow"><table class="data">
@@ -226,6 +288,8 @@ function renderListado() {
   document.getElementById("fq").oninput = (e) => { state.filtro.q = e.target.value; redibujarConFoco(renderListado); };
   document.getElementById("festado").onchange = (e) => { state.filtro.estado = e.target.value; renderListado(); };
   document.getElementById("fmod").onchange = (e) => { state.filtro.modalidad = e.target.value; renderListado(); };
+  document.getElementById("fmon").onchange = (e) => { state.filtro.moneda = e.target.value; renderListado(); };
+  document.getElementById("ffac").onchange = (e) => { state.filtro.facturacion = e.target.value; renderListado(); };
   document.getElementById("selAll").onclick = (e) => {
     rows.forEach((c) => (e.target.checked ? state.selected.add(c.id) : state.selected.delete(c.id)));
     renderListado();
@@ -239,6 +303,8 @@ function filtrados() {
     if (q && !(`${c.numero} ${c.cliente?.nombreComercial || ""} ${rs}`.toLowerCase().includes(q))) return false;
     if (state.filtro.estado && c.estado !== state.filtro.estado) return false;
     if (state.filtro.modalidad && !c.equipos?.some((e) => e.modalidad === state.filtro.modalidad)) return false;
+    if (state.filtro.moneda && (c.economico?.moneda || "USD") !== state.filtro.moneda) return false;
+    if (state.filtro.facturacion && facturacionDe(c) !== state.filtro.facturacion) return false;
     return true;
   });
 }
@@ -256,9 +322,9 @@ function trContrato(c) {
       if (!p || p === nombreCliente(c)) return "";
       return `<br><span class="muted" style="font-size:12px">${esc(p)}${rss.length > 1 ? ` · +${rss.length - 1} razón/es social/es` : ""}</span>`;
     })()}</td>
-    <td>${(c.equipos || []).length} <span class="muted">(${[...new Set((c.equipos || []).map((e) => e.modalidad))].join("/")})</span></td>
+    <td>${NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length}${NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length !== (c.equipos || []).length ? `<span class="muted"> de ${(c.equipos || []).length}</span>` : ""} <span class="muted">(${[...new Set((c.equipos || []).map((e) => e.modalidad))].join("/")})</span>${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length ? `<br><span class="muted" style="font-size:12px">${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length} por ingresar</span>` : ""}</td>
     <td><span class="badge ${c.estado}">${ESTADO_LABEL[c.estado]}</span></td>
-    <td>${money(c.economico?.canonMensual)}</td>
+    <td>${money(canonHoy(c), c.economico?.moneda)} ${pillCobro(c)}${canonHoy(c) !== (Number(c.economico?.canonMensual) || 0) ? `<br><span class="muted" style="font-size:12px">pleno ${money(c.economico?.canonMensual, c.economico?.moneda)}</span>` : ""}</td>
     <td>${vencTxt}</td>
     <td>${ajTxt}</td></tr>`;
 }
@@ -321,6 +387,7 @@ function renderDetalle(id) {
     <div class="detail-grid">
       <div>
         <div class="card"><h3>Cobertura por equipo</h3>${renderCoverage(c)}</div>
+        ${renderMovimientos(c)}
         ${(c.cobertura?.reparacionesIncluidas || []).length ? `<div class="card"><h3>Reparaciones / partes incluidas</h3>
           <ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.7">${c.cobertura.reparacionesIncluidas.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></div>` : ""}
         <div class="card"><h3>Alcance del servicio</h3><div class="check-row">
@@ -332,8 +399,10 @@ function renderDetalle(id) {
       <div>
         <div class="card"><h3>Datos económicos</h3>
           <dl class="kv">
-            <dt>Canon mensual</dt><dd><b>${money(c.economico?.canonMensual, c.economico?.moneda)}</b> ${c.economico?.incluyeIVA ? "(IVA incl.)" : "+ IVA"}</dd>
+            <dt>Canon ${(c.economico?.tramos || []).length ? "pleno pactado" : "mensual"}</dt><dd><b>${money(c.economico?.canonMensual, c.economico?.moneda)}</b> ${c.economico?.incluyeIVA ? "(IVA incl.)" : "+ IVA"}</dd>
             ${!c.economico?.incluyeIVA && c.economico?.canonMensual ? `<dt>Total c/ IVA ${c.economico?.ivaPct ?? 21}%</dt><dd>${money(Math.round(Number(c.economico.canonMensual) * (1 + (Number(c.economico?.ivaPct ?? 21) / 100))), c.economico?.moneda)}</dd>` : ""}
+            ${renderTramosKV(c)}
+            <dt>Cobro</dt><dd>${pillCobro(c)} ${NEXO_ESQUEMA.FACTURACION_LABEL[facturacionDe(c)]}</dd>
             <dt>Forma de pago</dt><dd>${esc(c.economico?.formaPago || "—")}</dd>
             <dt>Ajuste</dt><dd>${c.ajuste?.periodicidad || "—"} · ${c.ajuste?.indice || ""}</dd>
             <dt>Próximo ajuste</dt><dd>${fmt(pa)}</dd>
@@ -444,6 +513,15 @@ async function registrarAjuste(id) {
     usuario: state.user || "—",
   });
   c.economico.canonMensual = nuevo;
+  // Un tramo reducido que sigue corriendo es parte del mismo canon: si el
+  // pleno sube un 8%, lo que se factura mientras dura el tramo también.
+  // Sin esto, el ajuste no llegaba a lo que efectivamente se cobra.
+  if (anterior > 0 && (c.economico.tramos || []).length) {
+    const f = nuevo / anterior;
+    c.economico.tramos = c.economico.tramos.map((t) => (!t.hasta || t.hasta >= fecha)
+      ? { ...t, canonMensual: Math.round(Number(t.canonMensual) * f * 100) / 100 } : t);
+    c.ajuste.historial[c.ajuste.historial.length - 1].nota = "también se ajustaron los tramos en curso";
+  }
   try {
     await persist(`Ajuste ${c.numero} · ${money(anterior)} → ${money(nuevo)}`);
     toast(`Ajuste registrado · canon ${money(nuevo)}`);
@@ -574,7 +652,12 @@ function renderCoverage(c) {
   };
   return `<div class="overflow"><table class="cover">
     <thead><tr><th>Equipo</th>${SERVICIOS.map((s) => `<th>${s.label}</th>`).join("")}</tr></thead>
-    <tbody>${(c.equipos || []).map((e) => `<tr><td><b>${esc(e.marca)} ${esc(e.modelo)}</b> <span class="pill-modal">${e.modalidad}</span></td>${SERVICIOS.map((s) => `<td>${cellFor(s, e.modalidad)}</td>`).join("")}</tr>`).join("")}</tbody>
+    <tbody>${(c.equipos || []).map((e, i) => {
+      const est = NEXO_ESQUEMA.estadoEquipo(e, hoyISO());
+      const fuera = est === "Baja" || est === "Pausado";
+      return `<tr${fuera ? ' class="eq-fuera"' : ""}><td><b>${esc(e.marca)} ${esc(e.modelo)}</b> <span class="pill-modal">${e.modalidad}</span>${e.ubicacion ? `<br><span class="muted" style="font-size:12px">${esc(e.ubicacion)}</span>` : ""}${notaIngreso(e)}${notaEstado(e, est)}
+        ${accionesEquipo(c, e, i, est)}</td>${SERVICIOS.map((s) => `<td>${fuera ? '<span class="muted">—</span>' : cellFor(s, e.modalidad)}</td>`).join("")}</tr>`;
+    }).join("")}</tbody>
   </table></div>
   ${(() => {
     const notas = [];
@@ -682,7 +765,7 @@ function renderForm(id) {
       </fieldset>
 
       <fieldset><legend>Equipos</legend>
-        <div class="equipos-list" id="equipos">${(c.equipos || []).map(eqRow).join("")}</div>
+        <div class="equipos-list" id="equipos">${(c.equipos || []).map((e, i) => eqRow(e, i)).join("")}</div>
         <button type="button" class="btn sm" onclick="addEquipo()">+ Equipo</button>
       </fieldset>
 
@@ -711,12 +794,14 @@ function renderForm(id) {
       <fieldset><legend>Económico y ajuste</legend><div class="form-grid">
         ${inp("Canon mensual", "economico.canonMensual", c.economico.canonMensual, "", "number")}
         ${sel("Moneda", "economico.moneda", c.economico.moneda, [["USD", "USD"], ["ARS", "ARS"]])}
+        ${sel("Facturación <span class=\"hint\">(interno, no se imprime)</span>", "economico.facturacion", c.economico.facturacion || "ConFactura", NEXO_ESQUEMA.FACTURACION_CONTRATO.map((f) => [f, NEXO_ESQUEMA.FACTURACION_LABEL[f]]))}
         ${inp("IVA %", "economico.ivaPct", c.economico.ivaPct ?? 21, "", "number")}
         ${inp("Forma de pago", "economico.formaPago", c.economico.formaPago)}
         ${sel("Periodicidad de ajuste", "ajuste.periodicidad", c.ajuste.periodicidad, [["ninguno", "Ninguno"], ["trimestral", "Trimestral"], ["semestral", "Semestral"], ["anual", "Anual"]])}
         ${sel("Índice", "ajuste.indice", c.ajuste.indice, [["US_CPI", "US CPI"], ["IPC_INDEC", "IPC INDEC"]])}
       </div>
       <div class="check-row" style="margin-top:12px">${chk("Canon incluye IVA", "economico.incluyeIVA", c.economico.incluyeIVA)}</div>
+      ${bloqueTramos(c.economico.tramos, "tramos")}
       </fieldset>
 
       <fieldset><legend>Vigencia</legend><div class="form-grid">
@@ -748,14 +833,211 @@ function sel(label, path, val, opts) {
 function chk(label, path, val) {
   return `<label><input type="checkbox" data-path="${path}" ${val ? "checked" : ""}> ${label}</label>`;
 }
-function eqRow(e = {}) {
-  return `<div class="eq-row">
+function eqRow(e = {}, i) {
+  return `<div class="eq-row"${i != null ? ` data-i="${i}"` : ""}>
     <input placeholder="Marca" data-eq="marca" value="${esc(e.marca || "")}">
     <input placeholder="Modelo" data-eq="modelo" value="${esc(e.modelo || "")}">
     <select data-eq="modalidad"><option ${e.modalidad === "MRI" ? "selected" : ""}>MRI</option><option ${e.modalidad === "CT" ? "selected" : ""}>CT</option></select>
-    <input placeholder="Ubicación" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+    <input placeholder="Ubicación / sede" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+    ${camposIngreso(e)}
+    ${(e.eventos || []).length
+      ? `<button type="button" class="btn sm" disabled title="Tiene movimientos registrados: para sacarlo, dalo de baja desde la ficha y queda la trazabilidad">🔒</button>`
+      : `<button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>`}
+  </div>`;
+}
+/**
+ * Fechas de un equipo que no entra al contrato desde el primer día. Las
+ * comparte el formulario de propuestas (vistas/propuestas.js).
+ */
+function camposIngreso(e = {}) {
+  return `<label class="eq-fecha" title="Vacío = entra desde el inicio del contrato">Entra al contrato
+      <input type="date" data-eq="ingreso" value="${esc(e.ingreso || "")}"></label>
+    <label class="eq-fecha" title="Garantía del fabricante o de la venta. Solo informativo.">Garantía hasta
+      <input type="date" data-eq="garantiaHasta" value="${esc(e.garantiaHasta || "")}"></label>`;
+}
+function notaIngreso(e) {
+  const t = [];
+  if (e.ingreso && e.ingreso > hoyISO()) t.push(`<span class="pill-int" title="Figura en el contrato pero todavía no está cubierto">entra el ${fmt(e.ingreso)}</span>`);
+  if (e.garantiaHasta && e.garantiaHasta >= hoyISO()) t.push(`<span class="muted" style="font-size:12px">en garantía hasta ${fmt(e.garantiaHasta)}</span>`);
+  return t.length ? `<br>${t.join(" ")}` : "";
+}
+
+// ---- Bajas, pausas y reanudaciones de equipos ----
+// Un contrato de varios equipos no se reescribe cada vez que uno sale: se
+// registra el movimiento, con fecha, motivo y cómo quedó el canon.
+const nombreEq = (e) => [e.marca, e.modelo].filter(Boolean).join(" ") || "Equipo";
+function notaEstado(e, est) {
+  const evs = NEXO_ESQUEMA.normalizarEventosEquipo(e.eventos);
+  const ult = evs.filter((ev) => ev.fecha <= hoyISO()).pop();
+  if (est === "Baja") return `<br><span class="pill-int">baja ${fmt(ult.fecha)}</span>${ult.motivo ? ` <span class="muted" style="font-size:12px">${esc(ult.motivo)}</span>` : ""}`;
+  if (est === "Pausado") {
+    const d = NEXO_ESQUEMA.diasEnPausa(e, hoyISO());
+    return `<br><span class="pill-int">en pausa desde ${fmt(ult.fecha)} · ${d} días</span>${ult.motivo ? ` <span class="muted" style="font-size:12px">${esc(ult.motivo)}</span>` : ""}`;
+  }
+  return "";
+}
+function accionesEquipo(c, e, i, est) {
+  if (state.soloLectura || c.tipo !== "contrato" && !ACTIVOS.has(c.estado)) return "";
+  const b = (tipo, txt) => `<button class="btn sm ghost" style="padding:2px 8px;font-size:11.5px" onclick="movimientoEquipo('${c.id}',${i},'${tipo}')">${txt}</button>`;
+  const bs = est === "Activo" ? [b("Pausa", "Pausar"), b("Baja", "Dar de baja")]
+    : est === "Pausado" ? [b("Reanudacion", "Reanudar"), b("Baja", "Dar de baja")]
+    : est === "PorIngresar" ? [b("Baja", "Dar de baja")] : [];
+  return bs.length ? `<div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">${bs.join("")}</div>` : "";
+}
+/** Trazabilidad: todos los movimientos de equipos del contrato, el último arriba. */
+function renderMovimientos(c) {
+  const filas = [];
+  (c.equipos || []).forEach((e) => NEXO_ESQUEMA.normalizarEventosEquipo(e.eventos).forEach((ev) => filas.push({ e, ev })));
+  if (!filas.length) return "";
+  filas.sort((a, b) => b.ev.fecha.localeCompare(a.ev.fecha));
+  const m = c.economico?.moneda;
+  const activos = NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length;
+  return `<div class="card"><h3>Movimientos de equipos</h3>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Hoy ${activos} de ${(c.equipos || []).length} equipos con servicio.</p>
+    <table class="data"><thead><tr><th>Fecha</th><th>Equipo</th><th>Movimiento</th><th>Motivo</th><th class="num">Canon</th></tr></thead>
+    <tbody>${filas.map(({ e, ev }) => `<tr>
+      <td>${fmt(ev.fecha)}</td>
+      <td><b>${esc(nombreEq(e))}</b>${e.ubicacion ? `<br><span class="muted" style="font-size:12px">${esc(e.ubicacion)}</span>` : ""}</td>
+      <td>${NEXO_ESQUEMA.EVENTO_EQUIPO_LABEL[ev.tipo]}</td>
+      <td class="muted">${esc(ev.motivo || "—")}${ev.usuario ? `<br><span style="font-size:11.5px">${esc(ev.usuario)}${ev.registrado && ev.registrado !== ev.fecha ? ` · cargado ${fmt(ev.registrado)}` : ""}</span>` : ""}</td>
+      <td class="num" style="white-space:nowrap">${ev.canonDespues != null ? `${ev.canonAntes != null ? `<span class="muted">${money(ev.canonAntes, m)} →</span><br>` : ""}${money(ev.canonDespues, m)}` : '<span class="muted">sin cambio</span>'}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+const MOTIVOS_EQUIPO = {
+  Baja: ["Pasó al post venta del fabricante", "Equipo reemplazado por uno nuevo con garantía", "Equipo digitalizado, con post venta del fabricante", "Equipo dado de baja por el cliente"],
+  Pausa: ["El cliente no aprueba la reparación necesaria", "Equipo detenido por falla ajena al contrato", "Pedido del cliente"],
+  Reanudacion: ["Se hizo la reparación", "Pedido del cliente"],
+};
+/**
+ * Modal de movimiento. El canon es opcional: hay bajas que no cambian el
+ * precio y otras que sí. En una pausa con canon reducido se abre un tramo
+ * que la reanudación cierra, así lo que se facturó en cada mes queda claro.
+ */
+function movimientoEquipo(id, i, tipo) {
+  const c = state.data.find((x) => x.id === id);
+  const e = c?.equipos?.[i];
+  if (!e) return;
+  const m = c.economico?.moneda;
+  const canon = Number(c.economico?.canonMensual) || 0;
+  const titulo = { Baja: "Dar de baja", Pausa: "Pausar", Reanudacion: "Reanudar" }[tipo];
+  const ayudaCanon = {
+    Baja: `Canon del contrato desde la baja. Hoy: ${money(canon, m)}. Vacío = no cambia.`,
+    Pausa: `Canon que se factura mientras dure la pausa. Hoy: ${money(canonHoy(c), m)}. Vacío = se sigue cobrando igual.`,
+    Reanudacion: "Si la pausa tenía canon reducido, el tramo se cierra el día anterior y vuelve el canon pleno.",
+  }[tipo];
+  const ov = document.createElement("div");
+  ov.className = "overlay";
+  ov.id = "ovEquipo";
+  ov.innerHTML = `<div class="modal" style="max-width:520px">
+    <div class="kicker">${esc(c.numero)} · ${esc(nombreCliente(c))}</div>
+    <h2>${titulo} · ${esc(nombreEq(e))}</h2>
+    <p class="muted" style="margin:0 0 12px">${esc(e.ubicacion || "")}</p>
+    <div class="form-grid">
+      <div class="field"><label>Fecha</label><input type="date" id="meFecha" value="${hoyISO()}"></div>
+      ${tipo !== "Reanudacion" ? `<div class="field"><label>Canon ${tipo === "Pausa" ? "durante la pausa" : "nuevo"}</label><input type="number" min="0" step="any" id="meCanon" placeholder="sin cambio"></div>` : ""}
+    </div>
+    <p class="hint" style="margin:4px 0 10px;font-size:12px">${ayudaCanon}</p>
+    <div class="field full"><label>Motivo</label><input id="meMotivo" list="meMotivos" placeholder="Por qué"><datalist id="meMotivos">${MOTIVOS_EQUIPO[tipo].map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div>
+    <p id="meError" style="color:var(--danger,#b3261e);font-size:13px;min-height:1em;margin:8px 0 0"></p>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:10px">
+      <button class="btn ghost" type="button" onclick="document.getElementById('ovEquipo').remove()">Cancelar</button>
+      <button class="btn primary" type="button" id="meOk">${titulo}</button>
+    </div></div>`;
+  document.body.appendChild(ov);
+  document.getElementById("meOk").onclick = () => registrarMovimiento(id, i, tipo);
+}
+async function registrarMovimiento(id, i, tipo) {
+  const c = state.data.find((x) => x.id === id);
+  const e = c.equipos[i];
+  const fecha = document.getElementById("meFecha").value;
+  const motivo = document.getElementById("meMotivo").value.trim();
+  const canonTxt = document.getElementById("meCanon")?.value ?? "";
+  const err = NEXO_ESQUEMA.motivoNoEvento(e, tipo, fecha)
+    || (!motivo ? "Contá el motivo: es lo que queda en la trazabilidad" : "");
+  if (err) { document.getElementById("meError").textContent = err; return; }
+
+  // Se trabaja sobre una copia: si la validación del núcleo rechaza el
+  // guardado, el contrato en memoria no queda a medio modificar.
+  const prev = structuredClone(c);
+  const anterior = Number(c.economico?.canonMensual) || 0;
+  const ev = { fecha, tipo, motivo, usuario: state.user || "—", registrado: hoyISO(), canonAntes: null, canonDespues: null };
+  c.economico.tramos = c.economico.tramos || [];
+  if (tipo === "Baja" && canonTxt !== "") {
+    const nuevo = Number(canonTxt);
+    ev.canonAntes = anterior; ev.canonDespues = nuevo;
+    c.economico.canonMensual = nuevo;
+    c.ajuste = c.ajuste || {};
+    c.ajuste.historial = [...(c.ajuste.historial || []), { fecha, porcentaje: null, canonAnterior: anterior, canonNuevo: nuevo,
+      usuario: state.user || "—", nota: `baja de ${nombreEq(e)}${e.ubicacion ? " (" + e.ubicacion + ")" : ""}` }];
+  }
+  if (tipo === "Pausa" && canonTxt !== "") {
+    ev.canonAntes = NEXO_ESQUEMA.canonVigente(c, fecha); ev.canonDespues = Number(canonTxt);
+    c.economico.tramos.push({ desde: fecha, hasta: null, canonMensual: Number(canonTxt), motivo: `Pausa de ${nombreEq(e)}: ${motivo}` });
+  }
+  if (tipo === "Reanudacion") {
+    const pausa = NEXO_ESQUEMA.normalizarEventosEquipo(e.eventos).filter((x) => x.tipo === "Pausa").pop();
+    const t = pausa && c.economico.tramos.find((x) => x.desde === pausa.fecha && !x.hasta);
+    if (t) {
+      const d = new Date(fecha + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 1);
+      t.hasta = d.toISOString().slice(0, 10);
+      ev.canonAntes = t.canonMensual; ev.canonDespues = Number(c.economico.canonMensual) || 0;
+    }
+  }
+  e.eventos = [...(e.eventos || []), ev];
+  try {
+    await persist(`${NEXO_ESQUEMA.EVENTO_EQUIPO_LABEL[tipo]} ${nombreEq(e)} · ${c.numero}`);
+    document.getElementById("ovEquipo")?.remove();
+    toast(`${NEXO_ESQUEMA.EVENTO_EQUIPO_LABEL[tipo]} registrada`);
+    router();
+  } catch (x) {
+    Object.assign(c, prev);
+    document.getElementById("meError").textContent = x.message;
+  }
+}
+
+// ---- Tramos de canon (lo comparte el formulario de propuestas) ----
+function tramoRow(t = {}) {
+  return `<div class="tramo-row">
+    <label>Desde<input type="date" data-tr="desde" value="${esc(t.desde || "")}"></label>
+    <label>Hasta<input type="date" data-tr="hasta" value="${esc(t.hasta || "")}"></label>
+    <label>Canon en el tramo<input type="number" min="0" step="any" data-tr="canonMensual" value="${t.canonMensual == null ? "" : esc(t.canonMensual)}"></label>
+    <label class="tr-motivo">Motivo<input data-tr="motivo" placeholder="CT de la sede en garantía hasta diciembre" value="${esc(t.motivo || "")}"></label>
     <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
   </div>`;
+}
+function bloqueTramos(tramos, idBox) {
+  return `<div style="margin-top:14px">
+    <label style="font-weight:700;font-size:13px">Tramos de canon <span class="hint">— períodos en los que se factura otro importe que el canon pleno. Por ejemplo, mientras un equipo sigue en garantía. Fuera de los tramos rige el canon de arriba.</span></label>
+    <div id="${idBox}">${(tramos || []).map(tramoRow).join("")}</div>
+    <button type="button" class="btn sm" onclick="document.getElementById('${idBox}').insertAdjacentHTML('beforeend', tramoRow())">+ Tramo</button>
+  </div>`;
+}
+function leerTramos(idBox) {
+  return [...document.querySelectorAll(`#${idBox} .tramo-row`)].map((row) => {
+    const o = {};
+    row.querySelectorAll("[data-tr]").forEach((f) => (o[f.dataset.tr] = f.value.trim()));
+    o.canonMensual = o.canonMensual === "" ? null : Number(o.canonMensual);
+    return o;
+  }).filter((t) => t.canonMensual != null || t.desde || t.hasta || t.motivo);
+}
+/** El mismo control que hace el núcleo, pero antes de guardar y en criollo. */
+function tramosIncoherentes(tramos) {
+  for (const t of tramos) {
+    if (t.canonMensual == null) return "Hay un tramo de canon sin importe";
+    if (!t.desde && !t.hasta) return "Cada tramo necesita al menos una fecha (desde o hasta)";
+    if (t.desde && t.hasta && t.hasta < t.desde) return `El tramo ${t.desde} → ${t.hasta} termina antes de empezar`;
+  }
+  return "";
+}
+/** Filas de la ficha: qué se factura hoy y cada tramo pactado. */
+function renderTramosKV(c) {
+  const ts = NEXO_ESQUEMA.normalizarTramos(c.economico?.tramos);
+  if (!ts.length) return "";
+  const m = c.economico?.moneda;
+  const vig = NEXO_ESQUEMA.tramoVigente(c, hoyISO());
+  const rango = (t) => t.desde && t.hasta ? `${fmt(t.desde)} al ${fmt(t.hasta)}` : t.desde ? `desde ${fmt(t.desde)}` : `hasta ${fmt(t.hasta)}`;
+  return `<dt>Se factura hoy</dt><dd><b>${money(canonHoy(c), m)}</b>${vig ? ` <span class="muted">· tramo ${rango(vig)}${vig.motivo ? `<br>${esc(vig.motivo)}` : ""}</span>` : " <span class=\"muted\">(canon pleno)</span>"}</dd>
+    ${ts.filter((t) => t !== vig && !(vig && t.desde === vig.desde && t.hasta === vig.hasta)).map((t) => `<dt>Tramo ${rango(t)}</dt><dd>${money(t.canonMensual, m)}${t.motivo ? ` <span class="muted">· ${esc(t.motivo)}</span>` : ""}</dd>`).join("")}`;
 }
 function addEquipo() { document.getElementById("equipos").insertAdjacentHTML("beforeend", eqRow()); }
 function rsRow(r = {}) {
@@ -832,11 +1114,19 @@ async function guardarForm(isNew) {
     else v = f.value;
     setPath(c, f.dataset.path, v);
   });
-  c.equipos = [...document.querySelectorAll("#equipos .eq-row")].map((row) => {
-    const o = {};
+  // Se parte del equipo anterior para no perder campos que el formulario no
+  // muestra (N.º de serie): antes se reconstruía de cero y se borraban.
+  const eqPrev = c.equipos || [];
+  c.equipos = [...document.querySelectorAll("#equipos .eq-row")].map((row, i) => {
+    const o = { ...(eqPrev[Number(row.dataset.i)] || {}) };
     row.querySelectorAll("[data-eq]").forEach((f) => (o[f.dataset.eq] = f.value));
     return o;
   });
+  c.economico.tramos = leerTramos("tramos");
+  {
+    const t = tramosIncoherentes(c.economico.tramos);
+    if (t) { toast(t, true, true); return; }
+  }
   // razones sociales (repetibles) — la marcada con el radio es la que firma/factura
   const rsRows = [...document.querySelectorAll("#razones .rs-row")];
   c.cliente.razonesSociales = rsRows.map((row) => {
@@ -986,7 +1276,7 @@ function seleccionOTodo() {
 }
 function exportarCSV() {
   const rows = seleccionOTodo();
-  const cols = ["numero", "cliente", "razon_social", "cuit", "programa", "modulos_internos", "estado", "equipos", "modalidad", "bobinas_cupo", "bobinas_alcance", "bobinas_total_anual", "canon", "moneda", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
+  const cols = ["numero", "cliente", "razon_social", "cuit", "programa", "modulos_internos", "estado", "equipos", "modalidad", "bobinas_cupo", "bobinas_alcance", "bobinas_total_anual", "canon", "moneda", "facturacion", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
   const lines = [cols.join(",")];
   for (const c of rows) {
     const fin = computeFin(c), pa = computeProximoAjuste(c);
@@ -998,7 +1288,7 @@ function exportarCSV() {
       c.cobertura?.reparacionBobinasPorAnio ?? "",
       c.cobertura?.reparacionBobinasPorAnio && !bobinasIlimitadas(c) ? (c.cobertura?.bobinasAlcance === "porEquipo" ? "por equipo" : "flota") : "",
       bobinasTotal(c) ?? (bobinasIlimitadas(c) ? "sin límite" : ""),
-      c.economico?.canonMensual, c.economico?.moneda, c.vigencia?.inicio || "",
+      c.economico?.canonMensual, c.economico?.moneda, NEXO_ESQUEMA.FACTURACION_LABEL[facturacionDe(c)], c.vigencia?.inicio || "",
       fin ? fin.toISOString().slice(0, 10) : "", c.ajuste?.periodicidad, pa ? pa.toISOString().slice(0, 10) : "",
     ];
     lines.push(vals.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
@@ -1021,9 +1311,9 @@ function exportarInforme() {
   const vig = rows.filter((c) => ACTIVOS.has(c.estado));
   const pipe = rows.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado));
   const cerrados = rows.filter((c) => ["vencida", "rescindida", "perdida"].includes(c.estado));
-  const mrr = vig.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
-  const potencial = pipe.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
-  const equipos = vig.reduce((s, c) => s + (c.equipos || []).length, 0);
+  const mrr = mrrPorMoneda(vig);
+  const potencial = mrrPorMoneda(pipe);
+  const equipos = vig.reduce((s, c) => s + NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length, 0);
   const planPub = (c) => c.plan?.etiquetaPublica || CAT.PLANES[c.plan?.id]?.label || "—";
 
   // Agenda de los próximos 180 días: vencimientos y aumentos pactados
@@ -1104,8 +1394,8 @@ function exportarInforme() {
 
     <div class="grid-kpi">
       <div class="k"><div class="lb">Contratos vigentes</div><div class="vl">${vig.length}</div><div class="sb">${equipos} equipos en servicio</div></div>
-      <div class="k"><div class="lb">Ingreso mensual</div><div class="vl">${money(mrr)}</div><div class="sb">${money(mrr * 12)} anualizado</div></div>
-      <div class="k"><div class="lb">Propuestas abiertas</div><div class="vl">${pipe.length}</div><div class="sb">${money(potencial)}/mes potencial</div></div>
+      <div class="k"><div class="lb">Ingreso mensual</div><div class="vl">${moneyMapa(mrr)}</div><div class="sb">${moneyMapa(mrr, 12)} anualizado</div></div>
+      <div class="k"><div class="lb">Propuestas abiertas</div><div class="vl">${pipe.length}</div><div class="sb">${moneyMapa(potencial)}/mes potencial</div></div>
     </div>
 
     <h2>Contratos vigentes</h2>
