@@ -1,179 +1,199 @@
 {
-  "_leeme": "Destino en Nexolibre Gestión de cada campo de nucleo/esquema.js. 'maestra' = la tabla ya existe en el sistema y se reutiliza (solo se agregan columnas). Valores: 'columna', 'columna (nueva)', 'jsonb:columna', 'hijo:tabla', 'ref:tabla.columna', 'auditoria' (created_at/created_by/historial genérico), '-: motivo' (no se migra). tools/probar-migracion.mjs falla si en el esquema aparece un campo que acá no está.",
+  "_leeme": "Destino en Nexolibre Gestión de cada campo de nucleo/esquema.js, cruzado contra el esquema real que pasó Gestión el 24/11/2026. 'maestra' = la tabla ya existe y se reutiliza. Valores: 'columna' (ya existe), 'columna (nueva)' (la agrega una migración de sql/), 'hijo:tabla', 'empresa_id' (el país define la empresa: AR = grupo-nexo, cada filial es otra), 'auditoria' (created_at / created_by), '-: motivo' (no se migra). tools/probar-migracion.mjs falla si en el esquema aparece un campo que acá no está.",
   "clientes": {
     "destino": "clientes + razones_sociales", "maestra": true,
     "campos": {
-      "id": "-: se reemplaza por uuid; se guarda en legado_id (nueva) para reconciliar",
-      "razonSocial": "ref:razones_sociales.razon_social",
-      "nombreComercial": "ref:clientes.nombre",
-      "cuit": "ref:razones_sociales.cuit",
-      "pais": "pais (nueva en razones_sociales)",
-      "localidad": "ref:razones_sociales.direccion",
-      "provincia": "ref:razones_sociales.direccion",
-      "contacto": "ref:razones_sociales.contacto",
-      "email": "ref:razones_sociales.email",
-      "telefono": "ref:razones_sociales.telefono",
-      "alias": "alias text[] (nueva en clientes)",
-      "grupo": "ref:clientes (el grupo es el cliente; cada sede es una razón social CLxxx-NN)",
-      "sede": "ref:razones_sociales (sucursal)",
+      "id": "legado_id (nueva, en razones_sociales)",
+      "razonSocial": "razones_sociales.nombre_legal",
+      "nombreComercial": "razones_sociales.denominacion_tecnica",
+      "cuit": "razones_sociales.cuit (clave del cruce; lo que no cruce va a revisión manual)",
+      "pais": "empresa_id",
+      "localidad": "razones_sociales.direccion (se concatena)",
+      "provincia": "razones_sociales.direccion (se concatena)",
+      "contacto": "razones_sociales.contacto",
+      "email": "razones_sociales.email",
+      "telefono": "razones_sociales.telefono",
+      "alias": "alias (nueva, text[] en clientes)",
+      "grupo": "clientes.nombre (el grupo es el cliente)",
+      "sede": "razones_sociales.sucursal_nombre",
       "creado": "auditoria"
     }
   },
   "usuarios": {
-    "destino": "profiles + memberships", "maestra": true,
+    "destino": "memberships", "maestra": true,
     "campos": {
-      "id": "-: auth.uid()",
-      "nombre": "ref:profiles.nombre",
-      "email": "ref:profiles.email",
-      "rol": "ref:memberships.rol (ver tabla de roles en FACTIBILIDAD.md)",
-      "activo": "ref:memberships.activo"
+      "id": "-: memberships.user_id (auth.uid())",
+      "nombre": "-: perfil del sistema",
+      "email": "-: perfil del sistema",
+      "rol": "memberships.role + memberships.capacidades (ver tabla de roles)",
+      "activo": "-: sin membresía = sin acceso"
     }
   },
   "tickets": {
     "destino": "oportunidades (nueva)", "maestra": false,
     "campos": {
-      "id": "id", "numero": "numero", "fecha": "fecha",
-      "clienteId": "razon_social_id", "pais": "pais", "vendedor": "vendedor_id",
-      "campanaId": "campana_id", "leadId": "lead_id", "estado": "estado", "tipo": "tipo",
+      "id": "legado_id", "numero": "numero", "fecha": "fecha",
+      "clienteId": "razon_social_id + cliente_id", "pais": "empresa_id", "vendedor": "vendedor_id",
+      "campanaId": "campana_ref (texto hasta fase 2)", "leadId": "lead_ref (texto hasta fase 2)",
+      "traidoPor": "traido_por_id", "traidoPorAsignacion": "traido_por_asignado_por / traido_por_asignado_el",
+      "estado": "estado", "tipo": "tipo",
       "prioridad": "prioridad", "descripcion": "descripcion", "montoEstimado": "monto_estimado",
       "moneda": "moneda", "recurrencia": "recurrencia",
       "presupuestoIds": "-: se deriva de presupuestos.oportunidad_id",
       "fechaCierre": "fecha_cierre", "cierreEstimado": "cierre_estimado",
-      "motivoPerdida": "motivo_perdida", "historial": "auditoria", "usuario": "auditoria"
+      "motivoPerdida": "motivo_perdida", "historial": "historial (jsonb)", "usuario": "auditoria"
     }
   },
   "presupuestos": {
     "destino": "presupuestos", "maestra": true,
     "campos": {
-      "id": "id", "numero": "numero", "ticketId": "oportunidad_id (nueva)",
-      "fecha": "fecha", "validezDias": "validez_dias (nueva)", "vence": "-: se calcula en v_presupuestos",
-      "tipo": "tipo (nueva)", "subtipo": "subtipo (nueva)", "titulo": "titulo",
-      "clienteId": "razon_social_id", "pais": "pais (nueva)", "condicionIVA": "condicion_iva (nueva)",
-      "estado": "estado", "estadoOrigen": "estado_origen (nueva)",
-      "items": "hijo:presupuesto_items",
+      "id": "legado_id (nueva)", "numero": "numero", "ticketId": "oportunidad_id (nueva)",
+      "fecha": "fecha", "validezDias": "validez_dias (nueva)", "vence": "fecha_vencimiento",
+      "tipo": "tipo (nueva)", "subtipo": "subtipo (nueva)", "titulo": "detalle",
+      "clienteId": "razon_social_id + cliente_id", "pais": "empresa_id", "condicionIVA": "condicion_iva (nueva)",
+      "estado": "estado (Enviado se guarda como Pendiente)", "estadoOrigen": "estado_origen (nueva)",
+      "items": "hijo:presupuesto_items (nueva)",
       "garantia": "garantia_aplica / garantia_dias / garantia_texto (nuevas)",
-      "economico": "moneda, recurrencia, descuento_pct, iva_pct, incluye_iva, forma_pago (nuevas las que falten)",
-      "subtotal": "subtotal (congelado al emitir, ver brecha B6)", "total": "total", "neto": "neto",
+      "economico": "moneda, descuento_pct, forma_pago (existen) + recurrencia, iva_pct, incluye_iva (nuevas)",
+      "subtotal": "subtotal (nueva, congelado al emitir)", "total": "monto (congelado al emitir)", "neto": "neto (nueva)",
       "esLegado": "-: se deriva de la moneda", "vendedorId": "vendedor_id (nueva)",
       "motivoAnulacion": "motivo_anulacion (nueva)", "fechaEnvio": "fecha_envio (nueva)",
-      "hash": "hash (nueva)", "notas": "notas", "archivos": "adjuntos del sistema (Storage)",
-      "historialEstados": "auditoria", "usuario": "auditoria"
+      "hash": "hash (nueva)", "notas": "notas (nueva)", "archivos": "-: adjuntos del sistema",
+      "historialEstados": "historial_estados (nueva, jsonb)", "usuario": "auditoria"
     }
   },
   "propuestas": {
     "destino": "propuestas (nueva)", "maestra": false,
     "campos": {
-      "id": "id", "numero": "numero", "numeroLegado": "numero_legado", "clienteId": "razon_social_id",
-      "pais": "pais", "ticketId": "oportunidad_id", "estado": "estado", "contratoId": "contrato_id",
+      "id": "legado_id", "numero": "numero", "numeroLegado": "numero_legado", "clienteId": "razon_social_id + cliente_id",
+      "pais": "empresa_id", "ticketId": "oportunidad_id", "estado": "estado", "contratoId": "contrato_id",
       "fechas": "fecha_creado / fecha_enviado / fecha_resuelto", "validezDias": "validez_dias",
-      "motivoRechazo": "motivo_rechazo", "plan": "jsonb:plan", "equipos": "hijo:propuesta_equipos (ref equipos)",
-      "cobertura": "jsonb:cobertura", "economico": "canon_mensual, moneda, iva_pct, incluye_iva, forma_pago, valor_referencia, ajuste",
+      "motivoRechazo": "motivo_rechazo", "plan": "plan (jsonb)", "equipos": "hijo:propuesta_equipos (ref equipos)",
+      "cobertura": "cobertura (jsonb)", "economico": "canon_mensual, moneda, iva_pct, incluye_iva, forma_pago, valor_referencia, ajuste",
       "vigenciaPropuesta": "vigencia_meses / inicio_estimado", "esquemaAnterior": "esquema_anterior",
-      "archivos": "adjuntos del sistema (Storage)", "notas": "notas", "historialEstados": "auditoria"
+      "archivos": "-: adjuntos del sistema", "notas": "notas", "historialEstados": "historial_estados (jsonb)"
     }
   },
   "contratos": {
     "destino": "contratos", "maestra": true,
     "campos": {
-      "id": "id", "numero": "numero", "numeroLegado": "numero_legado (nueva)", "origen": "origen (nueva)",
-      "clienteId": "razon_social_id", "pais": "pais (nueva)", "propuestaId": "propuesta_id (nueva)",
+      "id": "legado_id (nueva)", "numero": "numero", "numeroLegado": "numero_legado (nueva)", "origen": "origen (nueva)",
+      "clienteId": "razon_social_id (nueva) + cliente_id", "pais": "empresa_id", "propuestaId": "propuesta_id (nueva)",
       "ticketId": "oportunidad_id (nueva)", "presupuestoId": "presupuesto_id",
-      "hashPresupuesto": "hash_presupuesto (nueva)", "estado": "estado", "tipo": "tipo",
+      "hashPresupuesto": "hash_presupuesto (nueva)", "estado": "estado (Activo = Vigente, Anulado = Cancelado)", "tipo": "tipo (nueva)",
       "fechaFirma": "fecha_firma", "fechas": "fecha_creado / fecha_enviado (nuevas)",
-      "negociacion": "jsonb:negociacion (nueva)",
-      "vigencia": "fecha_inicio, meses, fecha_fin, renovacion_automatica, preaviso_dias",
-      "economico": "canon_mensual, moneda, iva_pct, incluye_iva, forma_pago",
-      "recurrencia": "recurrencia (nueva)", "equipos": "hijo:contrato_equipos (ref equipos)",
-      "cobertura": "jsonb:cobertura (nueva)", "ajuste": "jsonb:ajuste (nueva)", "plan": "jsonb:plan (nueva)",
-      "archivos": "adjuntos del sistema (Storage)", "notas": "notas", "historialEstados": "auditoria"
+      "negociacion": "negociacion (nueva, jsonb)",
+      "vigencia": "fecha_inicio, vigencia_meses, renovacion_automatica, preaviso_dias (nuevas) + fecha_vencimiento",
+      "economico": "canon_mensual, iva_pct, incluye_iva, forma_pago (nuevas) + moneda; monto no se reusa (no se sabe si hoy es mensual o total)",
+      "recurrencia": "recurrencia (nueva)", "equipos": "hijo:contrato_equipos (nueva, ref equipos)",
+      "cobertura": "cobertura (nueva, jsonb)", "ajuste": "ajuste (nueva, jsonb)", "plan": "plan (nueva, jsonb)",
+      "archivos": "archivo_url (el contrato firmado)", "notas": "notas (nueva)", "historialEstados": "historial_estados (nueva, jsonb)"
     }
   },
   "facturaciones": {
-    "destino": "facturas / cobros", "maestra": true,
+    "destino": "facturas (Factura / NotaCredito) · cobros (Recibo / Efectivo / Transferencia)", "maestra": true,
     "campos": {
-      "id": "id", "presupuestoId": "presupuesto_id", "contratoId": "contrato_id",
-      "numeroComprobante": "numero", "fechaEmision": "fecha", "pais": "pais (nueva)",
-      "periodoCobrado": "periodo_cobrado (nueva, clave: ver brecha B7)",
-      "tipoComprobante": "facturas si Factura/NotaCredito; cobros si Recibo/Efectivo/Transferencia",
-      "condicionIVA": "condicion_iva", "ivaPct": "iva_pct", "montoIVA": "monto_iva", "montoNeto": "monto_neto",
+      "id": "legado_id (nueva)", "presupuestoId": "presupuesto_id / vinculo", "contratoId": "contrato_id / vinculo",
+      "numeroComprobante": "n_factura", "fechaEmision": "facturas.fecha_facturacion · cobros.fecha", "pais": "empresa_id",
+      "periodoCobrado": "periodo_cobrado (nueva, en las dos)",
+      "tipoComprobante": "elige la tabla; en facturas, tipo_comprobante (código ARCA)",
+      "condicionIVA": "condicion_iva_receptor_id", "ivaPct": "iva_pct (nueva)", "montoIVA": "iva", "montoNeto": "monto",
       "referenciaUF": "referencia_uf (nueva)", "monedaCotizacion": "moneda_cotizacion (nueva)",
-      "montoCotizado": "monto_cotizado (nueva)", "tcUnidad": "tc_unidad (nueva)", "tcValor": "tc_valor (nueva)",
-      "tcFecha": "tc_fecha (nueva)", "tcFuente": "tc_fuente (nueva)", "monedaLiquidacion": "moneda",
-      "montoLiquidado": "total", "emitidoPor": "auditoria", "creado": "auditoria"
+      "montoCotizado": "importe_usd (si USD) · monto_cotizado (nueva, si UF)", "tcUnidad": "tc_unidad (nueva)", "tcValor": "tc_valor (nueva)",
+      "tcFecha": "tc_fecha (nueva)", "tcFuente": "tc_fuente (nueva)", "monedaLiquidacion": "moneda (nueva)",
+      "montoLiquidado": "facturas.importe_final · cobros.monto_recibido", "emitidoPor": "auditoria", "creado": "auditoria"
     }
   },
   "tiposCambio": {
-    "destino": "tipos_cambio (nueva, salvo que Finanzas ya tenga una)", "maestra": false,
-    "campos": { "id": "id", "fecha": "fecha", "unidad": "unidad", "tasa": "tasa", "fuente": "fuente" }
+    "destino": "tipo_cambio", "maestra": true,
+    "campos": {
+      "id": "-: una fila por empresa y día", "fecha": "fecha",
+      "unidad": "ARS/CLP/UYU → oficial_venta en la empresa del país · UF → uf_valor (nueva)",
+      "tasa": "oficial_venta · uf_valor", "fuente": "fuente (nueva)"
+    }
   },
   "vendedores": {
     "destino": "vendedores (nueva)", "maestra": false,
     "campos": {
-      "id": "id", "nombre": "nombre", "usuarioId": "empleado_id (null para externos y representantes)",
+      "id": "legado_id", "nombre": "nombre", "usuarioId": "user_id (auth; null para externos)",
       "relacion": "relacion", "email": "email", "telefono": "telefono", "documento": "documento",
-      "zona": "zona", "pais": "pais", "estado": "estado", "fechaAlta": "fecha_alta", "fechaBaja": "fecha_baja",
-      "metaMensual": "meta_mensual", "metaMoneda": "meta_moneda", "notas": "notas"
+      "zona": "zona", "pais": "empresa_id", "estado": "estado", "fechaAlta": "fecha_alta", "fechaBaja": "fecha_baja",
+      "areaComision": "area_comision", "metaMensual": "meta_mensual", "metaMoneda": "meta_moneda", "notas": "notas"
     }
   },
   "acuerdosComision": {
     "destino": "acuerdos_comision (nueva)", "maestra": false,
     "campos": {
-      "id": "id", "alcance": "alcance", "vendedorId": "vendedor_id", "area": "area", "paises": "paises text[]",
+      "id": "legado_id", "alcance": "alcance", "vendedorId": "vendedor_id", "area": "area", "paises": "paises (text[])",
       "nombre": "nombre", "modalidad": "modalidad", "base": "base", "porcentaje": "porcentaje",
-      "montoFijo": "monto_fijo", "escalones": "jsonb:escalones", "moneda": "moneda", "tope": "tope",
+      "montoFijo": "monto_fijo", "escalones": "escalones (jsonb)", "moneda": "moneda", "tope": "tope",
       "pagoTrasCobro": "pago_tras_cobro", "mesesRecurrente": "meses_recurrente",
       "vigenciaDesde": "vigencia_desde", "vigenciaHasta": "vigencia_hasta", "notas": "notas", "creado": "auditoria"
     }
   },
-  "comisiones": {
-    "destino": "comisiones (nueva)", "maestra": false,
+  "marcasComision": {
+    "destino": "comision_marcas (nueva) + comision_pagos (nueva)", "maestra": false,
     "campos": {
-      "id": "id", "alcance": "alcance", "vendedorId": "vendedor_id", "area": "area", "acuerdoId": "acuerdo_id",
-      "origenTipo": "vinculo_tipo", "origenId": "vinculo_id", "origenNumero": "-: se lee del vínculo",
-      "clienteId": "razon_social_id", "periodo": "periodo", "baseCalculo": "base_calculo",
-      "porcentajeAplicado": "porcentaje_aplicado", "monto": "monto", "moneda": "moneda", "estado": "estado",
-      "fechaDevengo": "fecha_devengo", "fechaAprobacion": "fecha_aprobacion", "fechaLiquidacion": "fecha_liquidacion",
-      "detalleCalculo": "detalle_calculo", "aprobadaPor": "aprobada_por (uuid)", "motivoAnulacion": "motivo_anulacion",
-      "observaciones": "observaciones"
+      "id": "legado_id", "origenTipo": "vinculo_tipo", "origenId": "vinculo_id", "origenNumero": "-: se lee del vínculo",
+      "clienteId": "razon_social_id", "lleva": "lleva", "criterio": "criterio", "motivo": "motivo",
+      "primeraActividad": "primera_actividad", "externo": "externo_vendedor_id / externo_porcentaje",
+      "area": "area", "baseManual": "base_manual", "costos": "costos", "costosMoneda": "costos_moneda",
+      "costosTC": "costos_tc", "historico": "historico", "pagos": "hijo:comision_pagos",
+      "decididoPor": "decidido_por", "fecha": "fecha", "notas": "notas"
+    }
+  },
+  "comisiones": {
+    "destino": "comisiones (existe: se amplía, filas con sensible = true)", "maestra": true,
+    "campos": {
+      "id": "legado_id (nueva)", "alcance": "alcance (nueva)", "vendedorId": "vendedor_id (nueva) + agente (nombre, compatibilidad)",
+      "area": "area (nueva)", "acuerdoId": "acuerdo_id (nueva)",
+      "origenTipo": "vinculo_tipo (nueva)", "origenId": "vinculo_id (nueva)", "origenNumero": "-: se lee del vínculo",
+      "clienteId": "razon_social_id (nueva)", "periodo": "periodo (nueva)", "baseCalculo": "total",
+      "porcentajeAplicado": "porcentaje", "monto": "monto (nueva) + comision_usd si es USD", "moneda": "moneda (nueva)",
+      "estado": "estado",
+      "fechaDevengo": "fecha_devengo (nueva)", "fechaAprobacion": "fecha_aprobacion (nueva)", "fechaLiquidacion": "fecha_pago_comision",
+      "detalleCalculo": "detalle_calculo (nueva)", "aprobadaPor": "aprobada_por (nueva)", "motivoAnulacion": "motivo_anulacion (nueva)",
+      "observaciones": "corresponde_a"
     }
   },
   "catalogo": {
-    "destino": "catalogo_items (nueva; ver brecha B9 sobre stock)", "maestra": false,
+    "destino": "stock_productos (se amplía) + stock_producto_fotos (nueva)", "maestra": true,
     "campos": {
-      "id": "id", "ref": "ref", "tipo": "tipo", "nombre": "nombre", "categoria": "categoria", "modalidad": "modalidad",
-      "marca": "marca", "modeloCompatible": "modelo_compatible", "nroParte": "nro_parte", "condicion": "condicion",
-      "disponibilidad": "disponibilidad", "pais": "pais", "garantiaDias": "garantia_dias", "precio": "precio",
-      "moneda": "moneda", "descripcion": "descripcion", "fotos": "hijo:catalogo_fotos (Storage)",
-      "publicarWeb": "publicar_web", "canales": "canal_dotmed / canal_ebay", "procedencia": "procedencia",
-      "proveedor": "proveedor_id (ref proveedores)", "origenUrl": "origen_url", "costo": "costo",
-      "nroSerie": "nro_serie", "codigoInterno": "codigo_interno", "ubicacionFisica": "ubicacion_fisica",
-      "presupuestoId": "presupuesto_id", "notas": "notas", "auditoria": "auditoria_estado / auditoria_fecha / auditoria_por",
-      "origen": "origen", "creado": "auditoria", "actualizado": "updated_at", "usuario": "auditoria"
+      "id": "legado_id (nueva)", "ref": "ref_publica (nueva)", "tipo": "tipo_producto ('Parte' / 'Equipo')",
+      "nombre": "descripcion", "categoria": "categoria", "modalidad": "modalidad (nueva)",
+      "marca": "marca", "modeloCompatible": "compatibilidades", "nroParte": "codigo_fabricante", "condicion": "condicion (nueva)",
+      "disponibilidad": "disponibilidad (nueva)", "pais": "empresa_id", "garantiaDias": "garantia_dias (nueva)", "precio": "precio_venta (nueva)",
+      "moneda": "moneda (nueva)", "descripcion": "descripcion_web (nueva)", "fotos": "hijo:stock_producto_fotos (foto_url queda como portada)",
+      "publicarWeb": "publicar_web (nueva)", "canales": "canal_dotmed / canal_ebay (nuevas)", "procedencia": "procedencia (nueva)",
+      "proveedor": "proveedor_texto (nueva; proveedores es la tabla de facturas de compra, no un padrón)", "origenUrl": "origen_url (nueva)", "costo": "ultimo_precio",
+      "nroSerie": "nro_serie (nueva)", "codigoInterno": "codigo_interno", "ubicacionFisica": "ubicacion_fisica (nueva)",
+      "presupuestoId": "presupuesto_id (nueva)", "notas": "notas (nueva)", "auditoria": "auditoria_estado / auditoria_fecha / auditoria_por (nuevas)",
+      "origen": "-: empresa_origen", "creado": "auditoria", "actualizado": "updated_at (nueva)", "usuario": "auditoria"
     }
   },
   "campanas": {
-    "destino": "mkt_campanas (nueva, fase 2)", "maestra": false,
+    "destino": "mkt_campanas (fase 2, sin migración todavía)", "maestra": false,
     "campos": {
-      "id": "id", "nombre": "nombre", "objetivo": "objetivo", "presupuestoAsignado": "presupuesto_asignado",
+      "id": "legado_id", "nombre": "nombre", "objetivo": "objetivo", "presupuestoAsignado": "presupuesto_asignado",
       "moneda": "moneda", "fechaInicio": "fecha_inicio", "fechaFin": "fecha_fin", "canales": "canales text[]",
       "responsable": "responsable_id", "estado": "estado", "notas": "notas"
     }
   },
   "estrategias": {
-    "destino": "mkt_estrategias (nueva, fase 2)", "maestra": false,
+    "destino": "mkt_estrategias (fase 2)", "maestra": false,
     "campos": {
-      "id": "id", "campanaId": "campana_id", "tipo": "tipo", "descripcion": "descripcion",
+      "id": "legado_id", "campanaId": "campana_id", "tipo": "tipo", "descripcion": "descripcion",
       "kpiObjetivo": "kpi_metrica / kpi_objetivo / kpi_unidad", "kpiValorActual": "kpi_valor_actual",
       "inversion": "inversion", "fechaEjecucion": "fecha_ejecucion", "estado": "estado"
     }
   },
   "leads": {
-    "destino": "mkt_leads (nueva, fase 2)", "maestra": false,
+    "destino": "mkt_leads (fase 2)", "maestra": false,
     "campos": {
-      "id": "id", "campanaId": "campana_id", "estrategiaId": "estrategia_id", "canal": "canal",
+      "id": "legado_id", "campanaId": "campana_id", "estrategiaId": "estrategia_id", "canal": "canal",
       "origenDetalle": "origen_detalle", "fechaCaptura": "fecha_captura", "contactoNombre": "contacto_nombre",
       "contactoEmail": "contacto_email", "contactoTel": "contacto_tel", "institucion": "institucion",
-      "sitioWeb": "sitio_web", "tier": "tier", "segmento": "segmento", "pais": "pais",
+      "sitioWeb": "sitio_web", "tier": "tier", "segmento": "segmento", "pais": "empresa_id",
       "clienteId": "cliente_id", "ticketId": "oportunidad_id", "estado": "estado", "paso": "paso",
       "fechaUltimoToque": "-: se deriva de mkt_toques", "proximoToque": "proximo_toque",
       "historialToques": "hijo:mkt_toques", "motivoDescarte": "motivo_descarte"

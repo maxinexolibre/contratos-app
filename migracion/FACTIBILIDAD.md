@@ -4,6 +4,26 @@ Análisis hecho el 20/11/2026 contra `main` (5a33aef) y el documento
 "Requisitos para migrar una app a Nexolibre Gestión". Sin acceso todavía al
 repo del sistema: todo lo que dice "a confirmar" depende de ver su esquema real.
 
+## Estado al 25/11/2026
+
+Gestión respondió las 10 preguntas y pasó el esquema sin datos de las tablas que
+tocamos. Con eso:
+
+- **Mapeo final** cruzado contra columnas reales en [`mapeo.json`](mapeo.json).
+- **Nueve migraciones SQL** idempotentes, probadas dos veces seguidas sobre una
+  copia vacía de su esquema. No viven en este repo, que es público, porque
+  describen el esquema y los permisos de un sistema ajeno: están en la carpeta
+  del proyecto (`migracion-gestion/sql/`).
+- Decisiones que cierran brechas: AR va a `grupo-nexo` y cada filial es su
+  propia empresa, así que `pais` pasa a ser `empresa_id` (B1). Se amplían las
+  monedas (B2). La oportunidad es una tabla propia y el Trabajo nace al aprobarse
+  el presupuesto (B3). Los totales se congelan al emitir (B6). Se agregan
+  `periodo_cobrado` y el tipo de cambio congelado a facturas y cobros (B7). El
+  catálogo cuelga de `stock_productos` (B9). El contrato sigue saliendo en Word.
+- Lo que sigue pendiente de Gestión está en `sql/LEEME.md`: el trigger de
+  "Vinculado a", las firmas de las funciones de permisos, la capacidad
+  `aprobar_comercial`, el rol de Marketing y el id de la unidad Nexolibre.
+
 ## Veredicto
 
 **Es factible, pero es una reescritura de pantallas con migración de datos, no
