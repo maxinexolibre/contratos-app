@@ -430,14 +430,18 @@
     };
   }
 
-  /** Ingreso recurrente contratado. Solo cuenta lo firmado y vigente. */
-  function recurrente(contratos) {
+  /**
+   * Ingreso recurrente contratado. Solo cuenta lo firmado y vigente, y por lo
+   * que se factura hoy: un contrato con un equipo que todavía está en garantía
+   * cobra un tramo reducido, y contar el canon pleno inflaba el MRR.
+   */
+  function recurrente(contratos, fecha = E.hoy()) {
     const vivos = contratos.filter(
       (c) => c.recurrencia === "mensual" && ["Firmado", "Activo"].includes(c.estado));
     const mensual = {};
     for (const c of vivos) {
       const m = c.economico.moneda || "USD";
-      mensual[m] = E.money((mensual[m] || 0) + c.economico.canonMensual);
+      mensual[m] = E.money((mensual[m] || 0) + E.canonVigente(c, fecha));
     }
     const anual = {};
     for (const [m, v] of Object.entries(mensual)) anual[m] = E.money(v * 12);

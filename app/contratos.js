@@ -7,19 +7,44 @@
  * declaradas antes son visibles después. El orden importa.
  */
 
+// ---- Canon que se factura hoy y equipos que entran más adelante ----
+const hoyISO = () => new Date().toISOString().slice(0, 10);
+const canonHoy = (c) => NEXO_ESQUEMA.canonVigente(c, hoyISO());
+/**
+ * MRR por moneda. Nunca se suma entre monedas: un contrato en pesos sumado
+ * como si fueran dólares multiplicaba el ingreso mensual del tablero.
+ */
+function mrrPorMoneda(lista) {
+  const m = {};
+  for (const c of lista) {
+    const mon = c.economico?.moneda || "USD";
+    m[mon] = (m[mon] || 0) + canonHoy(c);
+  }
+  return m;
+}
+function moneyMapa(mapa, factor = 1) {
+  const e = Object.entries(mapa).filter(([, v]) => v);
+  return e.length ? e.map(([mon, v]) => money(Math.round(v * factor), mon)).join(" · ") : money(0);
+}
+
 function renderDashboard() {
   const el = document.getElementById("view-dashboard");
   const vigentes = state.data.filter((c) => ACTIVOS.has(c.estado));
   const pipeline = [...state.data.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado)),
     ...propuestasAbiertas()];
-  const mrr = vigentes.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
-  const { venc, aum, pend } = calcAlertas();
+  const mrrMap = mrrPorMoneda(vigentes);
+  // La dona es en dólares: mezclar pesos en el mismo gráfico daría porciones
+  // sin sentido. Lo que está en otra moneda se aclara debajo.
+  const vigUSD = vigentes.filter((c) => (c.economico?.moneda || "USD") === "USD");
+  const mrr = mrrMap.USD || 0;
+  const otrasMon = Object.fromEntries(Object.entries(mrrMap).filter(([m, v]) => m !== "USD" && v));
+  const { venc, aum, pend, toma } = calcAlertas();
   // MRR por nivel NexoCare (dona)
   const nivelItems = CAT.PLAN_ORDEN.map((id) => {
-    const v = vigentes.filter((c) => c.plan?.id === id).reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+    const v = vigUSD.filter((c) => c.plan?.id === id).reduce((s, c) => s + canonHoy(c), 0);
     return { label: CAT.PLANES[id].label, value: v, text: moneyK(v) };
   }).filter((i) => i.value > 0);
-  const sinNivel = vigentes.filter((c) => !c.plan?.id).reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+  const sinNivel = vigUSD.filter((c) => !c.plan?.id).reduce((s, c) => s + canonHoy(c), 0);
   if (sinNivel) nivelItems.push({ label: "Sin nivel", value: sinNivel, text: moneyK(sinNivel) });
   // Vencimientos por mes (próximos 6)
   const vmeses = [];
@@ -44,13 +69,14 @@ function renderDashboard() {
     <div class="grid-kpi">
       ${kpi("Contratos vigentes", vigentes.length, "en servicio activo")}
       ${kpi("En pipeline", pipeline.length, "propuestas abiertas")}
-      ${kpi("Ingreso mensual (MRR)", money(mrr), `${money(mrr * 12)} anualizado`)}
+      ${kpi("Ingreso mensual (MRR)", moneyMapa(mrrMap), `${moneyMapa(mrrMap, 12)} anualizado`)}
       ${kpi("Por vencer", venc.length, "≤ 30 días", venc.length ? "warn" : "")}
       ${kpi("Ajustes sin registrar", pend.length, pend.length ? "revisar si se aplicaron" : "todo al día", pend.length ? "danger" : "")}
     </div>
     <div class="dir-2col">
       <div class="card"><h3>MRR por nivel NexoCare</h3>
-        ${nivelItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(nivelItems, { centro: moneyK(mrr) })}${chartLegend(nivelItems)}</div>` : `<p class="muted">Sin contratos vigentes con nivel asignado.</p>`}</div>
+        ${nivelItems.some((i) => i.value) ? `<div class="chart-donut-row">${chartDonut(nivelItems, { centro: moneyK(mrr) })}${chartLegend(nivelItems)}</div>` : `<p class="muted">Sin contratos vigentes con nivel asignado.</p>`}
+        ${Object.keys(otrasMon).length ? `<p class="muted" style="font-size:12.5px;margin:8px 0 0">En dólares. Además, en otra moneda: <b>${moneyMapa(otrasMon)}</b>/mes (no se suma al gráfico).</p>` : ""}</div>
       <div class="card"><h3>Vencimientos por mes <span class="muted" style="font-weight:400">· próximos 6</span></h3>
         ${vmeses.some((m) => m.value) ? chartColumns(vmeses) : `<p class="muted">Sin vencimientos en los próximos 6 meses.</p>`}</div>
     </div>
@@ -66,9 +92,10 @@ function renderDashboard() {
     </div>` : ""}
     <div class="card alert-panel">
       <h3>🔔 Próximas acciones</h3>
-      ${venc.length || aum.length ? [
+      ${venc.length || aum.length || toma.length ? [
         ...venc.map((v) => alertRow("venc", "Vence", v.c, `${fmt(v.fin)} · faltan ${v.dias} días`)),
         ...aum.map((a) => alertRow("aum", "Aumento", a.c, `${fmt(a.fecha)} · ${a.c.ajuste?.periodicidad} · faltan ${a.dias} días`)),
+        ...toma.map((t) => alertRow("aum", t.tipo, t.c, `${esc(t.detalle)} · ${fmt(t.fecha)} · faltan ${t.dias} días`)),
       ].join("") : `<p class="muted">Sin vencimientos ni aumentos dentro de los umbrales. ✅</p>`}
     </div>
     <div class="card">
@@ -256,9 +283,9 @@ function trContrato(c) {
       if (!p || p === nombreCliente(c)) return "";
       return `<br><span class="muted" style="font-size:12px">${esc(p)}${rss.length > 1 ? ` · +${rss.length - 1} razón/es social/es` : ""}</span>`;
     })()}</td>
-    <td>${(c.equipos || []).length} <span class="muted">(${[...new Set((c.equipos || []).map((e) => e.modalidad))].join("/")})</span></td>
+    <td>${(c.equipos || []).length} <span class="muted">(${[...new Set((c.equipos || []).map((e) => e.modalidad))].join("/")})</span>${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length ? `<br><span class="muted" style="font-size:12px">${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length} por ingresar</span>` : ""}</td>
     <td><span class="badge ${c.estado}">${ESTADO_LABEL[c.estado]}</span></td>
-    <td>${money(c.economico?.canonMensual)}</td>
+    <td>${money(canonHoy(c), c.economico?.moneda)}${canonHoy(c) !== (Number(c.economico?.canonMensual) || 0) ? `<br><span class="muted" style="font-size:12px">pleno ${money(c.economico?.canonMensual, c.economico?.moneda)}</span>` : ""}</td>
     <td>${vencTxt}</td>
     <td>${ajTxt}</td></tr>`;
 }
@@ -332,8 +359,9 @@ function renderDetalle(id) {
       <div>
         <div class="card"><h3>Datos económicos</h3>
           <dl class="kv">
-            <dt>Canon mensual</dt><dd><b>${money(c.economico?.canonMensual, c.economico?.moneda)}</b> ${c.economico?.incluyeIVA ? "(IVA incl.)" : "+ IVA"}</dd>
+            <dt>Canon ${(c.economico?.tramos || []).length ? "pleno pactado" : "mensual"}</dt><dd><b>${money(c.economico?.canonMensual, c.economico?.moneda)}</b> ${c.economico?.incluyeIVA ? "(IVA incl.)" : "+ IVA"}</dd>
             ${!c.economico?.incluyeIVA && c.economico?.canonMensual ? `<dt>Total c/ IVA ${c.economico?.ivaPct ?? 21}%</dt><dd>${money(Math.round(Number(c.economico.canonMensual) * (1 + (Number(c.economico?.ivaPct ?? 21) / 100))), c.economico?.moneda)}</dd>` : ""}
+            ${renderTramosKV(c)}
             <dt>Forma de pago</dt><dd>${esc(c.economico?.formaPago || "—")}</dd>
             <dt>Ajuste</dt><dd>${c.ajuste?.periodicidad || "—"} · ${c.ajuste?.indice || ""}</dd>
             <dt>Próximo ajuste</dt><dd>${fmt(pa)}</dd>
@@ -444,6 +472,15 @@ async function registrarAjuste(id) {
     usuario: state.user || "—",
   });
   c.economico.canonMensual = nuevo;
+  // Un tramo reducido que sigue corriendo es parte del mismo canon: si el
+  // pleno sube un 8%, lo que se factura mientras dura el tramo también.
+  // Sin esto, el ajuste no llegaba a lo que efectivamente se cobra.
+  if (anterior > 0 && (c.economico.tramos || []).length) {
+    const f = nuevo / anterior;
+    c.economico.tramos = c.economico.tramos.map((t) => (!t.hasta || t.hasta >= fecha)
+      ? { ...t, canonMensual: Math.round(Number(t.canonMensual) * f * 100) / 100 } : t);
+    c.ajuste.historial[c.ajuste.historial.length - 1].nota = "también se ajustaron los tramos en curso";
+  }
   try {
     await persist(`Ajuste ${c.numero} · ${money(anterior)} → ${money(nuevo)}`);
     toast(`Ajuste registrado · canon ${money(nuevo)}`);
@@ -574,7 +611,7 @@ function renderCoverage(c) {
   };
   return `<div class="overflow"><table class="cover">
     <thead><tr><th>Equipo</th>${SERVICIOS.map((s) => `<th>${s.label}</th>`).join("")}</tr></thead>
-    <tbody>${(c.equipos || []).map((e) => `<tr><td><b>${esc(e.marca)} ${esc(e.modelo)}</b> <span class="pill-modal">${e.modalidad}</span></td>${SERVICIOS.map((s) => `<td>${cellFor(s, e.modalidad)}</td>`).join("")}</tr>`).join("")}</tbody>
+    <tbody>${(c.equipos || []).map((e) => `<tr><td><b>${esc(e.marca)} ${esc(e.modelo)}</b> <span class="pill-modal">${e.modalidad}</span>${e.ubicacion ? `<br><span class="muted" style="font-size:12px">${esc(e.ubicacion)}</span>` : ""}${notaIngreso(e)}</td>${SERVICIOS.map((s) => `<td>${cellFor(s, e.modalidad)}</td>`).join("")}</tr>`).join("")}</tbody>
   </table></div>
   ${(() => {
     const notas = [];
@@ -682,7 +719,7 @@ function renderForm(id) {
       </fieldset>
 
       <fieldset><legend>Equipos</legend>
-        <div class="equipos-list" id="equipos">${(c.equipos || []).map(eqRow).join("")}</div>
+        <div class="equipos-list" id="equipos">${(c.equipos || []).map((e, i) => eqRow(e, i)).join("")}</div>
         <button type="button" class="btn sm" onclick="addEquipo()">+ Equipo</button>
       </fieldset>
 
@@ -717,6 +754,7 @@ function renderForm(id) {
         ${sel("Índice", "ajuste.indice", c.ajuste.indice, [["US_CPI", "US CPI"], ["IPC_INDEC", "IPC INDEC"]])}
       </div>
       <div class="check-row" style="margin-top:12px">${chk("Canon incluye IVA", "economico.incluyeIVA", c.economico.incluyeIVA)}</div>
+      ${bloqueTramos(c.economico.tramos, "tramos")}
       </fieldset>
 
       <fieldset><legend>Vigencia</legend><div class="form-grid">
@@ -748,14 +786,76 @@ function sel(label, path, val, opts) {
 function chk(label, path, val) {
   return `<label><input type="checkbox" data-path="${path}" ${val ? "checked" : ""}> ${label}</label>`;
 }
-function eqRow(e = {}) {
-  return `<div class="eq-row">
+function eqRow(e = {}, i) {
+  return `<div class="eq-row"${i != null ? ` data-i="${i}"` : ""}>
     <input placeholder="Marca" data-eq="marca" value="${esc(e.marca || "")}">
     <input placeholder="Modelo" data-eq="modelo" value="${esc(e.modelo || "")}">
     <select data-eq="modalidad"><option ${e.modalidad === "MRI" ? "selected" : ""}>MRI</option><option ${e.modalidad === "CT" ? "selected" : ""}>CT</option></select>
-    <input placeholder="Ubicación" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+    <input placeholder="Ubicación / sede" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+    ${camposIngreso(e)}
     <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
   </div>`;
+}
+/**
+ * Fechas de un equipo que no entra al contrato desde el primer día. Las
+ * comparte el formulario de propuestas (vistas/propuestas.js).
+ */
+function camposIngreso(e = {}) {
+  return `<label class="eq-fecha" title="Vacío = entra desde el inicio del contrato">Entra al contrato
+      <input type="date" data-eq="ingreso" value="${esc(e.ingreso || "")}"></label>
+    <label class="eq-fecha" title="Garantía del fabricante o de la venta. Solo informativo.">Garantía hasta
+      <input type="date" data-eq="garantiaHasta" value="${esc(e.garantiaHasta || "")}"></label>`;
+}
+function notaIngreso(e) {
+  const t = [];
+  if (e.ingreso && e.ingreso > hoyISO()) t.push(`<span class="pill-int" title="Figura en el contrato pero todavía no está cubierto">entra el ${fmt(e.ingreso)}</span>`);
+  if (e.garantiaHasta && e.garantiaHasta >= hoyISO()) t.push(`<span class="muted" style="font-size:12px">en garantía hasta ${fmt(e.garantiaHasta)}</span>`);
+  return t.length ? `<br>${t.join(" ")}` : "";
+}
+
+// ---- Tramos de canon (lo comparte el formulario de propuestas) ----
+function tramoRow(t = {}) {
+  return `<div class="tramo-row">
+    <label>Desde<input type="date" data-tr="desde" value="${esc(t.desde || "")}"></label>
+    <label>Hasta<input type="date" data-tr="hasta" value="${esc(t.hasta || "")}"></label>
+    <label>Canon en el tramo<input type="number" min="0" step="any" data-tr="canonMensual" value="${t.canonMensual == null ? "" : esc(t.canonMensual)}"></label>
+    <label class="tr-motivo">Motivo<input data-tr="motivo" placeholder="CT de la sede en garantía hasta diciembre" value="${esc(t.motivo || "")}"></label>
+    <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
+  </div>`;
+}
+function bloqueTramos(tramos, idBox) {
+  return `<div style="margin-top:14px">
+    <label style="font-weight:700;font-size:13px">Tramos de canon <span class="hint">— períodos en los que se factura otro importe que el canon pleno. Por ejemplo, mientras un equipo sigue en garantía. Fuera de los tramos rige el canon de arriba.</span></label>
+    <div id="${idBox}">${(tramos || []).map(tramoRow).join("")}</div>
+    <button type="button" class="btn sm" onclick="document.getElementById('${idBox}').insertAdjacentHTML('beforeend', tramoRow())">+ Tramo</button>
+  </div>`;
+}
+function leerTramos(idBox) {
+  return [...document.querySelectorAll(`#${idBox} .tramo-row`)].map((row) => {
+    const o = {};
+    row.querySelectorAll("[data-tr]").forEach((f) => (o[f.dataset.tr] = f.value.trim()));
+    o.canonMensual = o.canonMensual === "" ? null : Number(o.canonMensual);
+    return o;
+  }).filter((t) => t.canonMensual != null || t.desde || t.hasta || t.motivo);
+}
+/** El mismo control que hace el núcleo, pero antes de guardar y en criollo. */
+function tramosIncoherentes(tramos) {
+  for (const t of tramos) {
+    if (t.canonMensual == null) return "Hay un tramo de canon sin importe";
+    if (!t.desde && !t.hasta) return "Cada tramo necesita al menos una fecha (desde o hasta)";
+    if (t.desde && t.hasta && t.hasta < t.desde) return `El tramo ${t.desde} → ${t.hasta} termina antes de empezar`;
+  }
+  return "";
+}
+/** Filas de la ficha: qué se factura hoy y cada tramo pactado. */
+function renderTramosKV(c) {
+  const ts = NEXO_ESQUEMA.normalizarTramos(c.economico?.tramos);
+  if (!ts.length) return "";
+  const m = c.economico?.moneda;
+  const vig = NEXO_ESQUEMA.tramoVigente(c, hoyISO());
+  const rango = (t) => t.desde && t.hasta ? `${fmt(t.desde)} al ${fmt(t.hasta)}` : t.desde ? `desde ${fmt(t.desde)}` : `hasta ${fmt(t.hasta)}`;
+  return `<dt>Se factura hoy</dt><dd><b>${money(canonHoy(c), m)}</b>${vig ? ` <span class="muted">· tramo ${rango(vig)}${vig.motivo ? `<br>${esc(vig.motivo)}` : ""}</span>` : " <span class=\"muted\">(canon pleno)</span>"}</dd>
+    ${ts.filter((t) => t !== vig && !(vig && t.desde === vig.desde && t.hasta === vig.hasta)).map((t) => `<dt>Tramo ${rango(t)}</dt><dd>${money(t.canonMensual, m)}${t.motivo ? ` <span class="muted">· ${esc(t.motivo)}</span>` : ""}</dd>`).join("")}`;
 }
 function addEquipo() { document.getElementById("equipos").insertAdjacentHTML("beforeend", eqRow()); }
 function rsRow(r = {}) {
@@ -832,11 +932,19 @@ async function guardarForm(isNew) {
     else v = f.value;
     setPath(c, f.dataset.path, v);
   });
-  c.equipos = [...document.querySelectorAll("#equipos .eq-row")].map((row) => {
-    const o = {};
+  // Se parte del equipo anterior para no perder campos que el formulario no
+  // muestra (N.º de serie): antes se reconstruía de cero y se borraban.
+  const eqPrev = c.equipos || [];
+  c.equipos = [...document.querySelectorAll("#equipos .eq-row")].map((row, i) => {
+    const o = { ...(eqPrev[Number(row.dataset.i)] || {}) };
     row.querySelectorAll("[data-eq]").forEach((f) => (o[f.dataset.eq] = f.value));
     return o;
   });
+  c.economico.tramos = leerTramos("tramos");
+  {
+    const t = tramosIncoherentes(c.economico.tramos);
+    if (t) { toast(t, true, true); return; }
+  }
   // razones sociales (repetibles) — la marcada con el radio es la que firma/factura
   const rsRows = [...document.querySelectorAll("#razones .rs-row")];
   c.cliente.razonesSociales = rsRows.map((row) => {
@@ -1021,8 +1129,8 @@ function exportarInforme() {
   const vig = rows.filter((c) => ACTIVOS.has(c.estado));
   const pipe = rows.filter((c) => ["borrador", "enviada", "negociacion"].includes(c.estado));
   const cerrados = rows.filter((c) => ["vencida", "rescindida", "perdida"].includes(c.estado));
-  const mrr = vig.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
-  const potencial = pipe.reduce((s, c) => s + (Number(c.economico?.canonMensual) || 0), 0);
+  const mrr = mrrPorMoneda(vig);
+  const potencial = mrrPorMoneda(pipe);
   const equipos = vig.reduce((s, c) => s + (c.equipos || []).length, 0);
   const planPub = (c) => c.plan?.etiquetaPublica || CAT.PLANES[c.plan?.id]?.label || "—";
 
@@ -1104,8 +1212,8 @@ function exportarInforme() {
 
     <div class="grid-kpi">
       <div class="k"><div class="lb">Contratos vigentes</div><div class="vl">${vig.length}</div><div class="sb">${equipos} equipos en servicio</div></div>
-      <div class="k"><div class="lb">Ingreso mensual</div><div class="vl">${money(mrr)}</div><div class="sb">${money(mrr * 12)} anualizado</div></div>
-      <div class="k"><div class="lb">Propuestas abiertas</div><div class="vl">${pipe.length}</div><div class="sb">${money(potencial)}/mes potencial</div></div>
+      <div class="k"><div class="lb">Ingreso mensual</div><div class="vl">${moneyMapa(mrr)}</div><div class="sb">${moneyMapa(mrr, 12)} anualizado</div></div>
+      <div class="k"><div class="lb">Propuestas abiertas</div><div class="vl">${pipe.length}</div><div class="sb">${moneyMapa(potencial)}/mes potencial</div></div>
     </div>
 
     <h2>Contratos vigentes</h2>

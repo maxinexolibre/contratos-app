@@ -255,8 +255,11 @@ table.cover thead th { font: 700 11px var(--body); color: var(--taupe); text-tra
 .field .hint { font-size: 12px; color: var(--mut); }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin: 0 0 18px; }
 fieldset legend { font: 800 13px var(--body); text-transform: uppercase; letter-spacing: 0.06em; color: var(--orange); padding: 0 8px; }
-.equipos-list .eq-row { display: grid; grid-template-columns: 1fr 1fr 90px 1fr 34px; gap: 8px; margin-bottom: 8px; }
-@media (max-width: 700px) { .equipos-list .eq-row { grid-template-columns: 1fr 1fr; } }
+.equipos-list .eq-row { display: grid; grid-template-columns: 1fr 1fr 80px 1fr 140px 140px 34px; gap: 8px; margin-bottom: 8px; align-items: end; }
+.eq-row .eq-fecha, .tramo-row label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--taupe); font-weight: 600; }
+.tramo-row { display: grid; grid-template-columns: 150px 150px 170px 1fr 34px; gap: 8px; margin: 8px 0; align-items: end; }
+@media (max-width: 1000px) { .equipos-list .eq-row { grid-template-columns: 1fr 1fr 80px 1fr; } }
+@media (max-width: 700px) { .equipos-list .eq-row, .tramo-row { grid-template-columns: 1fr 1fr; } .tramo-row .tr-motivo { grid-column: 1 / -1; } }
 .check-row { display: flex; flex-wrap: wrap; gap: 16px; }
 .check-row label { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: var(--ink); }
 

@@ -210,6 +210,80 @@
   /** Redondeo monetario a 2 decimales, evitando el error de coma flotante. */
   const money = (n) => Math.round((esNumero(n) + Number.EPSILON) * 100) / 100;
 
+
+  // --------------------------------------------------------------------------
+  // Canon por tramos y equipos que entran más adelante
+  // --------------------------------------------------------------------------
+
+  /**
+   * Tramos de canon: períodos en los que se factura algo distinto del canon
+   * pactado. Caso típico: uno de los equipos sigue en garantía del fabricante
+   * y entra al contrato recién cuando vence, así que hasta entonces se cobra
+   * menos. `canonMensual` sigue siendo el canon pleno acordado; el tramo dice
+   * cuánto se cobra mientras dura. `desde` o `hasta` vacíos = sin límite.
+   */
+  function normalizarTramos(v) {
+    return esLista(v).map((t) => ({
+      desde: fecha(t?.desde),
+      hasta: fecha(t?.hasta),
+      // Se admite 0 (período bonificado), pero no un tramo sin importe:
+      // money(null) daría 0 y un tramo sin cargar se leería como "gratis".
+      canonMensual: t?.canonMensual == null || t.canonMensual === "" ? null : money(t.canonMensual),
+      motivo: esTexto(t?.motivo),
+    })).filter((t) => t.canonMensual !== null && (t.desde || t.hasta))
+      .sort((a, b) => String(a.desde || "").localeCompare(String(b.desde || "")));
+  }
+
+  /** Tramo que rige en una fecha, o null si rige el canon pleno. */
+  function tramoVigente(registro, f = hoy()) {
+    return normalizarTramos(registro?.economico?.tramos)
+      .find((t) => (!t.desde || t.desde <= f) && (!t.hasta || f <= t.hasta)) || null;
+  }
+
+  /** Lo que se factura por mes en una fecha dada. */
+  function canonVigente(registro, f = hoy()) {
+    const t = tramoVigente(registro, f);
+    return t ? t.canonMensual : money(registro?.economico?.canonMensual);
+  }
+
+  /**
+   * Un equipo con `ingreso` futuro figura en el contrato pero todavía no está
+   * cubierto: hasta esa fecha no se le debe servicio ni se cuenta en la flota.
+   */
+  function equipoCubierto(equipo, f = hoy()) {
+    const ing = fecha(equipo?.ingreso);
+    return !ing || ing <= f;
+  }
+
+  /** Equipos que entran después de una fecha (los "pendientes de toma"). */
+  function equiposPorIngresar(registro, f = hoy()) {
+    return esLista(registro?.equipos).filter((e) => !equipoCubierto(e, f));
+  }
+
+  /**
+   * Una versión de la negociación de una propuesta. Guarda las condiciones
+   * tal como salieron al cliente en esa vuelta: si después se edita la
+   * propuesta, lo que se mandó antes no se pierde.
+   */
+  function normalizarVersion(v) {
+    return {
+      n: esNumero(v?.n, 1),
+      creado: fecha(v?.creado),
+      enviado: fecha(v?.enviado),
+      cerrado: fecha(v?.cerrado),
+      usuario: esTexto(v?.usuario),
+      // Qué pidió el cliente o qué cambió para la vuelta siguiente.
+      motivo: esTexto(v?.motivo),
+      economico: v?.economico || {},
+      equipos: esLista(v?.equipos),
+      plan: v?.plan || {},
+      cobertura: v?.cobertura || {},
+      vigenciaPropuesta: v?.vigenciaPropuesta || {},
+      validezDias: v?.validezDias == null ? null : esNumero(v.validezDias),
+      notas: esTexto(v?.notas),
+    };
+  }
+
   /**
    * Clave de deduplicación de clientes: sin acentos, sin puntuación, minúsculas.
    * Dos fichas que solo difieren en mayúsculas, tildes o puntuación colapsan
@@ -450,9 +524,19 @@
           contratoId: esTexto(r.contratoId) || null,
           fechas: {
             creado: fecha(r.fechas?.creado) || hoy(),
+            // Primer envío. Con renegociaciones no se pisa: es el que mide
+            // cuánto tardó la propuesta en convertirse.
             enviado: fecha(r.fechas?.enviado),
+            // Envío de la versión vigente.
+            ultimoEnvio: fecha(r.fechas?.ultimoEnvio) || fecha(r.fechas?.enviado),
             resuelto: fecha(r.fechas?.resuelto),
           },
+          // Vuelta de la negociación en la que está la propuesta. Antes cada
+          // contraoferta obligaba a hacer una propuesta nueva y el historial
+          // quedaba repartido en varias fichas sin vínculo entre sí.
+          version: Math.max(1, esNumero(r.version, 1)),
+          // Versiones anteriores, congeladas como salieron al cliente.
+          versiones: esLista(r.versiones).map(normalizarVersion),
           validezDias: esNumero(r.validezDias, 30),
           motivoRechazo: estado === "Rechazada" ? esTexto(r.motivoRechazo) : "",
           // Lo que se le ofrece al cliente
@@ -472,6 +556,7 @@
               ? null : money(r.economico.valorReferencia),
             // Cómo se ajusta el canon, en el texto que lee el cliente.
             ajuste: esTexto(r.economico?.ajuste),
+            tramos: normalizarTramos(r.economico?.tramos),
           },
           vigenciaPropuesta: {
             meses: esNumero(r.vigenciaPropuesta?.meses, 12),
@@ -542,6 +627,10 @@
             ivaPct: esNumero(r.economico?.ivaPct, 21),
             incluyeIVA: esBool(r.economico?.incluyeIVA),
             formaPago: esTexto(r.economico?.formaPago),
+            // Sin propagarlo acá, el tramo se perdía al guardar: el esquema
+            // arma `economico` campo por campo (ver "campo anidado sin
+            // propagar" en CLAUDE.md).
+            tramos: normalizarTramos(r.economico?.tramos),
           },
           recurrencia: enumerado(r.recurrencia, RECURRENCIA, "mensual"),
           equipos: esLista(r.equipos),
@@ -1095,5 +1184,7 @@
     CATALOGO_AUDITORIA,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
+    normalizarTramos, tramoVigente, canonVigente, equipoCubierto, equiposPorIngresar,
+    normalizarVersion,
   };
 })(typeof window !== "undefined" ? window : globalThis);

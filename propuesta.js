@@ -141,8 +141,14 @@ function construirPropuesta(p, cli = {}) {
   const conReferencia = ref && canon && ref > canon;
 
   const meses = Number(p.vigenciaPropuesta?.meses) || 12;
+  const fmtISO = (f) => fmt(new Date(f + "T12:00:00"));
   const condiciones = [
     ["Duración", `${em(capital(numLetra(meses)))} meses, con renovación automática por períodos iguales salvo aviso previo de cualquiera de las partes.`],
+    ...NEXO_ESQUEMA.normalizarTramos(eco.tramos).map((t) => [
+      t.desde && t.hasta ? `Del ${fmtISO(t.desde)} al ${fmtISO(t.hasta)}` : t.desde ? `Desde el ${fmtISO(t.desde)}` : `Hasta el ${fmtISO(t.hasta)}`,
+      `${importe(t.canonMensual)}${t.motivo ? ` (${esc(t.motivo)})` : ""}.`]),
+    ...(p.equipos || []).filter((e) => e.ingreso).map((e) => [
+      "Incorporación", `${esc(nombreEquipo(e))}${e.ubicacion ? ` (${esc(e.ubicacion)})` : ""} se incorpora al programa a partir del ${fmtISO(e.ingreso)}${e.garantiaHasta ? `, al finalizar su garantía` : ""}.`]),
     ["Forma de pago", esc(eco.formaPago || "Facturación mensual.")],
     ["Ajuste", esc(eco.ajuste || "Anual, según variación de costos.")],
     p.vigenciaPropuesta?.inicioEstimado && ["Inicio estimado", fmt(new Date(p.vigenciaPropuesta.inicioEstimado + "T12:00:00"))],
@@ -152,7 +158,9 @@ function construirPropuesta(p, cli = {}) {
 
   return {
     kicker: "PROGRAMA DE CONTINUIDAD OPERATIVA",
-    numero: esc(p.numero || ""),
+    // Con renegociaciones, el cliente tiene que poder distinguir qué versión
+    // tiene en la mano.
+    numero: esc(p.numero ? `${p.numero}${p.version > 1 ? ` · versión ${p.version}` : ""}` : ""),
     fecha: fmt(new Date((p.fechas?.creado || new Date().toISOString().slice(0, 10)) + "T12:00:00")),
     titulo, cliente, CLI,
     plan: p.plan?.id ? esc(p.plan.etiquetaPublica || CAT.PLANES[p.plan.id]?.etiquetaPublica || "") : "",
@@ -170,7 +178,7 @@ function construirPropuesta(p, cli = {}) {
     condiciones,
     aviso: "Este documento resume el programa a efectos comerciales; no reemplaza el contrato de servicio, que detallará las condiciones operativas y comerciales definitivas.",
     cierre: `${CLI} administra un patrimonio tecnológico que sostiene su capacidad diagnóstica y su compromiso con los pacientes que atiende. Este programa está construido para acompañar esa responsabilidad de manera constante, con criterio técnico y con la transparencia que una relación de largo plazo requiere.`,
-    nombreArchivo: [p.numero, cli.nombreComercial, "Propuesta de continuidad operativa",
+    nombreArchivo: [p.numero, p.version > 1 && `v${p.version}`, cli.nombreComercial, "Propuesta de continuidad operativa",
       equipos.length === 1 ? nombreEquipo(equipos[0]) : ""].filter(Boolean).join(" - "),
   };
 }

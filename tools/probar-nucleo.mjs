@@ -1154,13 +1154,17 @@ const contratoViejo = (over = {}) => ({
   id: "ctr_1", tipo: "contrato", numero: "CT-2026-0001", estado: "firme_vigente",
   cliente: { nombreComercial: "Centro Ejemplo", razonesSociales: [
     { razonSocial: "Centro Ejemplo S.A.", cuit: "30-00000000-0", domicilio: "Calle 1", principal: true }] },
-  equipos: [{ modelo: "Modelo A", marca: "GE", modalidad: "MRI", serie: "X1", ubicacion: "Sede" }],
+  equipos: [{ modelo: "Modelo A", marca: "GE", modalidad: "MRI", serie: "X1", ubicacion: "Sede" },
+    // Equipo que entra más adelante: las fechas tienen que sobrevivir al adaptador.
+    { modelo: "Modelo B", marca: "GE", modalidad: "CT", serie: "X2", ubicacion: "Sede 2",
+      ingreso: "2026-03-01", garantiaHasta: "2026-02-28" }],
   cobertura: { preventivoInspeccionesAnuales: 4, correctivoManoObra: true,
     reparacionBobinasPorAnio: 2, bobinasAlcance: "flota", soporteRemoto: true,
     saasMonitoreo: true, partesIncluidas: false, viaticosIncluidos: true,
     enviosRepuestosIncluidos: true, reparacionesIncluidas: ["Reparación electrónica"] },
   economico: { canonMensual: 4000, moneda: "USD", incluyeIVA: false, ivaPct: 21,
-    formaPago: "Mensual, antes del 5º día hábil" },
+    formaPago: "Mensual, antes del 5º día hábil",
+    tramos: [{ desde: null, hasta: "2026-02-28", canonMensual: 3300, motivo: "Equipo B en garantía" }] },
   ajuste: { periodicidad: "trimestral", indice: "IPC", historial: [] },
   vigencia: { inicio: "2026-01-01", meses: 12, fin: "", renovacionAutomatica: true, preavisoDias: 30 },
   fechas: { creado: "2025-12-15", enviado: "2025-12-16", firmado: "2025-12-20" },
@@ -1566,6 +1570,102 @@ prueba("el contrato y su propuesta no pueden ser de clientes distintos", () => {
   rechaza("NX-041", () => R.validar("contratos", "crear",
     contratoDePropuesta({ clienteId: "cli_9" }), null,
     { ...ADMIN, propuestas: [propBase({ estado: "Aceptada" })] }));
+});
+
+// ---------------------------------------------------------------------------
+// Equipos que entran después, canon por tramos y versiones de la negociación
+// ---------------------------------------------------------------------------
+
+// Caso testigo (datos ficticios): 5 equipos por 4.800 al mes, uno sigue en
+// garantía hasta fin de año y entra en enero; hasta entonces se cobran 4.000.
+const conTramo = (over = {}) => contratoDePropuesta({
+  propuestaId: null, estado: "Activo", fechaFirma: "2026-11-01",
+  vigencia: { inicio: "2026-11-01", meses: 12 },
+  economico: { canonMensual: 4800, moneda: "ARS",
+    tramos: [{ hasta: "2026-12-31", canonMensual: 4000, motivo: "CT de la sede 3 en garantía" }] },
+  equipos: [
+    { marca: "GE", modelo: "A", modalidad: "CT", ubicacion: "Sede 1" },
+    { marca: "GE", modelo: "B", modalidad: "CT", ubicacion: "Sede 3", ingreso: "2027-01-01", garantiaHasta: "2026-12-31" },
+  ], ...over,
+});
+
+prueba("tramos · mientras dura el tramo se factura el reducido, después el pleno", () => {
+  igual(E.canonVigente(conTramo(), "2026-11-15"), 4000);
+  igual(E.canonVigente(conTramo(), "2026-12-31"), 4000, "el último día del tramo todavía es reducido");
+  igual(E.canonVigente(conTramo(), "2027-01-01"), 4800);
+  igual(E.canonVigente(contratoDePropuesta(), "2026-11-15"), 4000, "sin tramos rige el canon");
+});
+
+prueba("tramos · un tramo sin importe se descarta, uno bonificado en 0 no", () => {
+  // money(null) da 0: si se aceptara, un tramo a medio cargar facturaría gratis.
+  igual(E.normalizarTramos([{ hasta: "2026-12-31", canonMensual: null }]).length, 0);
+  igual(E.normalizarTramos([{ hasta: "2026-12-31", canonMensual: "" }]).length, 0);
+  igual(E.normalizarTramos([{ hasta: "2026-12-31", canonMensual: 0 }])[0].canonMensual, 0);
+  igual(E.normalizarTramos([{ canonMensual: 10 }]).length, 0, "sin ninguna fecha no es un tramo");
+});
+
+prueba("tramos · sobreviven al guardado del contrato (campo anidado)", () => {
+  const c = conTramo();
+  igual(c.economico.tramos.length, 1);
+  igual(E.ENTIDADES.contratos.normalizar(c).economico.tramos, c.economico.tramos, "segunda vuelta estable");
+});
+
+prueba("tramos · superpuestos o al revés no se aceptan", () => {
+  rechaza("NX-040", () => R.validar("contratos", "crear", conTramo({ economico: { canonMensual: 4800, tramos: [
+    { desde: "2026-12-01", hasta: "2026-11-01", canonMensual: 4000 }] } }), null, ADMIN));
+  rechaza("NX-040", () => R.validar("contratos", "crear", conTramo({ economico: { canonMensual: 4800, tramos: [
+    { hasta: "2026-12-31", canonMensual: 4000 }, { desde: "2026-12-01", hasta: "2027-02-01", canonMensual: 4400 }] } }), null, ADMIN));
+  R.validar("contratos", "crear", conTramo({ economico: { canonMensual: 4800, tramos: [
+    { hasta: "2026-12-31", canonMensual: 4000 }, { desde: "2027-01-01", hasta: "2027-02-01", canonMensual: 4400 }] } }), null, ADMIN);
+});
+
+prueba("equipos · el que entra en enero no está cubierto en diciembre", () => {
+  const c = conTramo();
+  cierto(!E.equipoCubierto(c.equipos[1], "2026-12-15"));
+  cierto(E.equipoCubierto(c.equipos[1], "2027-01-01"));
+  cierto(E.equipoCubierto(c.equipos[0], "2026-11-01"), "sin fecha de ingreso, cubierto desde el inicio");
+  igual(E.equiposPorIngresar(c, "2026-12-15").length, 1);
+});
+
+prueba("MRR · cuenta lo que se factura hoy y no mezcla monedas", () => {
+  const r = K.recurrente([conTramo(), contratoDePropuesta({ id: "ctr_2", estado: "Activo", fechaFirma: "2026-01-01" })], "2026-11-15");
+  igual(r.mensual, { ARS: 4000, USD: 4000 });
+  igual(K.recurrente([conTramo()], "2027-02-01").mensual, { ARS: 4800 });
+});
+
+const enviadaV1 = () => propBase({ estado: "Enviada", fechas: { creado: "2026-10-01", enviado: "2026-10-02" } });
+
+prueba("versiones · renegociar abre la versión 2 y congela la 1", () => {
+  const ant = enviadaV1();
+  const v1 = E.normalizarVersion({ n: 1, enviado: "2026-10-02", motivo: "pidió bajar el canon",
+    economico: ant.economico, equipos: ant.equipos });
+  const nueva = propBase({ ...ant, estado: "Borrador", version: 2, versiones: [v1],
+    economico: { canonMensual: 3600, moneda: "USD" } });
+  R.validar("propuestas", "editar", nueva, ant, ADMIN);
+  igual(nueva.versiones[0].economico.canonMensual, 4000, "lo que salió no se toca");
+  igual(nueva.fechas.enviado, "2026-10-02", "el primer envío se conserva");
+});
+
+prueba("versiones · no se vuelve a borrador sin congelar lo que salió", () => {
+  rechaza("NX-020", () => R.validar("propuestas", "editar",
+    propBase({ ...enviadaV1(), estado: "Borrador" }), enviadaV1(), ADMIN));
+  rechaza("NX-020", () => R.validar("propuestas", "editar",
+    propBase({ ...enviadaV1(), estado: "Borrador", version: 2 }), enviadaV1(), ADMIN),
+    "subir el número sin guardar la versión anterior tampoco");
+});
+
+prueba("versiones · no se borran", () => {
+  const v1 = E.normalizarVersion({ n: 1 });
+  const con = propBase({ estado: "Borrador", version: 2, versiones: [v1] });
+  rechaza("NX-020", () => R.validar("propuestas", "editar",
+    propBase({ estado: "Borrador", version: 2, versiones: [] }), con, ADMIN));
+});
+
+prueba("versiones · una propuesta vieja es la versión 1, sin historial", () => {
+  const p = propBase();
+  igual(p.version, 1);
+  igual(p.versiones, []);
+  igual(propBase({ fechas: { enviado: "2026-10-02" } }).fechas.ultimoEnvio, "2026-10-02");
 });
 
 prueba("efecto · el contrato queda referenciado desde su propuesta", () => {
