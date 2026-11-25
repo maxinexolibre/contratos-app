@@ -230,7 +230,13 @@
       </div>
 
       <div class="card" style="margin-top:18px">
-        <h3>Leads (${ld.length})</h3>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
+          <h3 style="flex:1; margin:0">Leads (${ld.length})</h3>
+          ${(() => { const sm = ld.filter((l) => !l.contactoEmail && l.estado !== "Descartado").length;
+            return sm ? `<span class="muted" style="font-size:13px">${sm} sin email</span>
+              <button class="btn sm ghost" onclick="archivarSinMail('${esc(c.id)}')"
+                title="Los saca de la secuencia de email. No se borran: quedan como universo y podés reactivarlos.">Archivar sin email</button>` : ""; })()}
+        </div>
         ${ld.length ? `<table class="data" style="margin-top:12px">
           <thead><tr><th>Contacto</th><th>Canal</th><th>Captura</th><th>Estado</th><th>Ticket</th></tr></thead>
           <tbody>${ld.slice(0, 25).map((l) => `<tr>
@@ -594,7 +600,8 @@
         <td>Toque ${toqueN} de ${E.CADENCIA.toques}${esBreakup ? ' <span class="muted">· cierre</span>' : ""}</td>
         <td${atrasado ? ' style="color:var(--critico,#ff8a5c)"' : ""}><b>${esc(l.proximoToque)}</b>${atrasado ? " ⚠" : ""}</td>
         <td style="white-space:nowrap">
-          <button class="btn sm primary" onclick="registrarToque('${esc(l.id)}')">Registré el toque</button>
+          <button class="btn sm primary" onclick="redactarToque('${esc(l.id)}')">✉ Redactar</button>
+          <button class="btn sm ghost" onclick="registrarToque('${esc(l.id)}')" title="Si lo mandaste por fuera">Registré el toque</button>
           <button class="btn sm ghost" onclick="calificarLead('${esc(l.id)}')">Respondió</button>
         </td>
       </tr>`;
@@ -677,6 +684,132 @@
   }
 
   // ==========================================================================
+  // Panel "Redactar": arma el mail del toque y lo deja listo para mandar
+  // ==========================================================================
+  //
+  // No manda el mail (camino B): lo arma con la plantilla del segmento y el
+  // toque que corresponde, para copiar o abrir en el cliente de mail. Pensado
+  // para delegarlo: quien prospecta abre, copia, manda y marca el toque, sin
+  // escribir de cero ni elegir plantilla.
+
+  const RED_ID = "overlay-redactar";
+
+  function cerrarRedactar() {
+    document.getElementById(RED_ID)?.remove();
+  }
+
+  function redactarToque(id, segOverride) {
+    const P = global.NEXO_PLANTILLAS_EMAIL;
+    const l = leads().find((x) => x.id === id);
+    if (!l || !P) return;
+    // Toque a mandar = el próximo (los ya dados son l.paso). El cierre es el 4º.
+    const idx = Math.min(l.paso, E.CADENCIA.toques - 1);
+    const seg = segOverride || l.segmento || "DirectorMedico";
+    const m = P.armar(seg, idx, l);
+    const sinMail = !l.contactoEmail;
+
+    cerrarRedactar();
+    const ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.id = RED_ID;
+    ov.innerHTML = `<div class="modal" style="max-width:640px">
+      <div style="display:flex; align-items:flex-start; gap:12px">
+        <div style="flex:1">
+          <div class="kicker">Toque ${m.toque} de ${m.total} · secuencia de prospección</div>
+          <h2 style="margin:0">${esc(l.institucion || l.contactoNombre)}</h2>
+        </div>
+        <button class="btn ghost sm" onclick="cerrarRedactar()" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="form-grid" style="gap:12px; margin-top:14px">
+        <div class="field"><label for="redSeg">Segmento / ángulo</label>
+          <select id="redSeg" onchange="redactarToque('${esc(l.id)}', this.value)">
+            ${P.segmentos.map((s) => `<option value="${s}"${s === seg ? " selected" : ""}>${esc(P.NOMBRE_SEG[s])}</option>`).join("")}
+          </select></div>
+        <div class="field"><label for="redPara">Para</label>
+          <input id="redPara" value="${esc(l.contactoEmail || "")}" placeholder="email del decisor…" />
+          ${sinMail ? `<span class="muted" style="font-size:12px">Todavía no cargaste el email del decisor. Podés escribirlo acá para este envío, o guardarlo en el lead.</span>` : ""}
+        </div>
+      </div>
+
+      <div class="field"><label for="redAsunto">Asunto</label>
+        <div style="display:flex; gap:8px">
+          <input id="redAsunto" value="${esc(m.asunto)}" style="flex:1" />
+          <button class="btn sm ghost" onclick="copiarCampo('redAsunto')">Copiar</button>
+        </div>
+      </div>
+
+      <div class="field"><label for="redCuerpo">Mensaje</label>
+        <textarea id="redCuerpo" rows="12" style="width:100%; font-family:inherit; line-height:1.5">${esc(m.cuerpo)}</textarea>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px">
+          <span class="muted" style="font-size:12px">Completá los [corchetes] que queden (equipo, etc.). No incluye firma: la agrega tu correo.</span>
+          <button class="btn sm ghost" onclick="copiarCampo('redCuerpo')">Copiar mensaje</button>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; margin-top:14px; border-top:1px solid var(--line); padding-top:14px">
+        <button class="btn ghost" onclick="abrirMail('${esc(l.id)}')">Abrir en mi mail</button>
+        <button class="btn primary" onclick="marcarToqueEmail('${esc(l.id)}')">Lo mandé · registrar toque</button>
+      </div>
+      <p class="muted" style="font-size:12px; margin-top:10px">
+        La app no manda el mail: lo copiás o lo abrís en tu cliente, lo mandás vos y marcás el toque.
+        El próximo se reprograma solo (cadencia 0 · +4 · +11 · +21 días).
+      </p>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.style.display = "flex";
+    ov.onclick = (e) => { if (e.target === ov) cerrarRedactar(); };
+  }
+
+  async function copiarCampo(elId) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    try {
+      await navigator.clipboard.writeText(el.value);
+      global.toast("Copiado al portapapeles");
+    } catch {
+      el.focus(); el.select();
+      try { document.execCommand("copy"); global.toast("Copiado"); }
+      catch { global.toast("Copiá a mano (Ctrl/Cmd+C)", true); }
+    }
+  }
+
+  function abrirMail(id) {
+    const para = (document.getElementById("redPara")?.value || "").trim();
+    const asunto = document.getElementById("redAsunto")?.value || "";
+    const cuerpo = document.getElementById("redCuerpo")?.value || "";
+    const url = `mailto:${encodeURIComponent(para)}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
+    // mailto largo puede fallar en algunos clientes; el camino principal es Copiar.
+    global.open(url, "_blank");
+  }
+
+  // Registra el toque como enviado por Email sin más preguntas: un clic después
+  // de mandar. Si se cargó un email nuevo en el panel, se guarda en el lead.
+  async function marcarToqueEmail(id) {
+    const l = leads().find((x) => x.id === id);
+    if (!l) return;
+    const para = (document.getElementById("redPara")?.value || "").trim();
+    const asunto = (document.getElementById("redAsunto")?.value || "").trim();
+    const nuevoPaso = l.paso + 1;
+    const hist = [...l.historialToques,
+      { fecha: E.hoy(), paso: nuevoPaso, canal: "Email", nota: asunto, resultado: "" }];
+    const reg = {
+      ...l, paso: nuevoPaso, historialToques: hist, fechaUltimoToque: E.hoy(),
+      canal: "Email",
+      estado: l.estado === "Nuevo" ? "Contactado" : l.estado,
+      proximoToque: null,
+    };
+    // Si se tipeó un email en el panel y el lead no tenía, se conserva.
+    if (para && !l.contactoEmail) reg.contactoEmail = para;
+    if (await guardar("leads", reg, `Toque ${nuevoPaso} (email) · ${l.institucion || l.contactoNombre}`)) {
+      const quedan = E.proximoToque(nuevoPaso, E.hoy());
+      cerrarRedactar();
+      global.toast(quedan ? `Toque ${nuevoPaso} registrado — próximo ${quedan}` : "Último toque · secuencia agotada");
+      global.router();
+    }
+  }
+
+  // ==========================================================================
   // Importador de la lista de prospección (CSV)
   // ==========================================================================
 
@@ -710,10 +843,12 @@
       <a href="#semana" class="muted">← Esta semana</a>
       <h1 style="margin-top:8px">Importar <span class="hl">lista de prospección</span></h1>
       <div class="card" style="margin-top:16px; max-width:70ch">
-        <p class="muted">Subí el CSV de la lista (universo-argentina.csv / universo-chile.csv).
-        Se crean leads con la institución, el tier y el sitio web; cada uno arranca la
-        secuencia de recontacto. El decisor se completa después. No se sube ningún archivo
-        a ningún lado: se lee en tu navegador y se guardan solo los leads.</p>
+        <p class="muted">Subí el CSV de la lista (universo-argentina.csv, o una lista
+        enriquecida con decisores). Se crean leads con la institución, el tier y el sitio
+        web; cada uno arranca la secuencia de recontacto. Si la fila trae
+        <code>decisor_nombre</code>, <code>email</code> y <code>segmento</code>, se cargan
+        también (esos ya quedan tocables por email). No se sube ningún archivo a ningún
+        lado: se lee en tu navegador y se guardan solo los leads.</p>
 
         <div class="field" style="margin-top:14px"><label for="impFile">Archivo CSV</label>
           <input type="file" id="impFile" accept=".csv,text/csv" onchange="impPreview()" /></div>
@@ -756,7 +891,8 @@
         _impFilas = parseCSV(String(lector.result));
         const conInst = _impFilas.filter((r) => (r.institucion || "").trim()).length;
         const conA = _impFilas.filter((r) => (r.tier || "").toUpperCase() === "A").length;
-        est.innerHTML = `Leídas <b>${_impFilas.length}</b> filas · ${conInst} con institución · ${conA} Tier A.`;
+        const conMail = _impFilas.filter((r) => (r.email || r.decisor_email || r.contacto_email || "").trim()).length;
+        est.innerHTML = `Leídas <b>${_impFilas.length}</b> filas · ${conInst} con institución · ${conA} Tier A · ${conMail} con decisor+mail (tocables por email).`;
         btn.disabled = conInst === 0;
       } catch (e) {
         est.innerHTML = `<span style="color:var(--critico,#ff8a5c)">No se pudo leer el CSV: ${esc(e.message)}</span>`;
@@ -786,10 +922,14 @@
       campId = reg.id;
     }
 
-    // Deduplicación por institución dentro de la campaña.
+    // Deduplicación dentro de la campaña. La clave incluye el decisor (email o
+    // nombre) además de la institución: así un mismo centro puede tener varios
+    // decisores (p. ej. director médico + ingeniería clínica) sin pisarse.
+    const claveLead = (inst, dec) =>
+      E.claveCliente(inst) + "|" + String(dec || "").trim().toLowerCase();
     const yaEn = new Set((leads() || [])
       .filter((l) => l.campanaId === campId)
-      .map((l) => E.claveCliente(l.institucion || l.contactoNombre)));
+      .map((l) => claveLead(l.institucion || l.contactoNombre, l.contactoEmail || l.contactoNombre)));
 
     const nuevos = [];
     let saltados = 0;
@@ -797,7 +937,12 @@
       const institucion = (r.institucion || "").trim();
       if (!institucion) { saltados++; continue; }
       if (soloA && (r.tier || "").toUpperCase() !== "A") { saltados++; continue; }
-      const clave = E.claveCliente(institucion);
+      // Decisor de la fila, si la lista lo trae (tarjetas recuperadas, listas
+      // enriquecidas). Si no viene, el lead arranca solo con la institución.
+      const nombre = (r.decisor_nombre || r.contacto_nombre || r.nombre || "").trim();
+      const email = (r.email || r.decisor_email || r.contacto_email || "").trim();
+      const segFila = (r.segmento || r.decisor_segmento || "").trim();
+      const clave = claveLead(institucion, email || nombre);
       if (yaEn.has(clave)) { saltados++; continue; }
       yaEn.add(clave);
       const zona = [r.localidad || r.comuna, r.provincia || r.region].filter(Boolean).join(", ");
@@ -805,9 +950,12 @@
         campanaId: campId, canal: "Email", pais,
         institucion, tier: (r.tier || "").toUpperCase(),
         sitioWeb: r.sitio_web || r.web || "",
-        contactoTel: r.telefono || "",
-        segmento: segDef,
-        origenDetalle: zona ? `Lista ${pais} · ${zona}` : `Lista ${pais}`,
+        contactoNombre: nombre,
+        contactoEmail: email,
+        contactoTel: r.telefono || r.celular || "",
+        // El segmento por fila manda sobre el valor por defecto del formulario.
+        segmento: segFila || segDef,
+        origenDetalle: [`Lista ${pais}`, r.notas || "", zona].filter(Boolean).join(" · "),
         fechaCaptura: E.hoy(), estado: "Nuevo",
       }));
     }
@@ -831,6 +979,28 @@
     global.go("semana");
   }
 
+  /**
+   * Archiva los leads de la campaña que no tienen email: los pasa a estado
+   * "Descartado", lo que los saca de la secuencia de email ("Esta semana") sin
+   * borrarlos. Sirve para limpiar una campaña donde se cargó el universo REFES
+   * (institución sola, sin mail): esos no se pueden tocar por correo, pero
+   * siguen siendo universo/LinkedIn y se pueden reactivar.
+   */
+  async function archivarSinMail(campId) {
+    const sin = (leads() || []).filter(
+      (l) => l.campanaId === campId && !l.contactoEmail && l.estado !== "Descartado");
+    if (!sin.length) { global.toast("No hay leads sin email para archivar."); return; }
+    if (!global.confirm(`Archivar ${sin.length} lead(s) sin email?\n\nSalen de la secuencia de email (estado Descartado). No se borran: quedan como universo y podés reactivarlos.`)) return;
+    const ids = new Set(sin.map((l) => l.id));
+    global.state.leads = (leads() || []).map((l) => ids.has(l.id)
+      ? E.ENTIDADES.leads.normalizar({ ...l, estado: "Descartado" }) : l);
+    try {
+      await global.persist(`Archivados ${sin.length} leads sin email`, "leads");
+    } catch (e) { global.toast(`Error al archivar: ${e.message}`, true); return; }
+    global.toast(`${sin.length} leads archivados (sin email).`);
+    renderCampDetalle(campId);
+  }
+
   // ==========================================================================
 
   global.NEXO_VISTAS = global.NEXO_VISTAS || {};
@@ -849,6 +1019,7 @@
   Object.assign(global, {
     guardarCampana, finalizarCampana, nuevaEstrategia, finalizarEstrategia,
     guardarLead, calificarLead, registrarToque,
-    impPreview, ejecutarImport,
+    redactarToque, cerrarRedactar, copiarCampo, abrirMail, marcarToqueEmail,
+    impPreview, ejecutarImport, archivarSinMail,
   });
 })(typeof window !== "undefined" ? window : globalThis);

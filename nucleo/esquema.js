@@ -142,6 +142,24 @@
   const CATALOGO_AUDITORIA = ["Pendiente", "Confirmado"];
 
   const COMISION_ORIGEN = ["Contrato", "Presupuesto", "Facturacion"];
+  /**
+   * Seguimiento de comisiones por operación. Lo que se guarda es la DECISIÓN
+   * (lleva o no, quién cobra, con qué porcentaje) y los pagos; el estado de
+   * cada comisión se deduce de la operación y de la facturación. Guardarlo
+   * aparte obligaba a alguien a acordarse de "devengar" a mano en cada firma,
+   * y por eso nadie lo hacía.
+   */
+  const MARCA_ORIGEN = ["Presupuesto", "Propuesta"];
+  /**
+   * Por qué una operación lleva o no comisión. "Consulta" es el cliente que
+   * tuvo algo aislado hace años: la app no decide sola, pregunta.
+   */
+  const MARCA_CRITERIO = ["ClienteNuevo", "ClienteExistente", "Consulta", "Historico"];
+  /** Estados de una comisión, en el orden en que avanzan. */
+  const COMISION_SEGUIMIENTO = ["Prevista", "Devengada", "ACobrar", "Pagada", "Anulada"];
+  const PAGO_TIPO = ["Pago", "Compensacion", "Ajuste"];
+  /** La comisión se paga en dólares (efectivo) o en pesos al TC de la factura. */
+  const PAGO_MONEDA = ["USD", "ARS"];
   const COMISION_ESTADO = ["Devengada", "Aprobada", "Liquidada", "Anulada"];
   const ROL = ["vendedor", "gerente_comercial", "gerente_administrativo", "direccion", "marketing", "admin"];
 
@@ -254,6 +272,15 @@
           vendedor: esTexto(r.vendedor) || esTexto(r.usuario),
           campanaId: esTexto(r.campanaId) || null,
           leadId: esTexto(r.leadId) || null,
+          // Quién trajo el lead (id de vendedor). Vacío = propio de Nexo. De
+          // esto depende la comisión de un externo: si no está asignado acá,
+          // nadie puede agregarlo después a mano en el presupuesto.
+          traidoPor: esTexto(r.traidoPor) || null,
+          // Quién lo asignó y cuándo: una comisión de un externo tiene que
+          // poder rastrearse hasta una decisión con nombre y fecha.
+          traidoPorAsignacion: r.traidoPorAsignacion?.fecha
+            ? { por: esTexto(r.traidoPorAsignacion.por), fecha: fecha(r.traidoPorAsignacion.fecha) }
+            : null,
           estado,
           tipo: enumerado(r.tipo, TICKET_TIPO, "Servicio"),
           prioridad: enumerado(r.prioridad, PRIORIDAD, "Media"),
@@ -721,6 +748,9 @@
           estado,
           fechaAlta: fecha(r.fechaAlta) || hoy(),
           fechaBaja: estado === "Inactivo" ? fecha(r.fechaBaja) : null,
+          // Parte del reparto del área comercial que cobra esta persona
+          // ("Gerencia comercial", "Diseño", "Marketing"). Vacío = ninguna.
+          areaComision: esTexto(r.areaComision),
           // Cuota comercial. Sirve para medir cumplimiento; 0 = sin cuota.
           metaMensual: money(r.metaMensual),
           metaMoneda: enumerado(r.metaMoneda, MONEDA_COTIZACION, "USD"),
@@ -779,6 +809,87 @@
           vigenciaHasta: fecha(r.vigenciaHasta),  // null = vigente sin fin
           notas: esTexto(r.notas),
           creado: fecha(r.creado) || hoy(),
+        };
+      },
+    },
+
+    /**
+     * Comisión de una operación: la decisión tomada al enviar el presupuesto
+     * o la propuesta, más los pagos. Una por operación.
+     *
+     * No guarda montos ni estados: se calculan contra la operación cada vez.
+     * Si el presupuesto se edita antes de aprobarse, la comisión acompaña sin
+     * que nadie tenga que recalcular nada.
+     */
+    marcasComision: {
+      archivo: "marcas-comision",
+      particionado: false,
+      idPrefijo: "mco_",
+      normalizar(r) {
+        const ext = r.externo || {};
+        return {
+          id: esTexto(r.id) || nuevoId("mco_"),
+          origenTipo: enumerado(r.origenTipo, MARCA_ORIGEN, "Presupuesto"),
+          origenId: esTexto(r.origenId),
+          origenNumero: esTexto(r.origenNumero),
+          clienteId: esTexto(r.clienteId),
+          lleva: esBool(r.lleva),
+          criterio: enumerado(r.criterio, MARCA_CRITERIO, "Consulta"),
+          // Por qué se decidió así. Obligatorio cuando la decisión va contra
+          // lo que dice la historia del cliente o cuando hubo que preguntar.
+          motivo: esTexto(r.motivo),
+          // Primera actividad del cliente con Nexo, tal como se vio al decidir.
+          primeraActividad: fecha(r.primeraActividad),
+          externo: esTexto(ext.vendedorId)
+            ? { vendedorId: esTexto(ext.vendedorId), porcentaje: esNumero(ext.porcentaje) }
+            : null,
+          // El 4,5% del área comercial. Sigue a `lleva` salvo decisión explícita.
+          area: r.area === undefined ? esBool(r.lleva) : esBool(r.area),
+          // null = la base sale de la operación. money(null) daría 0, que
+          // dejaría la comisión en cero sin que nadie lo note.
+          baseManual: r.baseManual == null || r.baseManual === "" ? null : money(r.baseManual),
+          // Costos que se descuentan antes de calcular (venta de equipo: parte,
+          // flete, importación). null = no se cargaron.
+          costos: r.costos == null || r.costos === "" ? null : money(r.costos),
+          // Los costos se pagan casi siempre en pesos (viáticos, flete local)
+          // aunque la operación se cotice en USD. null = en la moneda de la
+          // operación, como se cargaba antes.
+          costosMoneda: r.costosMoneda == null ? null : enumerado(r.costosMoneda, PAGO_MONEDA, null),
+          // Pesos por dólar para pasar los costos a la moneda de la operación.
+          // null = se usa el TC de la factura al cliente, que es el que pesificó
+          // la venta (Maxi, 2026-11-24).
+          costosTC: r.costosTC == null || r.costosTC === "" ? null : esNumero(r.costosTC, null),
+          // Cargada después de los hechos (operaciones anteriores al seguimiento).
+          historico: esBool(r.historico),
+          pagos: esLista(r.pagos).map((p) => {
+            const monedaPago = enumerado(p.monedaPago, PAGO_MONEDA, "USD");
+            return {
+              beneficiario: esTexto(p.beneficiario),
+              // A quién se le pagó, con nombre: la parte del reparto puede
+              // cambiar de persona y el pago tiene que seguir explicándose.
+              beneficiarioNombre: esTexto(p.beneficiarioNombre),
+              // Pago: plata que sale. Compensacion: se descuenta de un saldo
+              // pagado de más en otra operación. Ajuste: corrección con motivo
+              // (la única que puede ser negativa).
+              tipo: enumerado(p.tipo, PAGO_TIPO, "Pago"),
+              fecha: fecha(p.fecha) || hoy(),
+              // En la moneda de la comisión (la de la operación).
+              monto: money(p.monto),
+              moneda: esTexto(p.moneda) || "USD",
+              // Cómo se pagó de verdad: en pesos se guarda el TC usado.
+              monedaPago,
+              montoPagado: p.montoPagado == null || p.montoPagado === "" ? money(p.monto) : money(p.montoPagado),
+              tcValor: monedaPago === "ARS" ? esNumero(p.tcValor) : null,
+              tcFecha: monedaPago === "ARS" ? fecha(p.tcFecha) : null,
+              facturaComercial: esTexto(p.facturaComercial),
+              referencia: esTexto(p.referencia),
+              compensaOrigen: esTexto(p.compensaOrigen),
+              registradoPor: esTexto(p.registradoPor),
+            };
+          }).filter((p) => p.beneficiario),
+          decididoPor: esTexto(r.decididoPor),
+          fecha: fecha(r.fecha) || hoy(),
+          notas: esTexto(r.notas),
         };
       },
     },
@@ -978,6 +1089,7 @@
     RECURRENCIA, ROL, MONEDA_COTIZACION, MONEDA_PRESUPUESTO, MONEDA_LIQUIDACION, PESO_ETAPA,
     VENDEDOR_ESTADO, VENDEDOR_RELACION, COMISION_MODALIDAD, COMISION_BASE,
     COMISION_ORIGEN, COMISION_ESTADO, COMISION_ALCANCE, AREAS_COMISION,
+    MARCA_ORIGEN, MARCA_CRITERIO, COMISION_SEGUIMIENTO, PAGO_TIPO, PAGO_MONEDA,
     PAIS, PAIS_NOMBRE, COMPROBANTE_TIPO, CONDICION_IVA,
     CATALOGO_TIPO, CATALOGO_CONDICION, CATALOGO_DISPONIBILIDAD, CATALOGO_PROCEDENCIA,
     CATALOGO_AUDITORIA,

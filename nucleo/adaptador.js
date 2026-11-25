@@ -131,6 +131,9 @@
       usuario: t.usuario,
       campanaId: t.campanaId || null,
       leadId: t.leadId || null,
+      // Sin propagarlo, la comisión del externo desaparecía al recargar.
+      traidoPor: t.traidoPor || null,
+      traidoPorAsignacion: t.traidoPorAsignacion || null,
       estado,
       tipo: TIPO_PEDIDO_A_NUEVO[t.tipoPedido] || "Servicio",
       prioridad: t.prioridad,
@@ -266,6 +269,8 @@
       prioridad: t.prioridad,
       campanaId: t.campanaId,
       leadId: t.leadId,
+      traidoPor: t.traidoPor,
+      traidoPorAsignacion: t.traidoPorAsignacion,
       fechaCierre: t.fechaCierre,
       cierreEstimado: t.cierreEstimado,
       motivoPerdida: t.motivoPerdida,

@@ -24,10 +24,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  desplegar:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  # Armar y publicar van en dos trabajos separados, como la plantilla oficial
+  # de GitHub. El 2026-11-24 fallaron seis despliegues seguidos con todo en un
+  # solo trabajo: el paquete se subía bien, pero deploy-pages lo buscaba un
+  # instante después y no lo encontraba ("No artifacts named github-pages").
+  # Pasar upload-pages-artifact a v4 no alcanzó. Con dos trabajos, el
+  # paquete ya está registrado cuando arranca la publicación.
+  armar:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,9 +44,16 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: .
 
+  desplegar:
+    needs: armar
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
