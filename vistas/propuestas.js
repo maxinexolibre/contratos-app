@@ -279,6 +279,7 @@
               ? `<br><span class="muted" style="font-size:12px">entra el ${esc(fechaCorta(eq.ingreso))}${eq.garantiaHasta ? ` · garantía hasta ${esc(fechaCorta(eq.garantiaHasta))}` : ""}</span>` : ""}</td>
           </tr>`).join("")}</tbody>
         </table>` : `<p class="muted" style="margin-top:12px">Sin equipos cargados.</p>`}
+        <p style="margin-top:14px"><b>Alcance:</b> ${esc(resumenAlcance(p.cobertura || {}, p.equipos))}</p>
         ${(p.economico.tramos || []).length ? `<p style="margin-top:14px"><b>Canon por tramos:</b>
           ${p.economico.tramos.map((t) => `${esc(rangoTramo(t))}, ${money(t.canonMensual, p.economico.moneda)}/mes${t.motivo ? ` (${esc(t.motivo)})` : ""}`).join("; ")}.
           Fuera de los tramos rige el canon de ${money(p.economico.canonMensual, p.economico.moneda)}.</p>` : ""}
@@ -384,6 +385,85 @@
     }
   }
 
+  // ---- Alcance del servicio ----
+  const CHECKS_ALCANCE = [
+    ["correctivoManoObra", "Correctivo (mano de obra)"],
+    ["soporteRemoto", "Soporte remoto"],
+    ["saasMonitoreo", "SaaS Gestión y Monitoreo Cryo (RM)"],
+    ["partesIncluidas", "Repuestos incluidos"],
+    ["viaticosIncluidos", "Viáticos incluidos"],
+    ["enviosRepuestosIncluidos", "Envío de repuestos incluido"],
+    ["incluirSLA", "Niveles de servicio (SLA)"],
+  ];
+  function bloqueAlcance(cov) {
+    return `<h3 style="margin-top:14px">Alcance del servicio</h3>
+      <p class="muted" style="font-size:13px;margin-top:0">El plan lo precarga; después se ajusta a lo que se negoció. Es lo que lee el cliente en la propuesta.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button type="button" class="btn sm" onclick="alcanceDesdePlan()">↻ Cargar desde el plan</button>
+        <button type="button" class="btn sm" onclick="alcanceSoloManoObra()">Solo mano de obra</button>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="pfcPrev">Preventivos por año</label>
+          <input type="number" min="0" id="pfcPrev" value="${esc(cov.preventivoInspeccionesAnuales ?? "")}" placeholder="0 = sin preventivo" /></div>
+        <div class="field"><label for="pfcBob">Reparaciones de bobinas por año (RM)</label>
+          <input id="pfcBob" value="${esc(cov.reparacionBobinasPorAnio ?? "")}" placeholder="vacío = no incluye · 2 · sin límite" /></div>
+        <div class="field"><label for="pfcBobAlc">El cupo de bobinas es…</label>
+          <select id="pfcBobAlc"><option value="flota"${cov.bobinasAlcance !== "porEquipo" ? " selected" : ""}>Para toda la flota de RM</option>
+            <option value="porEquipo"${cov.bobinasAlcance === "porEquipo" ? " selected" : ""}>Por cada equipo de RM</option></select></div>
+      </div>
+      <div class="field full"><label for="pfcRep">Reparaciones / partes incluidas <span class="hint">(una por línea)</span></label>
+        <textarea id="pfcRep" rows="2" placeholder="Reparaciones electromecánicas de camilla paciente">${esc((cov.reparacionesIncluidas || []).join("\n"))}</textarea></div>
+      <div class="check-row" style="margin:8px 0 4px">
+        ${CHECKS_ALCANCE.map(([k, l]) => `<label><input type="checkbox" data-cov="${k}" ${(k === "incluirSLA" ? cov[k] !== false : cov[k]) ? "checked" : ""}> ${esc(l)}</label>`).join("")}
+      </div>`;
+  }
+  function leerAlcance() {
+    const v = (id) => document.getElementById(id).value.trim();
+    const o = {
+      preventivoInspeccionesAnuales: v("pfcPrev") === "" ? 0 : Number(v("pfcPrev")),
+      reparacionBobinasPorAnio: v("pfcBob"),
+      bobinasAlcance: v("pfcBobAlc"),
+      reparacionesIncluidas: v("pfcRep").split("\n").map((x) => x.trim()).filter(Boolean),
+      relevamientoInicial: document.getElementById("pfRelev").checked,
+    };
+    document.querySelectorAll("[data-cov]").forEach((c) => (o[c.dataset.cov] = c.checked));
+    return o;
+  }
+  function pintarAlcance(cov) {
+    document.getElementById("pfcPrev").value = cov.preventivoInspeccionesAnuales ?? "";
+    document.getElementById("pfcBob").value = cov.reparacionBobinasPorAnio ?? "";
+    document.getElementById("pfcBobAlc").value = cov.bobinasAlcance === "porEquipo" ? "porEquipo" : "flota";
+    document.getElementById("pfcRep").value = (cov.reparacionesIncluidas || []).join("\n");
+    document.querySelectorAll("[data-cov]").forEach((c) => (c.checked = c.dataset.cov === "incluirSLA" ? cov.incluirSLA !== false : !!cov[c.dataset.cov]));
+  }
+  function alcanceDesdePlan() {
+    const planId = document.getElementById("pfPlan").value;
+    if (!planId) { global.toast("Elegí un plan primero", true, true); return; }
+    pintarAlcance({ ...CAT().derivarDePlan(planId, []).cobertura, incluirSLA: true });
+    global.toast("Alcance cargado desde el plan");
+  }
+  function resumenAlcance(cov, equipos = []) {
+    const rm = equipos.some((e) => e.modalidad === "MRI");
+    const t = [];
+    if (Number(cov.preventivoInspeccionesAnuales)) t.push(`${cov.preventivoInspeccionesAnuales} preventivos/año`);
+    if (cov.correctivoManoObra) t.push("correctivo (mano de obra)");
+    if (rm && cov.reparacionBobinasPorAnio) t.push(`bobinas: ${cov.reparacionBobinasPorAnio}${cov.bobinasAlcance === "porEquipo" ? " por equipo" : ""}`);
+    if (cov.soporteRemoto) t.push("soporte remoto");
+    if (rm && cov.saasMonitoreo) t.push("monitoreo Cryo");
+    t.push(cov.partesIncluidas ? "repuestos incluidos" : "repuestos no incluidos");
+    if ((cov.reparacionesIncluidas || []).length) t.push(`+${cov.reparacionesIncluidas.length} reparación/es de partes`);
+    if (cov.viaticosIncluidos) t.push("viáticos incl.");
+    return t.join(" · ");
+  }
+
+  /** Preventivo + correctivo de mano de obra; sin bobinas, repuestos ni monitoreo. */
+  function alcanceSoloManoObra() {
+    const prev = Number(document.getElementById("pfcPrev").value) || 2;
+    pintarAlcance({ preventivoInspeccionesAnuales: prev, correctivoManoObra: true, soporteRemoto: true,
+      reparacionBobinasPorAnio: "", reparacionesIncluidas: [], partesIncluidas: false, saasMonitoreo: false,
+      viaticosIncluidos: false, enviosRepuestosIncluidos: false, incluirSLA: true });
+  }
+
   // ==========================================================================
   // Formulario
   // ==========================================================================
@@ -457,9 +537,7 @@
           <div class="field"><label for="pfEtiqueta">Etiqueta que ve el cliente</label>
             <input id="pfEtiqueta" value="${esc(d.plan?.etiquetaPublica || "")}" placeholder="Por defecto, la del plan" /></div>
         </div>
-        <p class="muted" style="font-size:13px;margin-top:0">
-          La cobertura (preventivos, correctivo, bobinas, SLA) se arma sola a partir del plan.
-        </p>
+        ${bloqueAlcance(d.cobertura || {})}
 
         <h3 style="margin-top:8px">Equipos alcanzados</h3>
         <div class="equipos-list" id="pfEquipos">${(d.equipos || []).map(filaEquipo).join("")}</div>
@@ -476,6 +554,9 @@
         </div>
       </div>`}
     `;
+    // Elegir un plan precarga su alcance; después se ajusta a mano.
+    const sp = document.getElementById("pfPlan");
+    if (sp) sp.onchange = () => sp.value && alcanceDesdePlan();
   }
 
   function filaEquipo(e = {}) {
@@ -515,10 +596,11 @@
     const modulos = planAnt.modulos || [];
     const plan = planId ? { ...planAnt, id: planId, modulos,
       etiquetaPublica: val("pfEtiqueta") || CAT().PLANES[planId].etiquetaPublica } : {};
-    const cambioPlan = planId && (planId !== planAnt.id || !Object.keys(anterior?.cobertura || {}).length);
-    const cobertura = !planId ? (anterior?.cobertura || {})
-      : cambioPlan ? { ...CAT().derivarDePlan(planId, modulos).cobertura, incluirSLA: true }
-      : anterior.cobertura;
+    // El alcance se lee de lo que está en pantalla: el plan sólo lo precarga.
+    // Antes se derivaba del plan al guardar y no había forma de ofrecer, por
+    // ejemplo, sólo mano de obra sin bobinas. Se parte de la cobertura anterior
+    // para no perder claves que el formulario no muestra (banco de horas, etc.).
+    const cobertura = { ...(anterior?.cobertura || {}), ...leerAlcance() };
     const equipos = [...document.querySelectorAll("#pfEquipos .eq-row")].map((row) => {
       const o = {};
       row.querySelectorAll("[data-eq]").forEach((f) => (o[f.dataset.eq] = f.value.trim()));
@@ -732,7 +814,7 @@
 
   Object.assign(global, {
     filaEquipoProp: filaEquipo, guardarPropuesta, enviarPropuesta, aceptarPropuesta, rechazarPropuesta,
-    nuevaVersionPropuesta,
+    nuevaVersionPropuesta, alcanceDesdePlan, alcanceSoloManoObra,
     generarContrato, exportarPropuestasCSV, limpiarFiltroProp, irPaginaProp,
   });
 })(typeof window !== "undefined" ? window : globalThis);
