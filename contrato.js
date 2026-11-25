@@ -24,6 +24,9 @@ const ORDINALES = [
 ];
 
 function construirContrato(c, opts = {}) {
+  // Un equipo dado de baja ya no es parte del servicio: si se regenera el
+  // documento, no puede seguir figurando en las fichas.
+  c = { ...c, equipos: (c.equipos || []).filter((e) => NEXO_ESQUEMA.estadoEquipo(e) !== "Baja") };
   const plantilla = !!opts.plantilla;
   const cov = c.cobertura || {};
   const eco = c.economico || {};

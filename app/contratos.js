@@ -95,7 +95,7 @@ function renderDashboard() {
       ${venc.length || aum.length || toma.length ? [
         ...venc.map((v) => alertRow("venc", "Vence", v.c, `${fmt(v.fin)} · faltan ${v.dias} días`)),
         ...aum.map((a) => alertRow("aum", "Aumento", a.c, `${fmt(a.fecha)} · ${a.c.ajuste?.periodicidad} · faltan ${a.dias} días`)),
-        ...toma.map((t) => alertRow("aum", t.tipo, t.c, `${esc(t.detalle)} · ${fmt(t.fecha)} · faltan ${t.dias} días`)),
+        ...toma.map((t) => alertRow("aum", t.tipo, t.c, t.tipo === "Pausa" ? esc(t.detalle) : `${esc(t.detalle)} · ${fmt(t.fecha)} · faltan ${t.dias} días`)),
       ].join("") : `<p class="muted">Sin vencimientos ni aumentos dentro de los umbrales. ✅</p>`}
     </div>
     <div class="card">
@@ -283,7 +283,7 @@ function trContrato(c) {
       if (!p || p === nombreCliente(c)) return "";
       return `<br><span class="muted" style="font-size:12px">${esc(p)}${rss.length > 1 ? ` · +${rss.length - 1} razón/es social/es` : ""}</span>`;
     })()}</td>
-    <td>${(c.equipos || []).length} <span class="muted">(${[...new Set((c.equipos || []).map((e) => e.modalidad))].join("/")})</span>${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length ? `<br><span class="muted" style="font-size:12px">${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length} por ingresar</span>` : ""}</td>
+    <td>${NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length}${NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length !== (c.equipos || []).length ? `<span class="muted"> de ${(c.equipos || []).length}</span>` : ""} <span class="muted">(${[...new Set((c.equipos || []).map((e) => e.modalidad))].join("/")})</span>${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length ? `<br><span class="muted" style="font-size:12px">${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length} por ingresar</span>` : ""}</td>
     <td><span class="badge ${c.estado}">${ESTADO_LABEL[c.estado]}</span></td>
     <td>${money(canonHoy(c), c.economico?.moneda)}${canonHoy(c) !== (Number(c.economico?.canonMensual) || 0) ? `<br><span class="muted" style="font-size:12px">pleno ${money(c.economico?.canonMensual, c.economico?.moneda)}</span>` : ""}</td>
     <td>${vencTxt}</td>
@@ -348,6 +348,7 @@ function renderDetalle(id) {
     <div class="detail-grid">
       <div>
         <div class="card"><h3>Cobertura por equipo</h3>${renderCoverage(c)}</div>
+        ${renderMovimientos(c)}
         ${(c.cobertura?.reparacionesIncluidas || []).length ? `<div class="card"><h3>Reparaciones / partes incluidas</h3>
           <ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.7">${c.cobertura.reparacionesIncluidas.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></div>` : ""}
         <div class="card"><h3>Alcance del servicio</h3><div class="check-row">
@@ -611,7 +612,12 @@ function renderCoverage(c) {
   };
   return `<div class="overflow"><table class="cover">
     <thead><tr><th>Equipo</th>${SERVICIOS.map((s) => `<th>${s.label}</th>`).join("")}</tr></thead>
-    <tbody>${(c.equipos || []).map((e) => `<tr><td><b>${esc(e.marca)} ${esc(e.modelo)}</b> <span class="pill-modal">${e.modalidad}</span>${e.ubicacion ? `<br><span class="muted" style="font-size:12px">${esc(e.ubicacion)}</span>` : ""}${notaIngreso(e)}</td>${SERVICIOS.map((s) => `<td>${cellFor(s, e.modalidad)}</td>`).join("")}</tr>`).join("")}</tbody>
+    <tbody>${(c.equipos || []).map((e, i) => {
+      const est = NEXO_ESQUEMA.estadoEquipo(e, hoyISO());
+      const fuera = est === "Baja" || est === "Pausado";
+      return `<tr${fuera ? ' class="eq-fuera"' : ""}><td><b>${esc(e.marca)} ${esc(e.modelo)}</b> <span class="pill-modal">${e.modalidad}</span>${e.ubicacion ? `<br><span class="muted" style="font-size:12px">${esc(e.ubicacion)}</span>` : ""}${notaIngreso(e)}${notaEstado(e, est)}
+        ${accionesEquipo(c, e, i, est)}</td>${SERVICIOS.map((s) => `<td>${fuera ? '<span class="muted">—</span>' : cellFor(s, e.modalidad)}</td>`).join("")}</tr>`;
+    }).join("")}</tbody>
   </table></div>
   ${(() => {
     const notas = [];
@@ -793,7 +799,9 @@ function eqRow(e = {}, i) {
     <select data-eq="modalidad"><option ${e.modalidad === "MRI" ? "selected" : ""}>MRI</option><option ${e.modalidad === "CT" ? "selected" : ""}>CT</option></select>
     <input placeholder="Ubicación / sede" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
     ${camposIngreso(e)}
-    <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
+    ${(e.eventos || []).length
+      ? `<button type="button" class="btn sm" disabled title="Tiene movimientos registrados: para sacarlo, dalo de baja desde la ficha y queda la trazabilidad">🔒</button>`
+      : `<button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>`}
   </div>`;
 }
 /**
@@ -811,6 +819,139 @@ function notaIngreso(e) {
   if (e.ingreso && e.ingreso > hoyISO()) t.push(`<span class="pill-int" title="Figura en el contrato pero todavía no está cubierto">entra el ${fmt(e.ingreso)}</span>`);
   if (e.garantiaHasta && e.garantiaHasta >= hoyISO()) t.push(`<span class="muted" style="font-size:12px">en garantía hasta ${fmt(e.garantiaHasta)}</span>`);
   return t.length ? `<br>${t.join(" ")}` : "";
+}
+
+// ---- Bajas, pausas y reanudaciones de equipos ----
+// Un contrato de varios equipos no se reescribe cada vez que uno sale: se
+// registra el movimiento, con fecha, motivo y cómo quedó el canon.
+const nombreEq = (e) => [e.marca, e.modelo].filter(Boolean).join(" ") || "Equipo";
+function notaEstado(e, est) {
+  const evs = NEXO_ESQUEMA.normalizarEventosEquipo(e.eventos);
+  const ult = evs.filter((ev) => ev.fecha <= hoyISO()).pop();
+  if (est === "Baja") return `<br><span class="pill-int">baja ${fmt(ult.fecha)}</span>${ult.motivo ? ` <span class="muted" style="font-size:12px">${esc(ult.motivo)}</span>` : ""}`;
+  if (est === "Pausado") {
+    const d = NEXO_ESQUEMA.diasEnPausa(e, hoyISO());
+    return `<br><span class="pill-int">en pausa desde ${fmt(ult.fecha)} · ${d} días</span>${ult.motivo ? ` <span class="muted" style="font-size:12px">${esc(ult.motivo)}</span>` : ""}`;
+  }
+  return "";
+}
+function accionesEquipo(c, e, i, est) {
+  if (state.soloLectura || c.tipo !== "contrato" && !ACTIVOS.has(c.estado)) return "";
+  const b = (tipo, txt) => `<button class="btn sm ghost" style="padding:2px 8px;font-size:11.5px" onclick="movimientoEquipo('${c.id}',${i},'${tipo}')">${txt}</button>`;
+  const bs = est === "Activo" ? [b("Pausa", "Pausar"), b("Baja", "Dar de baja")]
+    : est === "Pausado" ? [b("Reanudacion", "Reanudar"), b("Baja", "Dar de baja")]
+    : est === "PorIngresar" ? [b("Baja", "Dar de baja")] : [];
+  return bs.length ? `<div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">${bs.join("")}</div>` : "";
+}
+/** Trazabilidad: todos los movimientos de equipos del contrato, el último arriba. */
+function renderMovimientos(c) {
+  const filas = [];
+  (c.equipos || []).forEach((e) => NEXO_ESQUEMA.normalizarEventosEquipo(e.eventos).forEach((ev) => filas.push({ e, ev })));
+  if (!filas.length) return "";
+  filas.sort((a, b) => b.ev.fecha.localeCompare(a.ev.fecha));
+  const m = c.economico?.moneda;
+  const activos = NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length;
+  return `<div class="card"><h3>Movimientos de equipos</h3>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Hoy ${activos} de ${(c.equipos || []).length} equipos con servicio.</p>
+    <table class="data"><thead><tr><th>Fecha</th><th>Equipo</th><th>Movimiento</th><th>Motivo</th><th class="num">Canon</th></tr></thead>
+    <tbody>${filas.map(({ e, ev }) => `<tr>
+      <td>${fmt(ev.fecha)}</td>
+      <td><b>${esc(nombreEq(e))}</b>${e.ubicacion ? `<br><span class="muted" style="font-size:12px">${esc(e.ubicacion)}</span>` : ""}</td>
+      <td>${NEXO_ESQUEMA.EVENTO_EQUIPO_LABEL[ev.tipo]}</td>
+      <td class="muted">${esc(ev.motivo || "—")}${ev.usuario ? `<br><span style="font-size:11.5px">${esc(ev.usuario)}${ev.registrado && ev.registrado !== ev.fecha ? ` · cargado ${fmt(ev.registrado)}` : ""}</span>` : ""}</td>
+      <td class="num" style="white-space:nowrap">${ev.canonDespues != null ? `${ev.canonAntes != null ? `<span class="muted">${money(ev.canonAntes, m)} →</span><br>` : ""}${money(ev.canonDespues, m)}` : '<span class="muted">sin cambio</span>'}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+const MOTIVOS_EQUIPO = {
+  Baja: ["Pasó al post venta del fabricante", "Equipo reemplazado por uno nuevo con garantía", "Equipo digitalizado, con post venta del fabricante", "Equipo dado de baja por el cliente"],
+  Pausa: ["El cliente no aprueba la reparación necesaria", "Equipo detenido por falla ajena al contrato", "Pedido del cliente"],
+  Reanudacion: ["Se hizo la reparación", "Pedido del cliente"],
+};
+/**
+ * Modal de movimiento. El canon es opcional: hay bajas que no cambian el
+ * precio y otras que sí. En una pausa con canon reducido se abre un tramo
+ * que la reanudación cierra, así lo que se facturó en cada mes queda claro.
+ */
+function movimientoEquipo(id, i, tipo) {
+  const c = state.data.find((x) => x.id === id);
+  const e = c?.equipos?.[i];
+  if (!e) return;
+  const m = c.economico?.moneda;
+  const canon = Number(c.economico?.canonMensual) || 0;
+  const titulo = { Baja: "Dar de baja", Pausa: "Pausar", Reanudacion: "Reanudar" }[tipo];
+  const ayudaCanon = {
+    Baja: `Canon del contrato desde la baja. Hoy: ${money(canon, m)}. Vacío = no cambia.`,
+    Pausa: `Canon que se factura mientras dure la pausa. Hoy: ${money(canonHoy(c), m)}. Vacío = se sigue cobrando igual.`,
+    Reanudacion: "Si la pausa tenía canon reducido, el tramo se cierra el día anterior y vuelve el canon pleno.",
+  }[tipo];
+  const ov = document.createElement("div");
+  ov.className = "overlay";
+  ov.id = "ovEquipo";
+  ov.innerHTML = `<div class="modal" style="max-width:520px">
+    <div class="kicker">${esc(c.numero)} · ${esc(nombreCliente(c))}</div>
+    <h2>${titulo} · ${esc(nombreEq(e))}</h2>
+    <p class="muted" style="margin:0 0 12px">${esc(e.ubicacion || "")}</p>
+    <div class="form-grid">
+      <div class="field"><label>Fecha</label><input type="date" id="meFecha" value="${hoyISO()}"></div>
+      ${tipo !== "Reanudacion" ? `<div class="field"><label>Canon ${tipo === "Pausa" ? "durante la pausa" : "nuevo"}</label><input type="number" min="0" step="any" id="meCanon" placeholder="sin cambio"></div>` : ""}
+    </div>
+    <p class="hint" style="margin:4px 0 10px;font-size:12px">${ayudaCanon}</p>
+    <div class="field full"><label>Motivo</label><input id="meMotivo" list="meMotivos" placeholder="Por qué"><datalist id="meMotivos">${MOTIVOS_EQUIPO[tipo].map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div>
+    <p id="meError" style="color:var(--danger,#b3261e);font-size:13px;min-height:1em;margin:8px 0 0"></p>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:10px">
+      <button class="btn ghost" type="button" onclick="document.getElementById('ovEquipo').remove()">Cancelar</button>
+      <button class="btn primary" type="button" id="meOk">${titulo}</button>
+    </div></div>`;
+  document.body.appendChild(ov);
+  document.getElementById("meOk").onclick = () => registrarMovimiento(id, i, tipo);
+}
+async function registrarMovimiento(id, i, tipo) {
+  const c = state.data.find((x) => x.id === id);
+  const e = c.equipos[i];
+  const fecha = document.getElementById("meFecha").value;
+  const motivo = document.getElementById("meMotivo").value.trim();
+  const canonTxt = document.getElementById("meCanon")?.value ?? "";
+  const err = NEXO_ESQUEMA.motivoNoEvento(e, tipo, fecha)
+    || (!motivo ? "Contá el motivo: es lo que queda en la trazabilidad" : "");
+  if (err) { document.getElementById("meError").textContent = err; return; }
+
+  // Se trabaja sobre una copia: si la validación del núcleo rechaza el
+  // guardado, el contrato en memoria no queda a medio modificar.
+  const prev = structuredClone(c);
+  const anterior = Number(c.economico?.canonMensual) || 0;
+  const ev = { fecha, tipo, motivo, usuario: state.user || "—", registrado: hoyISO(), canonAntes: null, canonDespues: null };
+  c.economico.tramos = c.economico.tramos || [];
+  if (tipo === "Baja" && canonTxt !== "") {
+    const nuevo = Number(canonTxt);
+    ev.canonAntes = anterior; ev.canonDespues = nuevo;
+    c.economico.canonMensual = nuevo;
+    c.ajuste = c.ajuste || {};
+    c.ajuste.historial = [...(c.ajuste.historial || []), { fecha, porcentaje: null, canonAnterior: anterior, canonNuevo: nuevo,
+      usuario: state.user || "—", nota: `baja de ${nombreEq(e)}${e.ubicacion ? " (" + e.ubicacion + ")" : ""}` }];
+  }
+  if (tipo === "Pausa" && canonTxt !== "") {
+    ev.canonAntes = NEXO_ESQUEMA.canonVigente(c, fecha); ev.canonDespues = Number(canonTxt);
+    c.economico.tramos.push({ desde: fecha, hasta: null, canonMensual: Number(canonTxt), motivo: `Pausa de ${nombreEq(e)}: ${motivo}` });
+  }
+  if (tipo === "Reanudacion") {
+    const pausa = NEXO_ESQUEMA.normalizarEventosEquipo(e.eventos).filter((x) => x.tipo === "Pausa").pop();
+    const t = pausa && c.economico.tramos.find((x) => x.desde === pausa.fecha && !x.hasta);
+    if (t) {
+      const d = new Date(fecha + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 1);
+      t.hasta = d.toISOString().slice(0, 10);
+      ev.canonAntes = t.canonMensual; ev.canonDespues = Number(c.economico.canonMensual) || 0;
+    }
+  }
+  e.eventos = [...(e.eventos || []), ev];
+  try {
+    await persist(`${NEXO_ESQUEMA.EVENTO_EQUIPO_LABEL[tipo]} ${nombreEq(e)} · ${c.numero}`);
+    document.getElementById("ovEquipo")?.remove();
+    toast(`${NEXO_ESQUEMA.EVENTO_EQUIPO_LABEL[tipo]} registrada`);
+    router();
+  } catch (x) {
+    Object.assign(c, prev);
+    document.getElementById("meError").textContent = x.message;
+  }
 }
 
 // ---- Tramos de canon (lo comparte el formulario de propuestas) ----
@@ -1131,7 +1272,7 @@ function exportarInforme() {
   const cerrados = rows.filter((c) => ["vencida", "rescindida", "perdida"].includes(c.estado));
   const mrr = mrrPorMoneda(vig);
   const potencial = mrrPorMoneda(pipe);
-  const equipos = vig.reduce((s, c) => s + (c.equipos || []).length, 0);
+  const equipos = vig.reduce((s, c) => s + NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length, 0);
   const planPub = (c) => c.plan?.etiquetaPublica || CAT.PLANES[c.plan?.id]?.label || "—";
 
   // Agenda de los próximos 180 días: vencimientos y aumentos pactados

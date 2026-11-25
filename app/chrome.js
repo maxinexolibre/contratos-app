@@ -211,6 +211,13 @@ function calcAlertas() {
       if (d !== null && d >= 0 && d <= 45) toma.push({ c, tipo: "Toma", fecha: parseDate(e.ingreso), dias: d,
         detalle: `entra ${[e.marca, e.modelo].filter(Boolean).join(" ")}${e.ubicacion ? " (" + e.ubicacion + ")" : ""}` });
     }
+    // Una pausa larga es plata que no entra (o servicio que se presta sin
+    // cobrar): pasado un mes, se avisa para decidir.
+    for (const e of c.equipos || []) {
+      const dp = NEXO_ESQUEMA.diasEnPausa(e, new Date().toISOString().slice(0, 10));
+      if (dp !== null && dp >= 30) toma.push({ c, tipo: "Pausa", fecha: hoy(), dias: 0,
+        detalle: `${[e.marca, e.modelo].filter(Boolean).join(" ")}${e.ubicacion ? " (" + e.ubicacion + ")" : ""} en pausa hace ${dp} días` });
+    }
     for (const t of c.economico?.tramos || []) {
       const d = daysUntil(parseDate(t.hasta));
       if (d !== null && d >= 0 && d <= 45) toma.push({ c, tipo: "Canon", fecha: parseDate(t.hasta), dias: d,

@@ -86,6 +86,12 @@ presupuesto o reemplazar por un texto propio.
   marcan un equipo que figura pero se incorpora más adelante (p. ej. al vencer
   la garantía). Lo que se factura hoy es `canonVigente()` (esquema.js): el MRR
   lo usa, no `canonMensual`. Un ajuste de canon también ajusta los tramos en curso.
+- **Bajas, pausas y reanudaciones de equipos** sin reescribir el contrato:
+  `equipos[].eventos` (`{fecha, tipo, motivo, canonAntes, canonDespues}`). El
+  estado del equipo no se guarda, lo calcula `estadoEquipo()`; los eventos van
+  en orden y la regla rechaza una historia imposible. Una pausa con canon
+  reducido abre un tramo que la reanudación cierra; una baja con canon nuevo
+  deja el cambio también en `ajuste.historial`.
 - **La propuesta se negocia en versiones.** "Renegociar" congela la versión
   enviada en `versiones[]` y abre la siguiente en Borrador (`version` + 1);
   no se puede volver a Borrador sin congelar, ni borrar versiones. La aceptada

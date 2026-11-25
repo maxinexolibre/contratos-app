@@ -247,17 +247,86 @@
   }
 
   /**
-   * Un equipo con `ingreso` futuro figura en el contrato pero todavía no está
-   * cubierto: hasta esa fecha no se le debe servicio ni se cuenta en la flota.
+   * Vida de un equipo dentro de un contrato que no se reescribe. Un contrato
+   * de varios equipos rara vez termina como empezó: uno pasa al post venta del
+   * fabricante y se da de baja, otro queda en pausa meses porque el cliente no
+   * aprueba una reparación, después se reanuda. Antes eso no quedaba en ningún
+   * lado: el contrato seguía diciendo cuatro equipos cuando quedaba uno.
+   *
+   * Cada cambio es un evento con fecha y motivo; el estado no se guarda, se
+   * calcula reproduciendo los eventos (igual que las comisiones).
+   */
+  const EVENTO_EQUIPO = ["Baja", "Pausa", "Reanudacion"];
+  const EVENTO_EQUIPO_LABEL = { Baja: "Baja", Pausa: "Pausa", Reanudacion: "Reanudación" };
+
+  function normalizarEventosEquipo(v) {
+    return esLista(v).map((ev) => ({
+      fecha: fecha(ev?.fecha),
+      tipo: enumerado(ev?.tipo, EVENTO_EQUIPO, null),
+      motivo: esTexto(ev?.motivo),
+      usuario: esTexto(ev?.usuario),
+      // Canon del contrato antes y después del cambio, si se modificó.
+      // null = el canon no se tocó (no es lo mismo que pasar a 0).
+      canonAntes: ev?.canonAntes == null || ev.canonAntes === "" ? null : money(ev.canonAntes),
+      canonDespues: ev?.canonDespues == null || ev.canonDespues === "" ? null : money(ev.canonDespues),
+      registrado: fecha(ev?.registrado),
+    })).filter((ev) => ev.fecha && ev.tipo)
+      .sort((a, b) => a.fecha.localeCompare(b.fecha));
+  }
+
+  /** "Activo" | "PorIngresar" | "Pausado" | "Baja" en una fecha. */
+  function estadoEquipo(equipo, f = hoy()) {
+    const ing = fecha(equipo?.ingreso);
+    let est = ing && ing > f ? "PorIngresar" : "Activo";
+    for (const ev of normalizarEventosEquipo(equipo?.eventos)) {
+      if (ev.fecha > f) break;
+      est = ev.tipo === "Baja" ? "Baja" : ev.tipo === "Pausa" ? "Pausado" : "Activo";
+    }
+    return est;
+  }
+
+  /**
+   * Por qué no se puede registrar un evento, o "" si se puede. Los eventos van
+   * en orden: registrar uno con fecha anterior al último reescribiría la
+   * historia que ya se usó para facturar.
+   */
+  function motivoNoEvento(equipo, tipo, f) {
+    if (!EVENTO_EQUIPO.includes(tipo)) return "Tipo de movimiento desconocido";
+    if (!fecha(f)) return "Falta la fecha";
+    const evs = normalizarEventosEquipo(equipo?.eventos);
+    const ult = evs[evs.length - 1];
+    if (ult && f < ult.fecha) return `El último movimiento del equipo es del ${ult.fecha}: no se puede registrar uno anterior`;
+    const est = estadoEquipo(equipo, f);
+    if (est === "Baja") return "El equipo ya está dado de baja";
+    if (tipo === "Pausa" && est !== "Activo") return est === "Pausado" ? "El equipo ya está en pausa" : "El equipo todavía no entró al contrato";
+    if (tipo === "Reanudacion" && est !== "Pausado") return "Solo se reanuda un equipo en pausa";
+    return "";
+  }
+
+  /** Días que lleva en pausa un equipo, o null si no está pausado. */
+  function diasEnPausa(equipo, f = hoy()) {
+    if (estadoEquipo(equipo, f) !== "Pausado") return null;
+    const p = normalizarEventosEquipo(equipo?.eventos).filter((ev) => ev.tipo === "Pausa" && ev.fecha <= f).pop();
+    return p ? Math.round((Date.parse(f) - Date.parse(p.fecha)) / 86400000) : null;
+  }
+
+  /**
+   * Un equipo está cubierto si entró al contrato y no está en pausa ni de
+   * baja: hasta su ingreso, durante una pausa o después de la baja no se le
+   * debe servicio ni se cuenta en la flota.
    */
   function equipoCubierto(equipo, f = hoy()) {
-    const ing = fecha(equipo?.ingreso);
-    return !ing || ing <= f;
+    return estadoEquipo(equipo, f) === "Activo";
+  }
+
+  /** Equipos con servicio vigente en una fecha. */
+  function equiposActivos(registro, f = hoy()) {
+    return esLista(registro?.equipos).filter((e) => equipoCubierto(e, f));
   }
 
   /** Equipos que entran después de una fecha (los "pendientes de toma"). */
   function equiposPorIngresar(registro, f = hoy()) {
-    return esLista(registro?.equipos).filter((e) => !equipoCubierto(e, f));
+    return esLista(registro?.equipos).filter((e) => estadoEquipo(e, f) === "PorIngresar");
   }
 
   /**
@@ -1185,6 +1254,8 @@
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
     normalizarTramos, tramoVigente, canonVigente, equipoCubierto, equiposPorIngresar,
+    EVENTO_EQUIPO, EVENTO_EQUIPO_LABEL, normalizarEventosEquipo, estadoEquipo, motivoNoEvento,
+    diasEnPausa, equiposActivos,
     normalizarVersion,
   };
 })(typeof window !== "undefined" ? window : globalThis);

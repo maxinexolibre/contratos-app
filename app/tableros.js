@@ -32,7 +32,8 @@ function kpisDireccion() {
   const vig = porPaisActivo(state.data).filter((c) => ACTIVOS.has(c.estado));
   // Por moneda y por lo que se factura hoy (ver mrrPorMoneda en contratos.js).
   const mrr = mrrPorMoneda(vig);
-  const equipos = vig.reduce((s, c) => s + (c.equipos || []).length, 0);
+  // Solo los que tienen servicio hoy: dados de baja, en pausa o por ingresar no cuentan.
+  const equipos = vig.reduce((s, c) => s + NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length, 0);
 
   const abiertos = porPaisActivo(state.presupuestos).filter((p) => PRE_ABIERTOS.has(p.estado));
   const pipeAnual = abiertos.reduce((s, p) => s + valorPresu(p).anual, 0);

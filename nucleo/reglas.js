@@ -326,8 +326,29 @@
     }
   }
 
+  /**
+   * La historia de cada equipo tiene que poder reproducirse: no se pausa uno
+   * dado de baja ni se reanuda uno que no estaba en pausa. Se revisa evento
+   * por evento, como si se fueran registrando en orden.
+   */
+  function validarEventosEquipos(reg) {
+    for (const e of reg.equipos || []) {
+      const evs = E.normalizarEventosEquipo(e.eventos);
+      for (let i = 0; i < evs.length; i++) {
+        const prev = { ...e, eventos: evs.slice(0, i) };
+        const err = E.motivoNoEvento(prev, evs[i].tipo, evs[i].fecha);
+        if (err) {
+          fallar("NX-040",
+            `Equipo ${[e.marca, e.modelo].filter(Boolean).join(" ") || "sin nombre"}: ${E.EVENTO_EQUIPO_LABEL[evs[i].tipo]} del ${evs[i].fecha} inválida`,
+            err);
+        }
+      }
+    }
+  }
+
   function validarContrato(nuevo, anterior, ctx) {
     validarTramos(nuevo, `El contrato ${nuevo.numero || ""}`.trim());
+    validarEventosEquipos(nuevo);
     if (!nuevo.clienteId && !nuevo.ticketId) {
       fallar("NX-040", "El contrato necesita un cliente");
     }

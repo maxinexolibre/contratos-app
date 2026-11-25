@@ -1633,6 +1633,64 @@ prueba("MRR · cuenta lo que se factura hoy y no mezcla monedas", () => {
   igual(K.recurrente([conTramo()], "2027-02-01").mensual, { ARS: 4800 });
 });
 
+// Caso testigo (ficticio): un contrato que arrancó con cuatro equipos en una
+// sede y dos en otra; con los años salen equipos y otro queda en pausa.
+const eqConEventos = (eventos, over = {}) => ({ marca: "GE", modelo: "X", modalidad: "MRI", ubicacion: "Sede 2", eventos, ...over });
+
+prueba("equipos · baja, pausa y reanudación se reproducen en orden", () => {
+  const e = eqConEventos([
+    { fecha: "2026-03-01", tipo: "Pausa", motivo: "el cliente no aprueba el cambio de coldhead" },
+    { fecha: "2026-08-01", tipo: "Reanudacion", motivo: "se hizo la reparación" },
+  ]);
+  igual(E.estadoEquipo(e, "2026-02-28"), "Activo");
+  igual(E.estadoEquipo(e, "2026-05-01"), "Pausado");
+  igual(E.diasEnPausa(e, "2026-03-31"), 30);
+  igual(E.estadoEquipo(e, "2026-08-01"), "Activo");
+  cierto(!E.equipoCubierto(e, "2026-05-01"), "en pausa no se le debe servicio");
+  const baja = eqConEventos([{ fecha: "2025-06-01", tipo: "Baja", motivo: "pasó al post venta del fabricante" }]);
+  igual(E.estadoEquipo(baja, "2025-05-31"), "Activo", "antes de la baja tenía servicio");
+  igual(E.estadoEquipo(baja, "2026-01-01"), "Baja");
+});
+
+prueba("equipos · no se registra un movimiento que no corresponde", () => {
+  const baja = eqConEventos([{ fecha: "2025-06-01", tipo: "Baja" }]);
+  cierto(E.motivoNoEvento(baja, "Pausa", "2026-01-01"), "no se pausa uno dado de baja");
+  cierto(E.motivoNoEvento(eqConEventos([]), "Reanudacion", "2026-01-01"), "no se reanuda uno activo");
+  cierto(E.motivoNoEvento(eqConEventos([{ fecha: "2026-03-01", tipo: "Pausa" }]), "Baja", "2026-02-01"),
+    "no se registra uno anterior al último: reescribiría lo ya facturado");
+  igual(E.motivoNoEvento(eqConEventos([{ fecha: "2026-03-01", tipo: "Pausa" }]), "Baja", "2026-04-01"), "",
+    "un equipo en pausa se puede dar de baja");
+  cierto(E.motivoNoEvento({ ingreso: "2027-01-01" }, "Pausa", "2026-12-01"), "no se pausa uno que todavía no entró");
+});
+
+prueba("equipos · el contrato con una historia imposible no se guarda", () => {
+  rechaza("NX-040", () => R.validar("contratos", "editar", conTramo({ equipos: [eqConEventos([
+    { fecha: "2025-06-01", tipo: "Baja" }, { fecha: "2025-07-01", tipo: "Reanudacion" }])] }), null, ADMIN));
+  R.validar("contratos", "editar", conTramo({ equipos: [eqConEventos([
+    { fecha: "2025-06-01", tipo: "Pausa" }, { fecha: "2025-09-01", tipo: "Reanudacion" }, { fecha: "2026-01-01", tipo: "Baja" }])] }), null, ADMIN);
+});
+
+prueba("equipos · de seis quedan los que tienen servicio", () => {
+  const c = conTramo({ equipos: [
+    eqConEventos([{ fecha: "2024-05-01", tipo: "Baja" }], { ubicacion: "Sede 1" }),
+    eqConEventos([{ fecha: "2025-02-01", tipo: "Baja" }], { ubicacion: "Sede 1" }),
+    eqConEventos([{ fecha: "2025-10-01", tipo: "Baja" }], { ubicacion: "Sede 1" }),
+    eqConEventos([], { ubicacion: "Sede 1" }),
+    eqConEventos([{ fecha: "2026-03-01", tipo: "Pausa" }]),
+    eqConEventos([]),
+  ] });
+  igual(E.equiposActivos(c, "2026-11-25").length, 2);
+  igual(E.equiposActivos(c, "2024-01-01").length, 6, "la historia permite ver cómo estaba antes");
+});
+
+prueba("equipos · los movimientos sobreviven al adaptador", () => {
+  const viejo = { ...contratoViejo(), equipos: [eqConEventos([{ fecha: "2026-03-01", tipo: "Pausa", motivo: "m",
+    usuario: "u", canonAntes: 100, canonDespues: 50, registrado: "2026-03-02" }])] };
+  const clientes = AD.clientesDesde({ data: [viejo] });
+  const vuelta = AD.contratoAViejo(AD.contratoANuevo(viejo, { indiceClientes: AD.indiceClientes(clientes) }), { clientes });
+  igual(vuelta.equipos, viejo.equipos);
+});
+
 const enviadaV1 = () => propBase({ estado: "Enviada", fechas: { creado: "2026-10-01", enviado: "2026-10-02" } });
 
 prueba("versiones · renegociar abre la versión 2 y congela la 1", () => {
