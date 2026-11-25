@@ -501,7 +501,7 @@
           <div class="field"><label for="pfCanon">Canon mensual propuesto</label>
             <input type="number" id="pfCanon" min="0" step="50" value="${d.economico.canonMensual || ""}" /></div>
           <div class="field"><label for="pfMoneda">Moneda</label>
-            <select id="pfMoneda">${["USD", "UF"].map((x) =>
+            <select id="pfMoneda">${["USD", "ARS", "UF"].map((x) =>
               `<option value="${x}"${d.economico.moneda === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>
         </div>
         <div class="form-grid">

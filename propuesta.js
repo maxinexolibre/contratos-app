@@ -135,7 +135,9 @@ function construirPropuesta(p, cli = {}) {
   const canon = Number(eco.canonMensual) || 0;
   const ref = eco.valorReferencia == null ? null : Number(eco.valorReferencia);
   const sufijo = eco.incluyeIVA ? " IVA incluido mensuales" : " + IVA mensuales";
-  const importe = (v) => `${eco.moneda === "UF" ? "UF" : "USD"} ${em(`$${Number(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)}${sufijo}`;
+  // ARS: hay clientes que piden la propuesta pesificada. Antes cualquier
+  // moneda que no fuera UF se imprimía como USD.
+  const importe = (v) => `${eco.moneda === "UF" ? "UF" : eco.moneda === "ARS" ? "ARS" : "USD"} ${em(`$${Number(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)}${sufijo}`;
   // El valor de referencia sólo tiene sentido si es mayor: mostrar uno igual
   // o menor que el canon anula el argumento de la condición especial.
   const conReferencia = ref && canon && ref > canon;
