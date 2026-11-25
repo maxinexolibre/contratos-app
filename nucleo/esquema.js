@@ -257,6 +257,8 @@
    * calcula reproduciendo los eventos (igual que las comisiones).
    */
   const EVENTO_EQUIPO = ["Baja", "Pausa", "Reanudacion"];
+  const FACTURACION_CONTRATO = ["ConFactura", "SinFactura"];
+  const FACTURACION_LABEL = { ConFactura: "Con factura", SinFactura: "Sin factura" };
   const EVENTO_EQUIPO_LABEL = { Baja: "Baja", Pausa: "Pausa", Reanudacion: "Reanudación" };
 
   function normalizarEventosEquipo(v) {
@@ -700,6 +702,10 @@
             // arma `economico` campo por campo (ver "campo anidado sin
             // propagar" en CLAUDE.md).
             tramos: normalizarTramos(r.economico?.tramos),
+            // Si el canon se cobra con factura o no. Es dato interno: no se
+            // imprime en el documento del cliente. Sirve para leer la cartera
+            // separada, que hasta ahora se mezclaba en un solo número.
+            facturacion: enumerado(r.economico?.facturacion, FACTURACION_CONTRATO, "ConFactura"),
           },
           recurrencia: enumerado(r.recurrencia, RECURRENCIA, "mensual"),
           equipos: esLista(r.equipos),
@@ -1255,7 +1261,7 @@
     money, claveCliente, nuevoId,
     normalizarTramos, tramoVigente, canonVigente, equipoCubierto, equiposPorIngresar,
     EVENTO_EQUIPO, EVENTO_EQUIPO_LABEL, normalizarEventosEquipo, estadoEquipo, motivoNoEvento,
-    diasEnPausa, equiposActivos,
+    diasEnPausa, equiposActivos, FACTURACION_CONTRATO, FACTURACION_LABEL,
     normalizarVersion,
   };
 })(typeof window !== "undefined" ? window : globalThis);

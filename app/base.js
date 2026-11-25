@@ -49,7 +49,7 @@ const state = {
   user: localStorage.getItem(LS.user) || "",
   ws: "contratos", // área de trabajo activa: 'contratos' | 'presupuestos'
   selected: new Set(),
-  filtro: { q: "", estado: "", modalidad: "" },
+  filtro: { q: "", estado: "", modalidad: "", moneda: "", facturacion: "" },
   filtroPre: { q: "", estado: "", tipo: "", pais: "", mes: "", pagina: 1 },
   filtroTk: { q: "", estado: "", pais: "", mes: "", pagina: 1 },
   editId: null,

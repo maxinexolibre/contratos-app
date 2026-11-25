@@ -92,6 +92,10 @@ presupuesto o reemplazar por un texto propio.
   en orden y la regla rechaza una historia imposible. Una pausa con canon
   reducido abre un tramo que la reanudación cierra; una baja con canon nuevo
   deja el cambio también en `ajuste.historial`.
+- **Moneda y facturación del contrato.** `economico.moneda` (USD/ARS) y
+  `economico.facturacion` (`ConFactura` / `SinFactura`, interno: no se imprime).
+  El tablero muestra la cartera vigente por cada combinación y el listado filtra
+  por las dos.
 - **La propuesta se negocia en versiones.** "Renegociar" congela la versión
   enviada en `versiones[]` y abre la siguiente en Borrador (`version` + 1);
   no se puede volver a Borrador sin congelar, ni borrar versiones. La aceptada

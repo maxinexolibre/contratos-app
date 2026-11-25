@@ -22,6 +22,38 @@ function mrrPorMoneda(lista) {
   }
   return m;
 }
+const facturacionDe = (c) => c.economico?.facturacion || "ConFactura";
+function pillCobro(c) {
+  const m = c.economico?.moneda || "USD";
+  return `<span class="pill-mon pill-${m.toLowerCase()}">${m}</span>${facturacionDe(c) === "SinFactura" ? ' <span class="pill-mon pill-sf" title="Se cobra sin factura">s/f</span>' : ""}`;
+}
+/**
+ * Cartera vigente abierta por moneda y por con o sin factura. Cada fila es
+ * una combinación: nunca se suman importes de monedas distintas.
+ */
+function carteraPorCobro(lista) {
+  const g = new Map();
+  for (const c of lista) {
+    const k = `${c.economico?.moneda || "USD"}|${facturacionDe(c)}`;
+    const x = g.get(k) || { moneda: c.economico?.moneda || "USD", facturacion: facturacionDe(c), contratos: 0, equipos: 0, mensual: 0 };
+    x.contratos++; x.equipos += NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length; x.mensual += canonHoy(c);
+    g.set(k, x);
+  }
+  return [...g.values()].sort((a, b) => a.moneda.localeCompare(b.moneda) || a.facturacion.localeCompare(b.facturacion));
+}
+function renderCarteraPorCobro(lista) {
+  const filas = carteraPorCobro(lista);
+  if (!filas.length) return "";
+  return `<div class="card"><h3>Cartera vigente por moneda y facturación</h3>
+    <table class="data" style="margin-top:8px"><thead><tr><th>Moneda</th><th>Facturación</th><th class="num">Contratos</th><th class="num">Equipos</th><th class="num">Se factura por mes</th><th class="num">Anualizado</th></tr></thead>
+    <tbody>${filas.map((f) => `<tr style="cursor:pointer" onclick="state.filtro.moneda='${f.moneda}';state.filtro.facturacion='${f.facturacion}';location.hash='listado'">
+      <td><span class="pill-mon pill-${f.moneda.toLowerCase()}">${f.moneda}</span></td>
+      <td>${NEXO_ESQUEMA.FACTURACION_LABEL[f.facturacion]}</td>
+      <td class="num">${f.contratos}</td><td class="num">${f.equipos}</td>
+      <td class="num"><b>${money(Math.round(f.mensual), f.moneda)}</b></td>
+      <td class="num">${money(Math.round(f.mensual * 12), f.moneda)}</td></tr>`).join("")}</tbody></table>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Tocá una fila para ver esos contratos. Los importes no se suman entre monedas.</p></div>`;
+}
 function moneyMapa(mapa, factor = 1) {
   const e = Object.entries(mapa).filter(([, v]) => v);
   return e.length ? e.map(([mon, v]) => money(Math.round(v * factor), mon)).join(" · ") : money(0);
@@ -80,6 +112,7 @@ function renderDashboard() {
       <div class="card"><h3>Vencimientos por mes <span class="muted" style="font-weight:400">· próximos 6</span></h3>
         ${vmeses.some((m) => m.value) ? chartColumns(vmeses) : `<p class="muted">Sin vencimientos en los próximos 6 meses.</p>`}</div>
     </div>
+    ${renderCarteraPorCobro(vigentes)}
     ${pend.length ? `<div class="card alert-panel danger">
       <h3>⚠ Ajustes de canon sin registrar</h3>
       <p class="muted" style="font-size:13.5px;margin:0 0 10px">Estas fechas de ajuste ya pasaron y el sistema no tiene registro de que se hayan aplicado. Un ajuste no aplicado no se recupera y arrastra la base del período siguiente.</p>
@@ -241,6 +274,8 @@ function renderListado() {
       <input type="search" id="fq" placeholder="Buscar cliente o N°…" value="${esc(state.filtro.q)}" />
       <select id="festado"><option value="">Todos los estados</option>${ESTADOS.map((e) => `<option value="${e.id}" ${state.filtro.estado === e.id ? "selected" : ""}>${e.label}</option>`).join("")}</select>
       <select id="fmod"><option value="">Toda modalidad</option><option value="MRI" ${state.filtro.modalidad === "MRI" ? "selected" : ""}>MRI</option><option value="CT" ${state.filtro.modalidad === "CT" ? "selected" : ""}>CT</option></select>
+      <select id="fmon"><option value="">Toda moneda</option>${["USD", "ARS"].map((m) => `<option ${state.filtro.moneda === m ? "selected" : ""}>${m}</option>`).join("")}</select>
+      <select id="ffac"><option value="">Con y sin factura</option>${NEXO_ESQUEMA.FACTURACION_CONTRATO.map((f) => `<option value="${f}" ${state.filtro.facturacion === f ? "selected" : ""}>${NEXO_ESQUEMA.FACTURACION_LABEL[f]}</option>`).join("")}</select>
       <span class="muted" style="font-size:13px">${rows.length} de ${state.data.length}</span>
     </div>
     <div class="overflow"><table class="data">
@@ -253,6 +288,8 @@ function renderListado() {
   document.getElementById("fq").oninput = (e) => { state.filtro.q = e.target.value; redibujarConFoco(renderListado); };
   document.getElementById("festado").onchange = (e) => { state.filtro.estado = e.target.value; renderListado(); };
   document.getElementById("fmod").onchange = (e) => { state.filtro.modalidad = e.target.value; renderListado(); };
+  document.getElementById("fmon").onchange = (e) => { state.filtro.moneda = e.target.value; renderListado(); };
+  document.getElementById("ffac").onchange = (e) => { state.filtro.facturacion = e.target.value; renderListado(); };
   document.getElementById("selAll").onclick = (e) => {
     rows.forEach((c) => (e.target.checked ? state.selected.add(c.id) : state.selected.delete(c.id)));
     renderListado();
@@ -266,6 +303,8 @@ function filtrados() {
     if (q && !(`${c.numero} ${c.cliente?.nombreComercial || ""} ${rs}`.toLowerCase().includes(q))) return false;
     if (state.filtro.estado && c.estado !== state.filtro.estado) return false;
     if (state.filtro.modalidad && !c.equipos?.some((e) => e.modalidad === state.filtro.modalidad)) return false;
+    if (state.filtro.moneda && (c.economico?.moneda || "USD") !== state.filtro.moneda) return false;
+    if (state.filtro.facturacion && facturacionDe(c) !== state.filtro.facturacion) return false;
     return true;
   });
 }
@@ -285,7 +324,7 @@ function trContrato(c) {
     })()}</td>
     <td>${NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length}${NEXO_ESQUEMA.equiposActivos(c, hoyISO()).length !== (c.equipos || []).length ? `<span class="muted"> de ${(c.equipos || []).length}</span>` : ""} <span class="muted">(${[...new Set((c.equipos || []).map((e) => e.modalidad))].join("/")})</span>${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length ? `<br><span class="muted" style="font-size:12px">${NEXO_ESQUEMA.equiposPorIngresar(c, hoyISO()).length} por ingresar</span>` : ""}</td>
     <td><span class="badge ${c.estado}">${ESTADO_LABEL[c.estado]}</span></td>
-    <td>${money(canonHoy(c), c.economico?.moneda)}${canonHoy(c) !== (Number(c.economico?.canonMensual) || 0) ? `<br><span class="muted" style="font-size:12px">pleno ${money(c.economico?.canonMensual, c.economico?.moneda)}</span>` : ""}</td>
+    <td>${money(canonHoy(c), c.economico?.moneda)} ${pillCobro(c)}${canonHoy(c) !== (Number(c.economico?.canonMensual) || 0) ? `<br><span class="muted" style="font-size:12px">pleno ${money(c.economico?.canonMensual, c.economico?.moneda)}</span>` : ""}</td>
     <td>${vencTxt}</td>
     <td>${ajTxt}</td></tr>`;
 }
@@ -363,6 +402,7 @@ function renderDetalle(id) {
             <dt>Canon ${(c.economico?.tramos || []).length ? "pleno pactado" : "mensual"}</dt><dd><b>${money(c.economico?.canonMensual, c.economico?.moneda)}</b> ${c.economico?.incluyeIVA ? "(IVA incl.)" : "+ IVA"}</dd>
             ${!c.economico?.incluyeIVA && c.economico?.canonMensual ? `<dt>Total c/ IVA ${c.economico?.ivaPct ?? 21}%</dt><dd>${money(Math.round(Number(c.economico.canonMensual) * (1 + (Number(c.economico?.ivaPct ?? 21) / 100))), c.economico?.moneda)}</dd>` : ""}
             ${renderTramosKV(c)}
+            <dt>Cobro</dt><dd>${pillCobro(c)} ${NEXO_ESQUEMA.FACTURACION_LABEL[facturacionDe(c)]}</dd>
             <dt>Forma de pago</dt><dd>${esc(c.economico?.formaPago || "—")}</dd>
             <dt>Ajuste</dt><dd>${c.ajuste?.periodicidad || "—"} · ${c.ajuste?.indice || ""}</dd>
             <dt>Próximo ajuste</dt><dd>${fmt(pa)}</dd>
@@ -754,6 +794,7 @@ function renderForm(id) {
       <fieldset><legend>Económico y ajuste</legend><div class="form-grid">
         ${inp("Canon mensual", "economico.canonMensual", c.economico.canonMensual, "", "number")}
         ${sel("Moneda", "economico.moneda", c.economico.moneda, [["USD", "USD"], ["ARS", "ARS"]])}
+        ${sel("Facturación <span class=\"hint\">(interno, no se imprime)</span>", "economico.facturacion", c.economico.facturacion || "ConFactura", NEXO_ESQUEMA.FACTURACION_CONTRATO.map((f) => [f, NEXO_ESQUEMA.FACTURACION_LABEL[f]]))}
         ${inp("IVA %", "economico.ivaPct", c.economico.ivaPct ?? 21, "", "number")}
         ${inp("Forma de pago", "economico.formaPago", c.economico.formaPago)}
         ${sel("Periodicidad de ajuste", "ajuste.periodicidad", c.ajuste.periodicidad, [["ninguno", "Ninguno"], ["trimestral", "Trimestral"], ["semestral", "Semestral"], ["anual", "Anual"]])}
@@ -1235,7 +1276,7 @@ function seleccionOTodo() {
 }
 function exportarCSV() {
   const rows = seleccionOTodo();
-  const cols = ["numero", "cliente", "razon_social", "cuit", "programa", "modulos_internos", "estado", "equipos", "modalidad", "bobinas_cupo", "bobinas_alcance", "bobinas_total_anual", "canon", "moneda", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
+  const cols = ["numero", "cliente", "razon_social", "cuit", "programa", "modulos_internos", "estado", "equipos", "modalidad", "bobinas_cupo", "bobinas_alcance", "bobinas_total_anual", "canon", "moneda", "facturacion", "inicio", "vence", "ajuste_periodicidad", "proximo_ajuste"];
   const lines = [cols.join(",")];
   for (const c of rows) {
     const fin = computeFin(c), pa = computeProximoAjuste(c);
@@ -1247,7 +1288,7 @@ function exportarCSV() {
       c.cobertura?.reparacionBobinasPorAnio ?? "",
       c.cobertura?.reparacionBobinasPorAnio && !bobinasIlimitadas(c) ? (c.cobertura?.bobinasAlcance === "porEquipo" ? "por equipo" : "flota") : "",
       bobinasTotal(c) ?? (bobinasIlimitadas(c) ? "sin límite" : ""),
-      c.economico?.canonMensual, c.economico?.moneda, c.vigencia?.inicio || "",
+      c.economico?.canonMensual, c.economico?.moneda, NEXO_ESQUEMA.FACTURACION_LABEL[facturacionDe(c)], c.vigencia?.inicio || "",
       fin ? fin.toISOString().slice(0, 10) : "", c.ajuste?.periodicidad, pa ? pa.toISOString().slice(0, 10) : "",
     ];
     lines.push(vals.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));

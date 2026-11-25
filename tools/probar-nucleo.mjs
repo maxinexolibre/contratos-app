@@ -1164,7 +1164,8 @@ const contratoViejo = (over = {}) => ({
     enviosRepuestosIncluidos: true, reparacionesIncluidas: ["Reparación electrónica"] },
   economico: { canonMensual: 4000, moneda: "USD", incluyeIVA: false, ivaPct: 21,
     formaPago: "Mensual, antes del 5º día hábil",
-    tramos: [{ desde: null, hasta: "2026-02-28", canonMensual: 3300, motivo: "Equipo B en garantía" }] },
+    tramos: [{ desde: null, hasta: "2026-02-28", canonMensual: 3300, motivo: "Equipo B en garantía" }],
+    facturacion: "SinFactura" },
   ajuste: { periodicidad: "trimestral", indice: "IPC", historial: [] },
   vigencia: { inicio: "2026-01-01", meses: 12, fin: "", renovacionAutomatica: true, preavisoDias: 30 },
   fechas: { creado: "2025-12-15", enviado: "2025-12-16", firmado: "2025-12-20" },
@@ -1689,6 +1690,12 @@ prueba("equipos · los movimientos sobreviven al adaptador", () => {
   const clientes = AD.clientesDesde({ data: [viejo] });
   const vuelta = AD.contratoAViejo(AD.contratoANuevo(viejo, { indiceClientes: AD.indiceClientes(clientes) }), { clientes });
   igual(vuelta.equipos, viejo.equipos);
+});
+
+prueba("facturación · por defecto con factura, y un valor raro no se cuela", () => {
+  igual(contratoDePropuesta().economico.facturacion, "ConFactura");
+  igual(contratoDePropuesta({ economico: { canonMensual: 1, facturacion: "SinFactura" } }).economico.facturacion, "SinFactura");
+  igual(contratoDePropuesta({ economico: { canonMensual: 1, facturacion: "otra" } }).economico.facturacion, "ConFactura");
 });
 
 const enviadaV1 = () => propBase({ estado: "Enviada", fechas: { creado: "2026-10-01", enviado: "2026-10-02" } });
