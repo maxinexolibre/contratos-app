@@ -13,6 +13,7 @@ window.NEXO_CONFIG = {
   leadsPath: "data/leads.json",
   facturacionesPath: "data/facturaciones.json",
   tiposCambioPath: "data/tipos-cambio.json",
+  indicesPath: "data/indices.json",
   vendedoresPath: "data/vendedores.json",
   acuerdosComisionPath: "data/acuerdos-comision.json",
   comisionesPath: "data/comisiones.json",

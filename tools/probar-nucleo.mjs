@@ -34,14 +34,14 @@ contexto.window = contexto;
 contexto.globalThis = contexto;
 vm.createContext(contexto);
 
-for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones", "catalogo", "planilla", "clientes"]) {
+for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "indices", "comisiones", "catalogo", "planilla", "clientes"]) {
   vm.runInContext(readFileSync(resolve(RAIZ, `nucleo/${f}.js`), "utf8"), contexto, { filename: f });
 }
 
 const {
   NEXO_ESQUEMA: E, NEXO_PERMISOS: P, NEXO_REGLAS: R, NEXO_KPI: K,
   NEXO_ALMACEN: A, NEXO_ADAPTADOR: AD, NEXO_CAMBIO: C, NEXO_COMISIONES: CM,
-  NEXO_CATALOGO_PARTES: CAT,
+  NEXO_CATALOGO_PARTES: CAT, NEXO_INDICES: IX,
 } = contexto;
 
 // --- mini framework --------------------------------------------------------
@@ -2437,6 +2437,65 @@ prueba("cliente nuevo · un ticket o un presupuesto rechazado no lo hacen client
     presupuestos: [presuBase(), presuBase({ id: "pre_r", numero: "P20250601", ticketId: "tk_v", fecha: "2025-06-01", estado: "Rechazado" })],
   });
   igual(CM.elegibilidad("Presupuesto", presuBase(), c).criterio, "ClienteNuevo");
+});
+
+// ===========================================================================
+// ÍNDICES Y AJUSTE SUGERIDO (variaciones inventadas)
+// ===========================================================================
+
+const SERIE_IX = [["2026-08", 2], ["2026-09", 2], ["2026-10", 2], ["2026-11", 3]]
+  .reduce((s, [mes, v]) => IX.upsert(s, { indice: "IPC_INDEC", mes, variacion: v }), []);
+
+prueba("índices · el acumulado compone los meses, no los suma", () => {
+  const a = IX.acumulado(SERIE_IX, "IPC_INDEC", "2026-08", "2026-10");
+  igual(a.porcentaje, 6.12);
+  igual(a.meses, 3);
+  igual(a.faltan, []);
+});
+
+prueba("índices · un mes faltante deja la sugerencia en null, no en un número corto", () => {
+  const a = IX.acumulado(SERIE_IX, "IPC_INDEC", "2026-07", "2026-09");
+  igual(a.porcentaje, null);
+  igual(a.faltan, ["2026-07"]);
+});
+
+prueba("índices · un 0% cargado cuenta como dato, un mes vacío no", () => {
+  const s = IX.upsert(SERIE_IX, { indice: "IPC_INDEC", mes: "2026-12", variacion: 0 });
+  igual(IX.acumulado(s, "IPC_INDEC", "2026-12", "2026-12").porcentaje, 0);
+  igual(E.ENTIDADES.indices.normalizar({ indice: "IPC_INDEC", mes: "2027-01", variacion: "" }).variacion, null);
+});
+
+prueba("índices · período por defecto: los meses de la periodicidad antes del ajuste", () => {
+  const p = IX.periodoSugerido(SERIE_IX, "IPC_INDEC", "2026-12-01", 3);
+  igual([p.desde, p.hasta, p.corrido], ["2026-09", "2026-11", false]);
+  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3);
+  igual(s.porcentaje, 7.16);
+});
+
+prueba("índices · si el último mes no se publicó, la ventana se corre y avisa", () => {
+  const p = IX.periodoSugerido(SERIE_IX, "IPC_INDEC", "2027-01-01", 3);
+  igual([p.desde, p.hasta, p.ideal, p.corrido], ["2026-09", "2026-11", "2026-12", true]);
+});
+
+prueba("índices · el período elegido a mano manda sobre el de la periodicidad", () => {
+  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, { desde: "2026-11", hasta: "2026-11" });
+  igual([s.porcentaje, s.meses], [3, 1]);
+});
+
+prueba("índices · upsert reemplaza el mes y no mezcla índices", () => {
+  let s = IX.upsert(SERIE_IX, { indice: "IPC_INDEC", mes: "2026-11", variacion: 2.5 });
+  s = IX.upsert(s, { indice: "US_CPI", mes: "2026-11", variacion: 0.3 });
+  igual(s.filter((x) => x.mes === "2026-11").map((x) => [x.indice, x.variacion]), [["IPC_INDEC", 2.5], ["US_CPI", 0.3]]);
+  igual(IX.mesMas("2026-11", 2), "2027-01");
+  igual(IX.mesMas("2027-01", -1), "2026-12");
+});
+
+prueba("índices · la sugerencia sobre un tramo usa lo que se factura", () => {
+  const c = E.ENTIDADES.contratos.normalizar({ economico: { canonMensual: 4800, moneda: "ARS",
+    tramos: [{ hasta: "2026-12-31", canonMensual: 4000, motivo: "equipo en garantía" }] } });
+  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3);
+  const r = E.ajustarCanon(c, "2026-12-01", Math.round(E.canonVigente(c, "2026-12-01") * (1 + s.porcentaje / 100) * 100) / 100);
+  igual([r.anterior, r.nuevo], [4000, 4286.4]);
 });
 
 // ===========================================================================
