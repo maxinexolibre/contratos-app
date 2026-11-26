@@ -972,6 +972,10 @@
           mes,
           // Mes sin dato: null, no 0. Un 0% es "no hubo inflación".
           variacion: r.variacion == null || r.variacion === "" ? null : esNumero(r.variacion),
+          // Nivel del índice (CPI). Con los niveles de las puntas el acumulado
+          // sale exacto aunque falte la variación de algún mes del medio: BLS
+          // no publicó octubre de 2025 y noviembre no tiene contra qué compararse.
+          nivel: r.nivel == null || r.nivel === "" ? null : esNumero(r.nivel),
           fuente: esTexto(r.fuente),
         };
       },

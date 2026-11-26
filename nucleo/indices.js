@@ -34,19 +34,35 @@
       // CPI-U, todos los ítems, sin desestacionalizar. La API pública de BLS
       // da niveles: la variación se calcula contra el mes anterior.
       url: "https://api.bls.gov/publicAPI/v1/timeseries/data/CUUR0000SA0",
-      // Sin parámetros trae los últimos tres años: alcanza para ajustes anuales atrasados.
+      // El GET sin parámetros trae solo los últimos tres años, y un ajuste
+      // anual atrasado necesita más. Primero se pide por POST con el rango de
+      // años (hasta 10 en la v1); si eso falla, el GET.
+      pedir: async (hoy) => {
+        const a = Number((hoy || "").slice(0, 4)) || new Date().getFullYear();
+        try {
+          const r = await fetch("https://api.bls.gov/publicAPI/v1/timeseries/data/", {
+            method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
+            body: JSON.stringify({ seriesid: ["CUUR0000SA0"], startyear: String(a - 9), endyear: String(a) }),
+          });
+          if (r.ok) {
+            const j = await r.json();
+            if (j?.Results?.series?.[0]?.data?.length) return j;
+          }
+        } catch { /* sigue con el GET */ }
+        return null;
+      },
       fuente: "BLS · CPI-U",
       extraer: (j) => {
         const datos = (j?.Results?.series?.[0]?.data || [])
           .filter((d) => /^M(0[1-9]|1[0-2])$/.test(d.period))
           .map((d) => ({ mes: `${d.year}-${d.period.slice(1)}`, nivel: Number(d.value) }))
           .sort((a, b) => a.mes.localeCompare(b.mes));
-        const out = [];
-        for (let i = 1; i < datos.length; i++) {
-          if (mesMas(datos[i - 1].mes, 1) !== datos[i].mes || !(datos[i - 1].nivel > 0)) continue;
-          out.push({ mes: datos[i].mes, variacion: (datos[i].nivel / datos[i - 1].nivel - 1) * 100 });
-        }
-        return out;
+        // Cada mes lleva su nivel; la variación solo si está el mes anterior.
+        return datos.map((d, i) => {
+          const prev = datos[i - 1];
+          const ok = prev && mesMas(prev.mes, 1) === d.mes && prev.nivel > 0;
+          return { mes: d.mes, nivel: d.nivel, variacion: ok ? (d.nivel / prev.nivel - 1) * 100 : null };
+        });
       },
     },
   };
@@ -77,18 +93,32 @@
       .map((x) => x.mes).sort().pop() || null;
   }
 
+  function nivelDe(serie, indice, mes) {
+    const r = (serie || []).find((x) => x.indice === indice && x.mes === mes);
+    return r && r.nivel > 0 ? r.nivel : null;
+  }
+
   /**
    * Variación acumulada de un índice entre dos meses, inclusive.
-   * Si falta algún mes no hay número: un acumulado con huecos subestima el
-   * ajuste sin que se note.
+   *
+   * Si están los niveles del mes anterior al período y del último, sale de
+   * su cociente: es como publica BLS la variación interanual y no depende
+   * de que estén todos los meses del medio. Si no, se componen las
+   * variaciones mensuales, y si falta alguna no hay número: un acumulado con
+   * huecos subestima el ajuste sin que se note.
    */
   function acumulado(serie, indice, desde, hasta) {
     const meses = rangoMeses(desde, hasta);
     const detalle = meses.map((mes) => ({ mes, variacion: valor(serie, indice, mes)?.variacion ?? null }));
-    const faltan = detalle.filter((d) => d.variacion == null).map((d) => d.mes);
-    const pct = faltan.length || !meses.length ? null
+    const n0 = meses.length ? nivelDe(serie, indice, mesMas(desde, -1)) : null;
+    const n1 = meses.length ? nivelDe(serie, indice, hasta) : null;
+    const porNivel = !!(n0 && n1);
+    const faltanMeses = detalle.filter((d) => d.variacion == null).map((d) => d.mes);
+    const faltan = porNivel ? [] : faltanMeses;
+    const pct = porNivel ? (n1 / n0 - 1) * 100
+      : faltan.length || !meses.length ? null
       : (detalle.reduce((f, d) => f * (1 + d.variacion / 100), 1) - 1) * 100;
-    return { indice, desde, hasta, meses: meses.length, detalle, faltan,
+    return { indice, desde, hasta, meses: meses.length, detalle, faltan, porNivel,
       porcentaje: pct == null ? null : Math.round(pct * 100) / 100 };
   }
 
@@ -168,19 +198,29 @@
     const def = INDICES[indice];
     if (!def?.url) return { indice, ok: false, error: `Sin fuente definida para ${indice}` };
     try {
-      const r = await fetch(def.url, { cache: "no-store" });
-      if (!r.ok) return { indice, ok: false, error: `HTTP ${r.status}` };
-      const filas = def.extraer(await r.json())
-        .filter((x) => /^\d{4}-\d{2}$/.test(x.mes) && Number.isFinite(x.variacion));
+      let j = def.pedir ? await def.pedir(E.hoy()) : null;
+      if (!j) {
+        const r = await fetch(def.url, { cache: "no-store" });
+        if (!r.ok) return { indice, ok: false, error: `HTTP ${r.status}` };
+        j = await r.json();
+      }
+      const filas = def.extraer(j)
+        .filter((x) => /^\d{4}-\d{2}$/.test(x.mes) && (Number.isFinite(x.variacion) || x.nivel > 0));
       if (!filas.length) return { indice, ok: false, error: "La fuente no devolvió datos" };
       let nueva = serie || [];
       const nuevos = [], cambiados = [];
       for (const f of filas) {
-        const v = Math.round(f.variacion * 1000) / 1000;
-        const previo = valor(nueva, indice, f.mes);
-        if (previo && Math.abs(previo.variacion - v) < 0.0005) continue;
+        const v = Number.isFinite(f.variacion) ? Math.round(f.variacion * 1000) / 1000 : null;
+        const nivel = f.nivel > 0 ? f.nivel : null;
+        const previo = (nueva || []).find((x) => x.indice === indice && x.mes === f.mes);
+        // No se pisa una variación cargada con un null: la fuente puede no
+        // traer el mes anterior y el dato a mano sigue valiendo.
+        const variacion = v ?? previo?.variacion ?? null;
+        const nivelFinal = nivel ?? previo?.nivel ?? null;
+        if (previo && (previo.variacion == null ? variacion == null : variacion != null && Math.abs(previo.variacion - variacion) < 0.0005)
+          && previo.nivel === nivelFinal) continue;
         (previo ? cambiados : nuevos).push(f.mes);
-        nueva = upsert(nueva, { indice, mes: f.mes, variacion: v, fuente: def.fuente });
+        nueva = upsert(nueva, { indice, mes: f.mes, variacion, nivel: nivelFinal, fuente: def.fuente });
       }
       return { indice, ok: true, serie: nueva, nuevos, cambiados };
     } catch (e) {
@@ -189,6 +229,6 @@
   }
 
   global.NEXO_INDICES = {
-    DIA_PUBLICACION, INDICES, mesMas, rangoMeses, ultimoMes, ultimoPublicado, acumulado, periodoSugerido, sugerirAjuste, sugerirPendientes, upsert, traer,
+    DIA_PUBLICACION, INDICES, mesMas, rangoMeses, ultimoMes, ultimoPublicado, nivelDe, acumulado, periodoSugerido, sugerirAjuste, sugerirPendientes, upsert, traer,
   };
 })(typeof window !== "undefined" ? window : globalThis);

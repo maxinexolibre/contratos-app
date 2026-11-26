@@ -101,7 +101,9 @@ presupuesto o reemplazar por un texto propio.
   diciembre calculado en noviembre usa ago–oct. Con varios ajustes atrasados
   muestra el % de cada período y el total compuesto, y los registra todos. La serie (`data/indices.json`)
   guarda la **variación mensual** por índice y mes; el acumulado se compone, no
-  se suma, y un mes faltante deja la sugerencia en `null`. Se trae de
+  se suma, y un mes faltante deja la sugerencia en `null`. Si están los
+  `nivel` de las puntas (CPI), el acumulado sale de su cociente y no necesita
+  los meses del medio (BLS no publicó oct-2025). Se trae de
   datos.gob.ar (IPC) o BLS (CPI) o se carga a mano. Si se usa el sugerido, el
   historial guarda `indiceAplicado`.
   "Avisar al cliente" arma el correo del ajuste (no lo manda: se copia o se
