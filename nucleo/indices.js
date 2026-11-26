@@ -125,7 +125,7 @@
     const publicado = ultimoPublicado(serie, indice, hoy);
     const hasta = ideal <= publicado ? ideal : publicado;
     const n = Math.max(1, Number(meses) || 1);
-    return { desde: mesMas(hasta, -(n - 1)), hasta, ideal, corrido: hasta !== ideal };
+    return { desde: mesMas(hasta, -(n - 1)), hasta };
   }
 
   /** Sugerencia para un ajuste. `periodo` explícito manda sobre el calculado. */
@@ -144,6 +144,22 @@
    */
   function sugerirPendientes(serie, indice, fechas, meses, hoy) {
     const periodos = (fechas || []).map((f) => sugerirAjuste(serie, indice, f, meses, null, hoy));
+    const completos = periodos.length && periodos.every((p) => p.porcentaje != null);
+    const total = completos
+      // Se compone con el % redondeado de cada período, que es el que se
+      // registra: así el total que se muestra es el que termina en el canon.
+      ? Math.round((periodos.reduce((f, p) => f * (1 + p.porcentaje / 100), 1) - 1) * 10000) / 100 : null;
+    return { periodos, total, faltan: [...new Set(periodos.flatMap((p) => p.faltan))].sort() };
+  }
+
+  /**
+   * Varios ajustes atrasados (p. ej. tres anuales sin aplicar): el % de cada
+   * período por separado y el total compuesto, que es lo que termina subiendo
+   * el canon si se aplican todos. Si falta un mes en cualquier período, el
+   * total queda en null.
+   */
+  function sugerirPendientes(serie, indice, fechas, meses, rezago = REZAGO) {
+    const periodos = (fechas || []).map((f) => sugerirAjuste(serie, indice, f, meses, null, rezago));
     const completos = periodos.length && periodos.every((p) => p.porcentaje != null);
     const total = completos
       // Se compone con el % redondeado de cada período, que es el que se

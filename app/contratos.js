@@ -496,7 +496,7 @@ function bloqueSugerencia(c, fecha) {
   if (!IX()) return "";
   const indice = indiceDe(c);
   const meses = AJUSTE_STEP[c.ajuste?.periodicidad] || 1;
-  const p = IX().periodoSugerido(state.indices, indice, fecha, meses);
+  const p = IX().periodoSugerido(fecha, meses);
   const opts = Object.entries(IX().INDICES).map(([k, d]) => `<option value="${k}"${k === indice ? " selected" : ""}>${esc(d.etiqueta)}</option>`).join("");
   return `<div class="aj-sug">
     <div class="aj-row">
@@ -579,8 +579,7 @@ function periodoPorDefecto(id) {
   const c = state.data.find((x) => x.id === id);
   const d = document.getElementById("ajDesde"), h = document.getElementById("ajHasta");
   if (!d || !h || !IX()) return;
-  const p = IX().periodoSugerido(state.indices, document.getElementById("ajIdx").value,
-    document.getElementById("ajFecha")?.value || hoyISO(), AJUSTE_STEP[c.ajuste?.periodicidad] || 1);
+  const p = IX().periodoSugerido(document.getElementById("ajFecha")?.value || hoyISO(), AJUSTE_STEP[c.ajuste?.periodicidad] || 1);
   d.value = p.desde; h.value = p.hasta;
   calcSugerencia(id);
 }
