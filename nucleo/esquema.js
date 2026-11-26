@@ -388,6 +388,17 @@
     return { ok: true, economico, historial, deshecho: h };
   }
 
+  /**
+   * Canon total cuando el precio se carga por equipo: la suma de los equipos
+   * que tienen canon propio. null si ninguno lo tiene (el canon se cargó como
+   * total, como era antes). Se cotiza por equipo: una propuesta de seis
+   * equipos con "2900" quería decir 2900 cada uno, no 2900 por los seis.
+   */
+  function canonPorEquipos(equipos) {
+    const con = esLista(equipos).filter((e) => Number(e?.canonMensual) > 0);
+    return con.length ? money(con.reduce((t, e) => t + Number(e.canonMensual), 0)) : null;
+  }
+
   /** Equipos con servicio vigente en una fecha. */
   function equiposActivos(registro, f = hoy()) {
     return esLista(registro?.equipos).filter((e) => equipoCubierto(e, f));
@@ -1326,7 +1337,7 @@
     CATALOGO_AUDITORIA,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
-    normalizarTramos, tramoVigente, canonVigente, ajustarCanon, ajusteDeshacible, deshacerAjuste, equipoCubierto, equiposPorIngresar,
+    normalizarTramos, tramoVigente, canonVigente, canonPorEquipos, ajustarCanon, ajusteDeshacible, deshacerAjuste, equipoCubierto, equiposPorIngresar,
     EVENTO_EQUIPO, EVENTO_EQUIPO_LABEL, normalizarEventosEquipo, estadoEquipo, motivoNoEvento,
     diasEnPausa, equiposActivos, FACTURACION_CONTRATO, FACTURACION_LABEL,
     normalizarVersion,
