@@ -454,12 +454,12 @@ function renderAjustes(c) {
 
     ${ro ? "" : `<div class="aj-form">
       <div class="aj-row">
-        <label>Fecha<input type="date" id="ajFecha" value="${(pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)}"></label>
+        <label>Fecha<input type="date" id="ajFecha" value="${(pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)}" onchange="calcAjuste('${c.id}')"></label>
         <label>%<input type="number" step="0.01" id="ajPct" placeholder="0.00" oninput="calcAjuste('${c.id}')"></label>
-        <label>Canon nuevo<input type="number" step="0.01" id="ajCanon" placeholder="${canon}" oninput="calcAjustePct('${c.id}')"></label>
+        <label>${(c.economico?.tramos || []).length ? "Se factura desde la fecha" : "Canon nuevo"}<input type="number" step="0.01" id="ajCanon" placeholder="${NEXO_ESQUEMA.canonVigente(c, (pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10))}" oninput="calcAjustePct('${c.id}')"></label>
       </div>
       <button class="btn primary sm" onclick="registrarAjuste('${c.id}')">Registrar ajuste</button>
-      <span class="muted" style="font-size:12px" id="ajHint">Canon actual: ${money(canon, m)}</span>
+      <span class="muted" style="font-size:12px" id="ajHint">Se factura: ${money(NEXO_ESQUEMA.canonVigente(c, (pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)), m)}${(c.economico?.tramos || []).length ? ` · pleno ${money(canon, m)}` : ""}</span>
     </div>`}
 
     ${hist.length ? `<table class="aj-hist">
@@ -474,17 +474,20 @@ function renderAjustes(c) {
   </div>`;
 }
 // Los dos campos se completan entre sí: cargás el % y sale el canon, o al revés.
+// La base es lo que se factura en la fecha del ajuste: con un tramo reducido
+// vigente, es el tramo y no el canon pleno.
+const baseAjuste = (c) => NEXO_ESQUEMA.canonVigente(c, document.getElementById("ajFecha")?.value || hoyISO());
 function calcAjuste(id) {
   const c = state.data.find((x) => x.id === id);
-  const base = Number(c.economico?.canonMensual) || 0;
+  const base = baseAjuste(c);
   const pct = parseFloat(document.getElementById("ajPct").value);
-  if (isNaN(pct)) return;
+  if (isNaN(pct)) { hintAjuste(c, base); return; }
   document.getElementById("ajCanon").value = Math.round(base * (1 + pct / 100) * 100) / 100;
   hintAjuste(c, base);
 }
 function calcAjustePct(id) {
   const c = state.data.find((x) => x.id === id);
-  const base = Number(c.economico?.canonMensual) || 0;
+  const base = baseAjuste(c);
   const nuevo = parseFloat(document.getElementById("ajCanon").value);
   if (isNaN(nuevo) || !base) return;
   document.getElementById("ajPct").value = Math.round((nuevo / base - 1) * 10000) / 100;
@@ -494,9 +497,15 @@ function hintAjuste(c, base) {
   const nuevo = parseFloat(document.getElementById("ajCanon").value);
   const el = document.getElementById("ajHint");
   if (!el) return;
-  el.textContent = isNaN(nuevo)
-    ? `Canon actual: ${money(base, c.economico?.moneda)}`
-    : `${money(base, c.economico?.moneda)} → ${money(nuevo, c.economico?.moneda)} · ${money(Math.round((nuevo - base) * 12), c.economico?.moneda)}/año de diferencia`;
+  const m = c.economico?.moneda;
+  const f = document.getElementById("ajFecha")?.value || hoyISO();
+  if (isNaN(nuevo)) {
+    el.textContent = `Se factura: ${money(base, m)}${NEXO_ESQUEMA.tramoVigente(c, f) ? ` (tramo) · pleno ${money(c.economico?.canonMensual, m)}` : ""}`;
+    return;
+  }
+  const r = NEXO_ESQUEMA.ajustarCanon(c, f, nuevo);
+  el.textContent = `${money(base, m)} → ${money(nuevo, m)} · ${money(Math.round((nuevo - base) * 12), m)}/año de diferencia`
+    + (r.enTramo ? ` · el pleno pasa de ${money(r.plenoAnterior, m)} a ${money(r.plenoNuevo, m)}` : "");
 }
 async function registrarAjuste(id) {
   const c = state.data.find((x) => x.id === id);
@@ -505,23 +514,20 @@ async function registrarAjuste(id) {
   const nuevo = Number(document.getElementById("ajCanon").value);
   if (!fecha) { toast("Falta la fecha del ajuste", true, true); return; }
   if (!nuevo || nuevo <= 0) { toast("Falta el canon nuevo", true, true); return; }
-  const anterior = Number(c.economico?.canonMensual) || 0;
+  // Lo que se factura en la fecha (el tramo, si rige uno) es la base. El
+  // pleno y los tramos que siguen corriendo suben en la misma proporción.
+  const r = NEXO_ESQUEMA.ajustarCanon(c, fecha, nuevo);
+  const anterior = r.anterior;
+  const m = c.economico?.moneda;
   c.ajuste.historial = c.ajuste.historial || [];
   c.ajuste.historial.push({
     fecha, porcentaje: pct === "" ? null : Number(pct),
     canonAnterior: anterior, canonNuevo: nuevo,
     usuario: state.user || "—",
+    ...(r.enTramo ? { nota: `sobre el tramo vigente; el pleno pasa de ${money(r.plenoAnterior, m)} a ${money(r.plenoNuevo, m)}` }
+      : (c.economico.tramos || []).length ? { nota: "también se ajustaron los tramos en curso" } : {}),
   });
-  c.economico.canonMensual = nuevo;
-  // Un tramo reducido que sigue corriendo es parte del mismo canon: si el
-  // pleno sube un 8%, lo que se factura mientras dura el tramo también.
-  // Sin esto, el ajuste no llegaba a lo que efectivamente se cobra.
-  if (anterior > 0 && (c.economico.tramos || []).length) {
-    const f = nuevo / anterior;
-    c.economico.tramos = c.economico.tramos.map((t) => (!t.hasta || t.hasta >= fecha)
-      ? { ...t, canonMensual: Math.round(Number(t.canonMensual) * f * 100) / 100 } : t);
-    c.ajuste.historial[c.ajuste.historial.length - 1].nota = "también se ajustaron los tramos en curso";
-  }
+  c.economico = r.economico;
   try {
     await persist(`Ajuste ${c.numero} · ${money(anterior)} → ${money(nuevo)}`);
     toast(`Ajuste registrado · canon ${money(nuevo)}`);
