@@ -238,6 +238,7 @@ function construirContrato(c, opts = {}) {
           ["Ubicación", V(e.ubicacion, "ubicación")],
           ["Incorporación", e.ingreso && diferidos.includes(e) ? `a partir del ${fmt(e.ingreso)}` : null],
           ["Garantía hasta", e.garantiaHasta ? fmt(e.garantiaHasta) : null],
+          ["Canon mensual", Number(e.canonMensual) > 0 ? `${money(e.canonMensual, eco.moneda)}${eco.incluyeIVA ? " (IVA incl.)" : " + IVA"}` : null],
         ].filter(([, v]) => v !== null && v !== undefined && v !== "");
         const fs = [];
         for (let k = 0; k < cps.length; k += 2) {

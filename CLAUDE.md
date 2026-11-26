@@ -86,6 +86,12 @@ presupuesto o reemplazar por un texto propio.
   marcan un equipo que figura pero se incorpora más adelante (p. ej. al vencer
   la garantía). Lo que se factura hoy es `canonVigente()` (esquema.js): el MRR
   lo usa, no `canonMensual`. Un ajuste de canon también ajusta los tramos en curso.
+- **Canon por equipo.** Se cotiza por equipo: `equipos[].canonMensual`. Si
+  algún equipo lo tiene, el canon total (`economico.canonMensual`) es la suma
+  (`canonPorEquipos()`) y el campo total queda de solo lectura; si ninguno lo
+  tiene, el total se carga a mano como antes. La propuesta muestra el canon de
+  cada equipo en la tabla y el contrato en cada ficha. Dar de baja un equipo
+  con canon propone el total sin ese equipo.
 - **Bajas, pausas y reanudaciones de equipos** sin reescribir el contrato:
   `equipos[].eventos` (`{fecha, tipo, motivo, canonAntes, canonDespues}`). El
   estado del equipo no se guarda, lo calcula `estadoEquipo()`; los eventos van

@@ -522,10 +522,10 @@ async function armarPropuestaDocx(D, m) {
   m.intro.parrafos.forEach((t) => kids.push(P(t)));
   if (m.equipos.length) {
     kids.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: conBorde, rows: [
-      new TableRow({ tableHeader: true, children: ["#", "Equipo", "Modalidad", "Ubicación"].map((h, i) =>
-        celda([P(h, { bold: true, color: OSCURO, after: 0, align: AlignmentType.LEFT })], [6, 50, 18, 26][i], { bg: DC.crema, pad: 60 })) }),
-      ...m.equipos.map((e) => new TableRow({ children: [String(e.n), e.equipo, e.modalidad, e.ubicacion || "—"].map((v, i) =>
-        celda([P(v, { after: 0, align: AlignmentType.LEFT })], [6, 50, 18, 26][i], { pad: 60 })) })),
+      new TableRow({ tableHeader: true, children: ["#", "Equipo", "Modalidad", "Ubicación", ...(m.porEquipo ? ["Canon mensual"] : [])].map((h, i) =>
+        celda([P(h, { bold: true, color: OSCURO, after: 0, align: AlignmentType.LEFT })], (m.porEquipo ? [6, 36, 14, 22, 22] : [6, 50, 18, 26])[i], { bg: DC.crema, pad: 60 })) }),
+      ...m.equipos.map((e) => new TableRow({ children: [String(e.n), e.equipo, e.modalidad, e.ubicacion || "—", ...(m.porEquipo ? [e.canon || "—"] : [])].map((v, i) =>
+        celda([P(v, { after: 0, align: AlignmentType.LEFT })], (m.porEquipo ? [6, 36, 14, 22, 22] : [6, 50, 18, 26])[i], { pad: 60 })) })),
     ] }));
   }
 

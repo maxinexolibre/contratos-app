@@ -142,6 +142,7 @@ function construirPropuesta(p, cli = {}) {
   // o menor que el canon anula el argumento de la condición especial.
   const conReferencia = ref && canon && ref > canon;
 
+  const porEquipo = NEXO_ESQUEMA.canonPorEquipos(equipos) != null;
   const meses = Number(p.vigenciaPropuesta?.meses) || 12;
   const fmtISO = (f) => fmt(new Date(f + "T12:00:00"));
   const condiciones = [
@@ -166,7 +167,10 @@ function construirPropuesta(p, cli = {}) {
     fecha: fmt(new Date((p.fechas?.creado || new Date().toISOString().slice(0, 10)) + "T12:00:00")),
     titulo, cliente, CLI,
     plan: p.plan?.id ? esc(p.plan.etiquetaPublica || CAT.PLANES[p.plan.id]?.etiquetaPublica || "") : "",
-    equipos: equipos.length > 1 ? equipos.map((e, i) => ({ n: i + 1, equipo: esc(nombreEquipo(e)), modalidad: esc(e.modalidad || ""), ubicacion: esc(e.ubicacion || "") })) : [],
+    // Con canon por equipo la tabla va aunque sea uno solo: es donde se ve el precio.
+    equipos: equipos.length > 1 || porEquipo ? equipos.map((e, i) => ({ n: i + 1, equipo: esc(nombreEquipo(e)), modalidad: esc(e.modalidad || ""), ubicacion: esc(e.ubicacion || ""),
+      canon: Number(e.canonMensual) > 0 ? `${eco.moneda === "UF" ? "UF" : eco.moneda === "ARS" ? "ARS" : "USD"} $${Number(e.canonMensual).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${eco.incluyeIVA ? " IVA incl." : " + IVA"}` : "" })) : [],
+    porEquipo,
     intro,
     alcanceIntro: "El alcance del programa está diseñado alrededor de un principio simple: cada intervención debe reducir el riesgo de interrupción y extender la vida útil del equipo, en lugar de limitarse a resolver la falla del momento.",
     alcance, opcionales: textoOpcionales,
@@ -252,8 +256,8 @@ function renderPropuestaHTML(m) {
       <p class="pp-sub" style="font-size:11px">${m.numero ? `Propuesta ${m.numero} · ` : ""}${m.fecha}</p>`,
       `<p class="pp-dest">${m.intro.destacado}</p>
       ${m.intro.parrafos.map((t) => `<p>${t}</p>`).join("")}
-      ${m.equipos.length ? `<table class="pp-eq"><thead><tr><th>#</th><th>Equipo</th><th>Modalidad</th><th>Ubicación</th></tr></thead>
-        <tbody>${m.equipos.map((e) => `<tr><td>${e.n}</td><td>${e.equipo}</td><td>${e.modalidad}</td><td>${e.ubicacion || "—"}</td></tr>`).join("")}</tbody></table>` : ""}`,
+      ${m.equipos.length ? `<table class="pp-eq"><thead><tr><th>#</th><th>Equipo</th><th>Modalidad</th><th>Ubicación</th>${m.porEquipo ? "<th>Canon mensual</th>" : ""}</tr></thead>
+        <tbody>${m.equipos.map((e) => `<tr><td>${e.n}</td><td>${e.equipo}</td><td>${e.modalidad}</td><td>${e.ubicacion || "—"}</td>${m.porEquipo ? `<td>${e.canon || "—"}</td>` : ""}</tr>`).join("")}</tbody></table>` : ""}`,
       { portada: true })}
 
     ${hoja("Alcance del Programa", `<p>${m.alcanceIntro}</p>

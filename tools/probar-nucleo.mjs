@@ -2453,6 +2453,19 @@ function aplicarAjuste(c, fecha, nuevo, conFoto) {
   return { ...c, economico: r.economico, ajuste: { ...c.ajuste, historial: [...(c.ajuste?.historial || []), h] } };
 }
 
+prueba("canon por equipo · el total es la suma; sin precios por equipo, null", () => {
+  igual(E.canonPorEquipos([{ canonMensual: 2900 }, { canonMensual: "2900" }, { canonMensual: null }, {}]), 5800);
+  igual(E.canonPorEquipos([{ marca: "GE" }, { canonMensual: 0 }]), null, "sin precios por equipo el total sigue siendo el cargado");
+  igual(E.canonPorEquipos([]), null);
+});
+
+prueba("canon por equipo · viaja por el adaptador en las dos direcciones", () => {
+  const viejo = { ...contratoViejo(), equipos: [{ marca: "GE", modelo: "A", modalidad: "MRI", canonMensual: 2900 }] };
+  const ida = AD.contratoANuevo(viejo, {});
+  igual(ida.equipos[0].canonMensual, 2900);
+  igual(AD.contratoAViejo(ida, {}).equipos[0].canonMensual, 2900);
+});
+
 prueba("deshacer ajuste · con foto vuelve exacto, tramo y pleno", () => {
   const c = aplicarAjuste(contratoTramo(), "2026-12-01", 4286.4, true);
   const r = E.deshacerAjuste(c);

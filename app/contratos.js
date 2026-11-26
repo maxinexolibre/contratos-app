@@ -939,7 +939,7 @@ function renderForm(id) {
       </fieldset>
 
       <fieldset><legend>Equipos</legend>
-        <div class="equipos-list" id="equipos">${(c.equipos || []).map((e, i) => eqRow(e, i)).join("")}</div>
+        <div class="equipos-list" id="equipos" data-total='[data-path="economico.canonMensual"]'>${(c.equipos || []).map((e, i) => eqRow(e, i)).join("")}</div>
         <button type="button" class="btn sm" onclick="addEquipo()">+ Equipo</button>
       </fieldset>
 
@@ -966,7 +966,7 @@ function renderForm(id) {
       </fieldset>
 
       <fieldset><legend>Económico y ajuste</legend><div class="form-grid">
-        ${inp("Canon mensual", "economico.canonMensual", c.economico.canonMensual, "", "number")}
+        ${inp("Canon mensual", "economico.canonMensual", c.economico.canonMensual, "", "number").replace("</div>", `<span class="hint" id="equiposSuma"></span></div>`)}
         ${sel("Moneda", "economico.moneda", c.economico.moneda, [["USD", "USD"], ["ARS", "ARS"]])}
         ${sel("Facturación <span class=\"hint\">(interno, no se imprime)</span>", "economico.facturacion", c.economico.facturacion || "ConFactura", NEXO_ESQUEMA.FACTURACION_CONTRATO.map((f) => [f, NEXO_ESQUEMA.FACTURACION_LABEL[f]]))}
         ${inp("IVA %", "economico.ivaPct", c.economico.ivaPct ?? 21, "", "number")}
@@ -1013,11 +1013,47 @@ function eqRow(e = {}, i) {
     <input placeholder="Modelo" data-eq="modelo" value="${esc(e.modelo || "")}">
     <select data-eq="modalidad"><option ${e.modalidad === "MRI" ? "selected" : ""}>MRI</option><option ${e.modalidad === "CT" ? "selected" : ""}>CT</option></select>
     <input placeholder="Ubicación / sede" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+    ${campoCanonEquipo(e)}
     ${camposIngreso(e)}
     ${(e.eventos || []).length
       ? `<button type="button" class="btn sm" disabled title="Tiene movimientos registrados: para sacarlo, dalo de baja desde la ficha y queda la trazabilidad">🔒</button>`
-      : `<button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>`}
+      : `<button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="quitarEquipo(this)">✕</button>`}
   </div>`;
+}
+/**
+ * Canon por equipo. Se cotiza por equipo: con el precio en cada uno, el canon
+ * total del contrato o la propuesta es la suma y deja de cargarse a mano. Si
+ * ninguno lo tiene, el total sigue siendo editable (registros de antes).
+ * Lo comparte el formulario de propuestas.
+ */
+function campoCanonEquipo(e = {}) {
+  return `<label class="eq-fecha" title="Canon mensual de este equipo. El total es la suma.">Canon/mes
+      <input type="number" min="0" step="any" data-eq="canonMensual" value="${Number(e.canonMensual) > 0 ? e.canonMensual : ""}" oninput="sumarCanonEquipos(this)"></label>`;
+}
+function quitarEquipo(btn) {
+  const lista = btn.closest(".equipos-list");
+  btn.parentElement.remove();
+  sumarCanonEquipos(lista);
+}
+// La lista dice en `data-total` cuál es el campo del canon total.
+function sumarCanonEquipos(el) {
+  const lista = el?.classList?.contains("equipos-list") ? el : el?.closest?.(".equipos-list");
+  const total = lista && document.querySelector(lista.dataset.total);
+  if (!total) return;
+  const equipos = [...lista.querySelectorAll('[data-eq="canonMensual"]')].map((i) => ({ canonMensual: i.value }));
+  const suma = NEXO_ESQUEMA.canonPorEquipos(equipos);
+  const n = equipos.filter((e) => Number(e.canonMensual) > 0).length;
+  const hint = document.getElementById(lista.id + "Suma");
+  if (suma != null) {
+    total.value = suma;
+    total.readOnly = true;
+    const sin = equipos.length - n;
+    if (hint) hint.textContent = `Suma del canon de ${n} equipo${n > 1 ? "s" : ""}. Se edita en cada equipo.`
+      + (sin ? ` Ojo: ${sin} equipo${sin > 1 ? "s" : ""} sin canon no suma${sin > 1 ? "n" : ""}.` : "");
+  } else {
+    total.readOnly = false;
+    if (hint) hint.textContent = "";
+  }
 }
 /**
  * Fechas de un equipo que no entra al contrato desde el primer día. Las
@@ -1108,7 +1144,7 @@ function movimientoEquipo(id, i, tipo) {
     <p class="muted" style="margin:0 0 12px">${esc(e.ubicacion || "")}</p>
     <div class="form-grid">
       <div class="field"><label>Fecha</label><input type="date" id="meFecha" value="${hoyISO()}"></div>
-      ${tipo !== "Reanudacion" ? `<div class="field"><label>Canon ${tipo === "Pausa" ? "durante la pausa" : "nuevo"}</label><input type="number" min="0" step="any" id="meCanon" placeholder="sin cambio"></div>` : ""}
+      ${tipo !== "Reanudacion" ? `<div class="field"><label>Canon ${tipo === "Pausa" ? "durante la pausa" : "nuevo"}</label><input type="number" min="0" step="any" id="meCanon" placeholder="sin cambio" value="${tipo === "Baja" && Number(e.canonMensual) > 0 ? Math.max(0, canon - Number(e.canonMensual)) : ""}"></div>` : ""}
     </div>
     <p class="hint" style="margin:4px 0 10px;font-size:12px">${ayudaCanon}</p>
     <div class="field full"><label>Motivo</label><input id="meMotivo" list="meMotivos" placeholder="Por qué"><datalist id="meMotivos">${MOTIVOS_EQUIPO[tipo].map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div>
@@ -1294,8 +1330,14 @@ async function guardarForm(isNew) {
   c.equipos = [...document.querySelectorAll("#equipos .eq-row")].map((row, i) => {
     const o = { ...(eqPrev[Number(row.dataset.i)] || {}) };
     row.querySelectorAll("[data-eq]").forEach((f) => (o[f.dataset.eq] = f.value));
+    o.canonMensual = Number(o.canonMensual) > 0 ? Number(o.canonMensual) : null;
     return o;
   });
+  // Con canon por equipo, el total es la suma: no se confía en el campo.
+  {
+    const suma = NEXO_ESQUEMA.canonPorEquipos(c.equipos);
+    if (suma != null) c.economico.canonMensual = suma;
+  }
   c.economico.tramos = leerTramos("tramos");
   {
     const t = tramosIncoherentes(c.economico.tramos);

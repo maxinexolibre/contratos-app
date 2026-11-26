@@ -498,8 +498,9 @@
               `<option value="${x}"${d.pais === x ? " selected" : ""}>${esc(E.PAIS_NOMBRE[x])}</option>`).join("")}</select></div>
         </div>
         <div class="form-grid">
-          <div class="field"><label for="pfCanon">Canon mensual propuesto</label>
-            <input type="number" id="pfCanon" min="0" step="50" value="${d.economico.canonMensual || ""}" /></div>
+          <div class="field"><label for="pfCanon">Canon mensual propuesto (total)</label>
+            <input type="number" id="pfCanon" min="0" step="50" value="${d.economico.canonMensual || ""}" />
+            <span class="hint" id="pfEquiposSuma">Si cargás el canon en cada equipo, acá va la suma.</span></div>
           <div class="field"><label for="pfMoneda">Moneda</label>
             <select id="pfMoneda">${["USD", "ARS", "UF"].map((x) =>
               `<option value="${x}"${d.economico.moneda === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>
@@ -540,7 +541,7 @@
         ${bloqueAlcance(d.cobertura || {})}
 
         <h3 style="margin-top:8px">Equipos alcanzados</h3>
-        <div class="equipos-list" id="pfEquipos">${(d.equipos || []).map(filaEquipo).join("")}</div>
+        <div class="equipos-list" id="pfEquipos" data-total="#pfCanon">${(d.equipos || []).map(filaEquipo).join("")}</div>
         <button type="button" class="btn sm" onclick="document.getElementById('pfEquipos').insertAdjacentHTML('beforeend', filaEquipoProp())">+ Equipo</button>
 
         <div class="field" style="margin-top:14px"><label for="pfNotas">Notas</label>
@@ -557,6 +558,7 @@
     // Elegir un plan precarga su alcance; después se ajusta a mano.
     const sp = document.getElementById("pfPlan");
     if (sp) sp.onchange = () => sp.value && alcanceDesdePlan();
+    if (global.sumarCanonEquipos) global.sumarCanonEquipos(document.getElementById("pfEquipos"));
   }
 
   function filaEquipo(e = {}) {
@@ -566,8 +568,9 @@
       <select data-eq="modalidad">${["MRI", "CT"].map((m) =>
         `<option${e.modalidad === m ? " selected" : ""}>${m}</option>`).join("")}</select>
       <input placeholder="Ubicación / sede" data-eq="ubicacion" value="${esc(e.ubicacion || "")}">
+      ${global.campoCanonEquipo ? global.campoCanonEquipo(e) : ""}
       ${global.camposIngreso ? global.camposIngreso(e) : ""}
-      <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="this.parentElement.remove()">✕</button>
+      <button type="button" class="btn sm danger" aria-label="Quitar" title="Quitar" onclick="quitarEquipo(this)">✕</button>
     </div>`;
   }
 
@@ -604,8 +607,11 @@
     const equipos = [...document.querySelectorAll("#pfEquipos .eq-row")].map((row) => {
       const o = {};
       row.querySelectorAll("[data-eq]").forEach((f) => (o[f.dataset.eq] = f.value.trim()));
+      o.canonMensual = Number(o.canonMensual) > 0 ? Number(o.canonMensual) : null;
       return o;
     }).filter((e) => e.marca || e.modelo || e.ubicacion);
+    // Con canon por equipo, el total es la suma de los equipos.
+    const sumaEquipos = E.canonPorEquipos(equipos);
     const tramos = global.leerTramos ? global.leerTramos("pfTramos") : (anterior?.economico?.tramos || []);
     const errTramo = global.tramosIncoherentes ? global.tramosIncoherentes(tramos) : "";
     if (errTramo) { global.toast(errTramo, true, true); return; }
@@ -618,7 +624,7 @@
       pais: val("pfPais"),
       economico: {
         ...(anterior?.economico || {}),
-        canonMensual: val("pfCanon"), moneda: val("pfMoneda"),
+        canonMensual: sumaEquipos ?? val("pfCanon"), moneda: val("pfMoneda"),
         formaPago: val("pfFormaPago"), incluyeIVA: document.getElementById("pfIVA").checked,
         valorReferencia: val("pfReferencia") || null, ajuste: val("pfAjuste"),
         tramos,
