@@ -95,7 +95,9 @@ presupuesto o reemplazar por un texto propio.
   deja el cambio también en `ajuste.historial`.
 - **Ajuste sugerido por índice.** La ficha del contrato propone el % de ajuste
   con el índice y el período elegidos (por defecto, los meses de la
-  periodicidad que terminan antes del ajuste). La serie (`data/indices.json`)
+  periodicidad que terminan **dos meses antes** del ajuste: diciembre usa
+  ago–oct, porque noviembre no está publicado). Con varios ajustes atrasados
+  muestra el % de cada período y el total compuesto, y los registra todos. La serie (`data/indices.json`)
   guarda la **variación mensual** por índice y mes; el acumulado se compone, no
   se suma, y un mes faltante deja la sugerencia en `null`. Se trae de
   datos.gob.ar (IPC) o BLS (CPI) o se carga a mano. Si se usa el sugerido, el

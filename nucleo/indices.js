@@ -25,7 +25,7 @@
       etiqueta: "IPC INDEC",
       // IPC nivel general nacional, base dic-2016. percent_change devuelve la
       // variación contra el mes anterior como fracción (0,027 = 2,7%).
-      url: "https://apis.datos.gob.ar/series/api/series/?ids=148.3_INIVELNAL_DICI_M_26&representation_mode=percent_change&limit=36&sort=desc&format=json",
+      url: "https://apis.datos.gob.ar/series/api/series/?ids=148.3_INIVELNAL_DICI_M_26&representation_mode=percent_change&limit=72&sort=desc&format=json",
       fuente: "INDEC · datos.gob.ar",
       extraer: (j) => (j?.data || []).map(([f, v]) => ({ mes: String(f).slice(0, 7), variacion: v == null ? null : v * 100 })),
     },
@@ -34,6 +34,7 @@
       // CPI-U, todos los ítems, sin desestacionalizar. La API pública de BLS
       // da niveles: la variación se calcula contra el mes anterior.
       url: "https://api.bls.gov/publicAPI/v1/timeseries/data/CUUR0000SA0",
+      // Sin parámetros trae los últimos tres años: alcanza para ajustes anuales atrasados.
       fuente: "BLS · CPI-U",
       extraer: (j) => {
         const datos = (j?.Results?.series?.[0]?.data || [])
@@ -92,28 +93,47 @@
   }
 
   /**
-   * Período que se toma por defecto para un ajuste: los `meses` de la
-   * periodicidad que terminan en el mes anterior al del ajuste. Un ajuste
-   * trimestral del 1/12 mira septiembre, octubre y noviembre.
-   *
-   * Si ese último mes todavía no se publicó (INDEC publica a mitad del mes
-   * siguiente), se corre la ventana al último mes cargado, y se avisa.
+   * Rezago por defecto entre el último mes del índice y el mes del ajuste.
+   * Un ajuste del 1/12 no puede usar noviembre (INDEC lo publica a mitad de
+   * diciembre): toma hasta octubre. Antes se usaba el mes anterior y, si no
+   * estaba, se corría al último cargado; eso hacía que el mismo ajuste diera
+   * un % distinto según el día en que se miraba (Maxi, 2026-11-25).
    */
-  function periodoSugerido(serie, indice, fechaAjuste, meses) {
+  const REZAGO = 2;
+
+  /**
+   * Período de un ajuste: los `meses` de la periodicidad que terminan
+   * `rezago` meses antes del mes del ajuste. Trimestral al 1/12 → ago a oct;
+   * anual a septiembre → ago del año anterior a jul.
+   */
+  function periodoSugerido(fechaAjuste, meses, rezago = REZAGO) {
     const f = E.fecha(fechaAjuste) || E.hoy();
-    const ideal = mesMas(f.slice(0, 7), -1);
-    const ultimo = ultimoMes(serie, indice, ideal);
-    const hasta = ultimo || ideal;
+    const hasta = mesMas(f.slice(0, 7), -rezago);
     const n = Math.max(1, Number(meses) || 1);
-    return { desde: mesMas(hasta, -(n - 1)), hasta, ideal, corrido: hasta !== ideal };
+    return { desde: mesMas(hasta, -(n - 1)), hasta };
   }
 
-  /** Sugerencia completa para el formulario de ajuste. */
-  function sugerirAjuste(serie, indice, fechaAjuste, meses, periodo) {
-    const p = periodo?.desde && periodo?.hasta ? { ...periodo, corrido: false }
-      : periodoSugerido(serie, indice, fechaAjuste, meses);
-    return { ...acumulado(serie, indice, p.desde, p.hasta), corrido: !!p.corrido, ideal: p.ideal || null,
+  /** Sugerencia para un ajuste. `periodo` explícito manda sobre el calculado. */
+  function sugerirAjuste(serie, indice, fechaAjuste, meses, periodo, rezago = REZAGO) {
+    const p = periodo?.desde && periodo?.hasta ? periodo : periodoSugerido(fechaAjuste, meses, rezago);
+    return { ...acumulado(serie, indice, p.desde, p.hasta), fecha: E.fecha(fechaAjuste) || E.hoy(),
       etiqueta: INDICES[indice]?.etiqueta || indice };
+  }
+
+  /**
+   * Varios ajustes atrasados (p. ej. tres anuales sin aplicar): el % de cada
+   * período por separado y el total compuesto, que es lo que termina subiendo
+   * el canon si se aplican todos. Si falta un mes en cualquier período, el
+   * total queda en null.
+   */
+  function sugerirPendientes(serie, indice, fechas, meses, rezago = REZAGO) {
+    const periodos = (fechas || []).map((f) => sugerirAjuste(serie, indice, f, meses, null, rezago));
+    const completos = periodos.length && periodos.every((p) => p.porcentaje != null);
+    const total = completos
+      // Se compone con el % redondeado de cada período, que es el que se
+      // registra: así el total que se muestra es el que termina en el canon.
+      ? Math.round((periodos.reduce((f, p) => f * (1 + p.porcentaje / 100), 1) - 1) * 10000) / 100 : null;
+    return { periodos, total, faltan: [...new Set(periodos.flatMap((p) => p.faltan))].sort() };
   }
 
   /** Inserta o reemplaza el valor de un mes. */
@@ -153,6 +173,6 @@
   }
 
   global.NEXO_INDICES = {
-    INDICES, mesMas, rangoMeses, ultimoMes, acumulado, periodoSugerido, sugerirAjuste, upsert, traer,
+    REZAGO, INDICES, mesMas, rangoMeses, ultimoMes, acumulado, periodoSugerido, sugerirAjuste, sugerirPendientes, upsert, traer,
   };
 })(typeof window !== "undefined" ? window : globalThis);
