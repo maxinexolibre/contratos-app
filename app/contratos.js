@@ -443,6 +443,7 @@ function renderAjustes(c) {
   const canon = Number(c.economico?.canonMensual) || 0;
   const m = c.economico?.moneda;
   const ro = state.soloLectura;
+  const deshacible = NEXO_ESQUEMA.ajusteDeshacible(c);
   return `<div class="card${pend.length ? " alerta" : ""}"><h3>Ajustes de canon</h3>
     ${pend.length ? `<div class="pend-box">
       <b>${pend.length} ajuste${pend.length > 1 ? "s" : ""} sin registrar</b>
@@ -466,12 +467,13 @@ function renderAjustes(c) {
 
     ${renderAvisos(c)}
     ${hist.length ? `<table class="aj-hist">
-      <thead><tr><th>Fecha</th><th>%</th><th>Canon</th><th>Quién</th></tr></thead>
+      <thead><tr><th>Fecha</th><th>%</th><th>Canon</th><th>Quién</th><th></th></tr></thead>
       <tbody>${hist.map((h) => `<tr>
         <td>${fmt(h.fecha)}</td>
         <td>${h.porcentaje != null && h.porcentaje !== "" ? `<b>${h.porcentaje > 0 ? "+" : ""}${h.porcentaje}%</b>` : "—"}</td>
         <td>${h.canonAnterior ? `<span class="muted">${money(h.canonAnterior, m)} →</span> ` : ""}${h.canonNuevo ? money(h.canonNuevo, m) : "—"}</td>
         <td class="muted">${esc(h.usuario || "—")}${h.indiceAplicado ? ` · ${esc(textoIndiceAplicado(h.indiceAplicado))}` : ""}${h.nota ? ` · ${esc(h.nota)}` : ""}</td>
+        <td>${!ro && deshacible.ok && h === deshacible.entrada ? `<button class="btn sm ghost" type="button" onclick="deshacerUltimoAjuste('${c.id}')" title="Vuelve el canon y los tramos a como estaban antes de este ajuste">Deshacer</button>` : ""}</td>
       </tr>`).join("")}</tbody></table>`
       : `<p class="muted" style="font-size:12.5px;margin:8px 0 0">Todavía no hay ajustes registrados.</p>`}
   </div>`;
@@ -754,6 +756,9 @@ async function registrarAjuste(id) {
     fecha, porcentaje: pct === "" ? null : Number(pct),
     canonAnterior: anterior, canonNuevo: nuevo,
     usuario: state.user || "—",
+    // Foto de lo económico antes del ajuste, para poder deshacerlo exacto.
+    origen: "ajuste",
+    economicoAntes: { canonMensual: c.economico?.canonMensual, tramos: c.economico?.tramos || [] },
     // Si el % es el sugerido, queda de qué índice y qué meses salió.
     ...(ultimaSugerencia?.porcentaje != null && pct !== "" && Number(pct) === ultimaSugerencia.porcentaje
       ? { indiceAplicado: { indice: ultimaSugerencia.indice, desde: ultimaSugerencia.desde, hasta: ultimaSugerencia.hasta, porcentaje: ultimaSugerencia.porcentaje } } : {}),
@@ -764,6 +769,25 @@ async function registrarAjuste(id) {
   try {
     await persist(`Ajuste ${c.numero} · ${money(anterior)} → ${money(nuevo)}`);
     toast(`Ajuste registrado · canon ${money(nuevo)}`);
+    router();
+  } catch (e) { toast("Error: " + e.message, true, true); }
+}
+// Deshacer el último ajuste: vuelve canon y tramos a como estaban y saca la
+// línea del historial. Queda constancia en `ajuste.deshechos`, porque un
+// ajuste que se avisó al cliente y después se deshizo tiene que poder verse.
+async function deshacerUltimoAjuste(id) {
+  const c = state.data.find((x) => x.id === id);
+  const r = NEXO_ESQUEMA.deshacerAjuste(c);
+  if (!r.ok) { toast(r.motivo, true, true); return; }
+  const h = r.deshecho;
+  const m = c.economico?.moneda;
+  if (!confirm(`¿Deshacer el ajuste del ${fmt(h.fecha)}?\n\nSe factura: ${money(h.canonNuevo, m)} → vuelve a ${money(h.canonAnterior, m)}.\nCanon pleno: ${money(c.economico?.canonMensual, m)} → ${money(r.economico.canonMensual, m)}.\n\nDespués lo podés registrar de nuevo con el valor correcto.`)) return;
+  c.economico = r.economico;
+  c.ajuste.historial = r.historial;
+  c.ajuste.deshechos = [...(c.ajuste.deshechos || []), { ...h, economicoAntes: undefined, deshecho: hoyISO(), deshechoPor: state.user || "—" }];
+  try {
+    await persist(`Deshace ajuste ${c.numero} del ${h.fecha} · ${money(h.canonNuevo)} → ${money(h.canonAnterior)}`);
+    toast(`Ajuste deshecho · se factura ${money(h.canonAnterior, m)}`);
     router();
   } catch (e) { toast("Error: " + e.message, true, true); }
 }

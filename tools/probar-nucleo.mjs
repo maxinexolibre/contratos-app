@@ -2499,6 +2499,49 @@ prueba("índices · la sugerencia sobre un tramo usa lo que se factura", () => {
 });
 
 // ===========================================================================
+// DESHACER AJUSTE (importes inventados)
+// ===========================================================================
+
+const contratoTramo = () => E.ENTIDADES.contratos.normalizar({ economico: { canonMensual: 4800, moneda: "ARS",
+  tramos: [{ hasta: "2026-12-31", canonMensual: 4000, motivo: "equipo en garantía" }] } });
+
+function aplicarAjuste(c, fecha, nuevo, conFoto) {
+  const r = E.ajustarCanon(c, fecha, nuevo);
+  const h = { fecha, canonAnterior: r.anterior, canonNuevo: nuevo,
+    ...(conFoto ? { origen: "ajuste", economicoAntes: { canonMensual: c.economico.canonMensual, tramos: c.economico.tramos } } : {}) };
+  return { ...c, economico: r.economico, ajuste: { ...c.ajuste, historial: [...(c.ajuste?.historial || []), h] } };
+}
+
+prueba("deshacer ajuste · con foto vuelve exacto, tramo y pleno", () => {
+  const c = aplicarAjuste(contratoTramo(), "2026-12-01", 4286.4, true);
+  const r = E.deshacerAjuste(c);
+  igual([r.ok, r.economico.canonMensual, r.economico.tramos[0].canonMensual, r.historial.length], [true, 4800, 4000, 0]);
+});
+
+prueba("deshacer ajuste · sin foto (cargado antes) se revierte con el factor", () => {
+  const c = aplicarAjuste(contratoTramo(), "2026-12-01", 4286.4, false);
+  const r = E.deshacerAjuste(c);
+  igual([r.economico.canonMensual, r.economico.tramos[0].canonMensual], [4800, 4000]);
+  const sinTramo = aplicarAjuste(E.ENTIDADES.contratos.normalizar({ economico: { canonMensual: 1000 } }), "2026-12-01", 1100, false);
+  igual(E.deshacerAjuste(sinTramo).economico.canonMensual, 1000);
+});
+
+prueba("deshacer ajuste · solo el último, y no una baja de equipo", () => {
+  let c = aplicarAjuste(contratoTramo(), "2026-09-01", 4200, true);
+  c = aplicarAjuste(c, "2026-12-01", 4410, true);
+  const r = E.deshacerAjuste(c);
+  igual([r.economico.tramos[0].canonMensual, r.historial.length], [4200, 1]);
+  const baja = { ...c, ajuste: { historial: [...c.ajuste.historial, { fecha: "2026-12-05", canonAnterior: 4410, canonNuevo: 3000, nota: "baja de GE A" }] } };
+  igual(E.ajusteDeshacible(baja).ok, false);
+});
+
+prueba("deshacer ajuste · si el canon cambió después, no se deshace", () => {
+  const c = aplicarAjuste(E.ENTIDADES.contratos.normalizar({ economico: { canonMensual: 1000 } }), "2026-12-01", 1100, true);
+  c.economico.canonMensual = 1500;
+  igual(E.ajusteDeshacible(c).ok, false);
+});
+
+// ===========================================================================
 
 console.log(`\n  ${pasadas} pasadas · ${fallidas} fallidas\n`);
 if (fallos.length) {

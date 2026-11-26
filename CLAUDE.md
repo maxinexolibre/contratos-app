@@ -102,6 +102,9 @@ presupuesto o reemplazar por un texto propio.
   historial guarda `indiceAplicado`.
   "Avisar al cliente" arma el correo del ajuste (no lo manda: se copia o se
   abre en el correo de cada uno) y, al confirmarlo, queda en `ajuste.avisos`.
+  El **último** ajuste se puede deshacer (`deshacerAjuste()`): vuelve canon y
+  tramos con la foto `economicoAntes` (o con el factor inverso si es anterior a
+  la foto) y deja constancia en `ajuste.deshechos`.
 - **Moneda y facturación del contrato.** `economico.moneda` (USD/ARS) y
   `economico.facturacion` (`ConFactura` / `SinFactura`, interno: no se imprime).
   El tablero muestra la cartera vigente por cada combinación y el listado filtra
