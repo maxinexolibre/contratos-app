@@ -100,6 +100,8 @@ presupuesto o reemplazar por un texto propio.
   se suma, y un mes faltante deja la sugerencia en `null`. Se trae de
   datos.gob.ar (IPC) o BLS (CPI) o se carga a mano. Si se usa el sugerido, el
   historial guarda `indiceAplicado`.
+  "Avisar al cliente" arma el correo del ajuste (no lo manda: se copia o se
+  abre en el correo de cada uno) y, al confirmarlo, queda en `ajuste.avisos`.
 - **Moneda y facturación del contrato.** `economico.moneda` (USD/ARS) y
   `economico.facturacion` (`ConFactura` / `SinFactura`, interno: no se imprime).
   El tablero muestra la cartera vigente por cada combinación y el listado filtra

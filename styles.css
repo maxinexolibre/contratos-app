@@ -518,6 +518,8 @@ ul.files li:last-child { border-bottom: 0; }
 .aj-sug-txt .btn { margin-left: 6px; }
 .aj-carga { margin-top: 6px; font-size: 12.5px; }
 .aj-carga summary { cursor: pointer; color: var(--mut); }
+.aj-avisos { font-size: 12.5px; margin: 0 0 10px; }
+.aj-avisos ul { margin: 4px 0 0; padding-left: 18px; line-height: 1.6; }
 table.aj-hist { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.aj-hist th {
   text-align: left; font-size: 10.5px; text-transform: uppercase;
