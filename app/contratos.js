@@ -504,26 +504,28 @@ function bloqueSugerencia(c, fecha) {
       <label>Desde<input type="month" id="ajDesde" value="${p.desde}" onchange="calcSugerencia('${c.id}')"></label>
       <label>Hasta<input type="month" id="ajHasta" value="${p.hasta}" onchange="calcSugerencia('${c.id}')"></label>
     </div>
-    <div id="ajSug" class="aj-sug-txt">${htmlSugerencia(c)}</div>
-    <div id="ajPend">${htmlPendientes(c)}</div>
+    <div id="ajSug" class="aj-sug-txt">${htmlSugerencia(c, { fecha, indice })}</div>
+    <div id="ajPend">${htmlPendientes(c, indice)}</div>
     ${state.soloLectura ? "" : `<details class="aj-carga"><summary>Cargar o actualizar el índice</summary>
       <div class="aj-row" style="margin-top:6px;align-items:flex-end">
         <button class="btn sm" type="button" onclick="traerIndice('${c.id}')">Traer de la fuente</button>
         <label>Mes<input type="month" id="ixMes" value="${p.hasta}"></label>
-        <label>Variación mensual %<input type="number" step="0.01" id="ixVar" placeholder="2,5"></label>
+        <label>Variación mensual %<input type="number" step="0.001" id="ixVar" placeholder="2,5"></label>
+        <label title="Opcional. Con el nivel del mes anterior al período y el del último, el acumulado sale del cociente aunque falte algún mes del medio">Nivel (opcional)<input type="number" step="0.001" id="ixNivel" placeholder="ej. CPI 310,5"></label>
         <button class="btn sm" type="button" onclick="cargarMesIndice('${c.id}')">Guardar mes</button>
       </div>
     </details>`}
   </div>`;
 }
-const faltanTxt = (faltan) => `falta${faltan.length > 1 ? "n" : ""} ${faltan.map(fmtMes).join(", ")}: cargalo${faltan.length > 1 ? "s" : ""} abajo o traelo${faltan.length > 1 ? "s" : ""} de la fuente`;
+const faltanTxt = (faltan) => `falta${faltan.length > 1 ? "n" : ""} ${faltan.map(fmtMes).join(", ")}: traé el índice de la fuente o cargá la variación (o los niveles de las puntas) abajo`;
 // Sugerencia para la fecha del formulario. Se llama también al pintar, antes
 // de que existan los inputs: por eso los valores por defecto salen del contrato.
-function htmlSugerencia(c) {
-  const fecha = document.getElementById("ajFecha")?.value || (ajustesPendientes(c)[0] ? ajustesPendientes(c)[0].toISOString().slice(0, 10) : hoyISO());
-  const indice = document.getElementById("ajIdx")?.value || indiceDe(c);
+// Los valores llegan como parámetro y no se leen del DOM al pintar: mientras
+// se arma la ficha, los campos que hay en pantalla son los del contrato que se
+// estaba mirando antes, y así IMAXE (US CPI) salía calculado con el IPC de
+// Sadiv (Maxi, 2026-11-26).
+function htmlSugerencia(c, { fecha, indice, desde, hasta }) {
   const meses = AJUSTE_STEP[c.ajuste?.periodicidad] || 1;
-  const desde = document.getElementById("ajDesde")?.value, hasta = document.getElementById("ajHasta")?.value;
   // Si el período es el calculado se pide sin fijarlo, así avisa cuando se
   // corrió porque el último mes todavía no se publicó.
   const def = IX().periodoSugerido(state.indices, indice, fecha, meses);
@@ -534,19 +536,18 @@ function htmlSugerencia(c) {
   const rango = `${s.etiqueta} ${fmtMes(s.desde)}${s.meses > 1 ? ` – ${fmtMes(s.hasta)}` : ""}`;
   if (s.porcentaje == null) return `<span class="muted">Ajuste del ${fmt(fecha)} · ${esc(rango)}: ${faltanTxt(s.faltan)}.</span>`;
   const m = c.economico?.moneda;
-  const base = baseAjuste(c);
+  const base = baseAjuste(c, fecha);
   const nuevo = Math.round(base * (1 + s.porcentaje / 100) * 100) / 100;
-  return `<b>Ajuste del ${fmt(fecha)}: ${fmtPct(s.porcentaje)}</b> <span class="muted">· ${esc(rango)}${s.meses <= 6 ? ` (${s.detalle.map((d) => fmtPct(d.variacion, 1)).join(" · ")})` : ""} · ${money(base, m)} → ${money(nuevo, m)}</span>
+  return `<b>Ajuste del ${fmt(fecha)}: ${fmtPct(s.porcentaje)}</b> <span class="muted">· ${esc(rango)}${s.porNivel ? " (por nivel del índice)" : s.meses <= 6 ? ` (${s.detalle.map((d) => d.variacion == null ? "s/d" : fmtPct(d.variacion, 1)).join(" · ")})` : ""} · ${money(base, m)} → ${money(nuevo, m)}</span>
     ${state.soloLectura ? "" : `<button class="btn sm" type="button" onclick="usarSugerencia('${c.id}')">Usar ${fmtPct(s.porcentaje)}</button>`}
     ${s.corrido ? `<div class="muted" style="font-size:11.5px">${fmtMes(s.ideal)} todavía no se publicó: se tomaron los ${s.meses} meses hasta ${fmtMes(s.hasta)}.</div>` : ""}`;
 }
 // Con dos o más ajustes atrasados (p. ej. tres anuales sin aplicar) se ve el
 // % de cada período y el total compuesto, y se pueden registrar todos juntos.
-function htmlPendientes(c) {
+function htmlPendientes(c, indice) {
   const pend = ajustesPendientes(c).map((d) => d.toISOString().slice(0, 10));
   ultimosPendientes = null;
   if (pend.length < 2) return "";
-  const indice = document.getElementById("ajIdx")?.value || indiceDe(c);
   const r = IX().sugerirPendientes(state.indices, indice, pend, AJUSTE_STEP[c.ajuste?.periodicidad] || 1);
   ultimosPendientes = r;
   const m = c.economico?.moneda;
@@ -571,9 +572,13 @@ function calcSugerencia(id) {
   const c = state.data.find((x) => x.id === id);
   if (!IX()) return;
   const el = document.getElementById("ajSug");
-  if (el) el.innerHTML = htmlSugerencia(c);
+  const indice = document.getElementById("ajIdx")?.value || indiceDe(c);
+  if (el) el.innerHTML = htmlSugerencia(c, {
+    fecha: document.getElementById("ajFecha")?.value || hoyISO(), indice,
+    desde: document.getElementById("ajDesde")?.value, hasta: document.getElementById("ajHasta")?.value,
+  });
   const ep = document.getElementById("ajPend");
-  if (ep) ep.innerHTML = htmlPendientes(c);
+  if (ep) ep.innerHTML = htmlPendientes(c, indice);
 }
 function periodoPorDefecto(id) {
   const c = state.data.find((x) => x.id === id);
@@ -616,13 +621,19 @@ async function cargarMesIndice(id) {
   const indice = document.getElementById("ajIdx").value;
   const mes = document.getElementById("ixMes").value;
   const v = document.getElementById("ixVar").value;
+  const nv = document.getElementById("ixNivel")?.value ?? "";
   if (!mes) { toast("Falta el mes", true, true); return; }
-  if (v === "" || isNaN(Number(v))) { toast("Falta la variación mensual", true, true); return; }
-  state.indices = IX().upsert(state.indices, { indice, mes, variacion: Number(v), fuente: `a mano · ${state.user || "—"}` });
+  if ((v === "" || isNaN(Number(v))) && !(Number(nv) > 0)) { toast("Falta la variación mensual o el nivel", true, true); return; }
+  const previo = (state.indices || []).find((x) => x.indice === indice && x.mes === mes);
+  state.indices = IX().upsert(state.indices, { indice, mes,
+    variacion: v === "" ? previo?.variacion ?? null : Number(v),
+    nivel: Number(nv) > 0 ? Number(nv) : previo?.nivel ?? null,
+    fuente: `a mano · ${state.user || "—"}` });
   try {
-    await persist(`Índice ${indice} ${mes}: ${v}%`, "indices");
-    toast(`${IX().INDICES[indice].etiqueta} ${fmtMes(mes)}: ${v}% guardado`);
+    await persist(`Índice ${indice} ${mes}: ${v !== "" ? v + "%" : ""}${Number(nv) > 0 ? ` nivel ${nv}` : ""}`, "indices");
+    toast(`${IX().INDICES[indice].etiqueta} ${fmtMes(mes)} guardado`);
     document.getElementById("ixVar").value = "";
+    if (document.getElementById("ixNivel")) document.getElementById("ixNivel").value = "";
     document.getElementById("ixMes").value = IX().mesMas(mes, 1);
     calcSugerencia(id);
   } catch (e) { toast("Error: " + e.message, true, true); }
@@ -746,7 +757,7 @@ function renderAvisos(c) {
 // Los dos campos se completan entre sí: cargás el % y sale el canon, o al revés.
 // La base es lo que se factura en la fecha del ajuste: con un tramo reducido
 // vigente, es el tramo y no el canon pleno.
-const baseAjuste = (c) => NEXO_ESQUEMA.canonVigente(c, document.getElementById("ajFecha")?.value || hoyISO());
+const baseAjuste = (c, fecha) => NEXO_ESQUEMA.canonVigente(c, fecha || document.getElementById("ajFecha")?.value || hoyISO());
 function calcAjuste(id) {
   const c = state.data.find((x) => x.id === id);
   const base = baseAjuste(c);

@@ -2504,6 +2504,19 @@ prueba("índices · ajustes atrasados: de ajuste a ajuste, % por período y tota
   igual([corta.total, corta.faltan], [null, ["2025-01"]]);
 });
 
+prueba("índices · con los niveles de las puntas el acumulado no necesita todos los meses", () => {
+  // Como el CPI de 2025: un mes sin publicar en el medio (niveles inventados).
+  let s = [["2025-08", 100], ["2025-09", 101], ["2025-11", 103], ["2025-12", 104]]
+    .reduce((a, [mes, nivel]) => IX.upsert(a, { indice: "US_CPI", mes, nivel, variacion: null }), []);
+  s = IX.upsert(s, { indice: "US_CPI", mes: "2025-09", nivel: 101, variacion: 1 });
+  const a = IX.acumulado(s, "US_CPI", "2025-09", "2025-12");
+  igual([a.porNivel, a.porcentaje, a.faltan], [true, 4, []]);
+  // Sin el nivel inicial vuelve a componer meses y pide los que faltan.
+  const b = IX.acumulado(s.filter((x) => x.mes !== "2025-08"), "US_CPI", "2025-09", "2025-12");
+  igual([b.porNivel, b.porcentaje, b.faltan], [false, null, ["2025-10", "2025-11", "2025-12"]]);
+  igual(E.ENTIDADES.indices.normalizar({ indice: "US_CPI", mes: "2025-10" }).nivel, null);
+});
+
 prueba("índices · el período elegido a mano manda sobre el de la periodicidad", () => {
   const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, { desde: "2026-11", hasta: "2026-11" });
   igual([s.porcentaje, s.meses], [3, 1]);
