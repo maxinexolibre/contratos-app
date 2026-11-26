@@ -455,11 +455,11 @@ function renderAjustes(c) {
 
     ${ro ? "" : `<div class="aj-form">
       <div class="aj-row">
-        <label>Fecha<input type="date" id="ajFecha" value="${(pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)}" onchange="cambioFechaAjuste('${c.id}')"></label>
+        <label>Fecha<input type="date" id="ajFecha" value="${(pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)}" onchange="calcAjuste('${c.id}')"></label>
         <label>%<input type="number" step="0.01" id="ajPct" placeholder="0.00" oninput="calcAjuste('${c.id}')"></label>
         <label>${(c.economico?.tramos || []).length ? "Se factura desde la fecha" : "Canon nuevo"}<input type="number" step="0.01" id="ajCanon" placeholder="${NEXO_ESQUEMA.canonVigente(c, (pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10))}" oninput="calcAjustePct('${c.id}')"></label>
       </div>
-      ${bloqueSugerencia(c, (pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10))}
+      ${botonIndice(c)}
       <button class="btn primary sm" onclick="registrarAjuste('${c.id}')">Registrar ajuste</button>
       <button class="btn sm" type="button" onclick="avisoAjuste('${c.id}')" title="Arma el correo para avisarle al cliente el ajuste que cargaste arriba">Avisar al cliente</button>
       <span class="muted" style="font-size:12px" id="ajHint">Se factura: ${money(NEXO_ESQUEMA.canonVigente(c, (pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)), m)}${(c.economico?.tramos || []).length ? ` · pleno ${money(canon, m)}` : ""}</span>
@@ -478,165 +478,28 @@ function renderAjustes(c) {
       : `<p class="muted" style="font-size:12.5px;margin:8px 0 0">Todavía no hay ajustes registrados.</p>`}
   </div>`;
 }
-// ---- Ajuste sugerido por índice ----
-// Propone el % con el índice y el período elegidos; no lo aplica. El contrato
-// puede pactar rezagos o topes que la app no conoce: decide quien registra.
-const IX = () => window.NEXO_INDICES;
+// ---- Consulta del índice del contrato ----
+// El % se consulta en la fuente oficial y se carga a mano. Hubo un cálculo
+// automático (series de INDEC y BLS, períodos, atrasados) y se sacó: con
+// meses sin publicar, rezagos y la serie incompleta del CPI daba números que
+// había que revisar igual (Maxi, 2026-11-26).
+const FUENTE_INDICE = {
+  IPC_INDEC: { nombre: "INDEC", url: "https://www.indec.gob.ar/indec/web/Nivel4-Tema-3-5-31" },
+  US_CPI: { nombre: "BLS · CPI Inflation Calculator", url: "https://www.bls.gov/data/inflation_calculator.htm" },
+};
+function botonIndice(c) {
+  const f = FUENTE_INDICE[c.ajuste?.indice];
+  if (!f) return "";
+  const lbl = LEGAL.indiceLabel[c.ajuste.indice] || c.ajuste.indice;
+  return `<a class="btn sm" href="${f.url}" target="_blank" rel="noopener" title="Abre ${esc(f.nombre)} en otra pestaña">Consultar ${esc(lbl)} ↗</a>`;
+}
+const fmtPct = (n, d = 2) => `${n > 0 ? "+" : ""}${Number(n).toLocaleString("es-AR", { minimumFractionDigits: d, maximumFractionDigits: d })}%`;
+// Ajustes registrados con la sugerencia que hubo: se siguen mostrando.
 const MES_CORTO = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const fmtMes = (m) => m ? `${MES_CORTO[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}` : "—";
-const fmtPct = (n, d = 2) => `${n > 0 ? "+" : ""}${Number(n).toLocaleString("es-AR", { minimumFractionDigits: d, maximumFractionDigits: d })}%`;
-let ultimaSugerencia = null;
 function textoIndiceAplicado(a) {
-  const lbl = IX()?.INDICES[a.indice]?.etiqueta || a.indice;
+  const lbl = LEGAL.indiceLabel[a.indice] || a.indice;
   return `${lbl} ${fmtMes(a.desde)}${a.desde !== a.hasta ? `–${fmtMes(a.hasta)}` : ""}`;
-}
-let ultimosPendientes = null;
-const indiceDe = (c) => IX().INDICES[c.ajuste?.indice] ? c.ajuste.indice : "IPC_INDEC";
-function bloqueSugerencia(c, fecha) {
-  if (!IX()) return "";
-  const indice = indiceDe(c);
-  const meses = AJUSTE_STEP[c.ajuste?.periodicidad] || 1;
-  const p = IX().periodoSugerido(state.indices, indice, fecha, meses);
-  const opts = Object.entries(IX().INDICES).map(([k, d]) => `<option value="${k}"${k === indice ? " selected" : ""}>${esc(d.etiqueta)}</option>`).join("");
-  return `<div class="aj-sug">
-    <div class="aj-row">
-      <label>Índice<select id="ajIdx" onchange="periodoPorDefecto('${c.id}')">${opts}</select></label>
-      <label>Desde<input type="month" id="ajDesde" value="${p.desde}" onchange="calcSugerencia('${c.id}')"></label>
-      <label>Hasta<input type="month" id="ajHasta" value="${p.hasta}" onchange="calcSugerencia('${c.id}')"></label>
-    </div>
-    <div id="ajSug" class="aj-sug-txt">${htmlSugerencia(c, { fecha, indice })}</div>
-    <div id="ajPend">${htmlPendientes(c, indice)}</div>
-    ${state.soloLectura ? "" : `<details class="aj-carga"><summary>Cargar o actualizar el índice</summary>
-      <div class="aj-row" style="margin-top:6px;align-items:flex-end">
-        <button class="btn sm" type="button" onclick="traerIndice('${c.id}')">Traer de la fuente</button>
-        <label>Mes<input type="month" id="ixMes" value="${p.hasta}"></label>
-        <label>Variación mensual %<input type="number" step="0.001" id="ixVar" placeholder="2,5"></label>
-        <label title="Opcional. Con el nivel del mes anterior al período y el del último, el acumulado sale del cociente aunque falte algún mes del medio">Nivel (opcional)<input type="number" step="0.001" id="ixNivel" placeholder="ej. CPI 310,5"></label>
-        <button class="btn sm" type="button" onclick="cargarMesIndice('${c.id}')">Guardar mes</button>
-      </div>
-    </details>`}
-  </div>`;
-}
-const faltanTxt = (faltan) => `falta${faltan.length > 1 ? "n" : ""} ${faltan.map(fmtMes).join(", ")}: traé el índice de la fuente o cargá la variación (o los niveles de las puntas) abajo`;
-// Sugerencia para la fecha del formulario. Se llama también al pintar, antes
-// de que existan los inputs: por eso los valores por defecto salen del contrato.
-// Los valores llegan como parámetro y no se leen del DOM al pintar: mientras
-// se arma la ficha, los campos que hay en pantalla son los del contrato que se
-// estaba mirando antes, y así un contrato en US CPI salía calculado con el
-// IPC y la fecha del anterior (Maxi, 2026-11-26).
-function htmlSugerencia(c, { fecha, indice, desde, hasta }) {
-  const meses = AJUSTE_STEP[c.ajuste?.periodicidad] || 1;
-  // Si el período es el calculado se pide sin fijarlo, así avisa cuando se
-  // corrió porque el último mes todavía no se publicó.
-  const def = IX().periodoSugerido(state.indices, indice, fecha, meses);
-  const manual = desde && hasta && (desde !== def.desde || hasta !== def.hasta);
-  const s = IX().sugerirAjuste(state.indices, indice, fecha, meses, manual ? { desde, hasta } : null);
-  ultimaSugerencia = s;
-  if (s.desde > s.hasta) return `<span class="muted">El mes "desde" es posterior al "hasta".</span>`;
-  const rango = `${s.etiqueta} ${fmtMes(s.desde)}${s.meses > 1 ? ` – ${fmtMes(s.hasta)}` : ""}`;
-  if (s.porcentaje == null) return `<span class="muted">Ajuste del ${fmt(fecha)} · ${esc(rango)}: ${faltanTxt(s.faltan)}.</span>`;
-  const m = c.economico?.moneda;
-  const base = baseAjuste(c, fecha);
-  const nuevo = Math.round(base * (1 + s.porcentaje / 100) * 100) / 100;
-  return `<b>Ajuste del ${fmt(fecha)}: ${fmtPct(s.porcentaje)}</b> <span class="muted">· ${esc(rango)}${s.porNivel ? " (por nivel del índice)" : s.meses <= 6 ? ` (${s.detalle.map((d) => d.variacion == null ? "s/d" : fmtPct(d.variacion, 1)).join(" · ")})` : ""} · ${money(base, m)} → ${money(nuevo, m)}</span>
-    ${state.soloLectura ? "" : `<button class="btn sm" type="button" onclick="usarSugerencia('${c.id}')">Usar ${fmtPct(s.porcentaje)}</button>`}
-    ${s.corrido ? `<div class="muted" style="font-size:11.5px">${fmtMes(s.ideal)} todavía no se publicó: se tomaron los ${s.meses} meses hasta ${fmtMes(s.hasta)}.</div>` : ""}`;
-}
-// Con dos o más ajustes atrasados (p. ej. tres anuales sin aplicar) se ve el
-// % de cada período y el total compuesto, y se pueden registrar todos juntos.
-function htmlPendientes(c, indice) {
-  const pend = ajustesPendientes(c).map((d) => d.toISOString().slice(0, 10));
-  ultimosPendientes = null;
-  if (pend.length < 2) return "";
-  const r = IX().sugerirPendientes(state.indices, indice, pend, AJUSTE_STEP[c.ajuste?.periodicidad] || 1);
-  ultimosPendientes = r;
-  const m = c.economico?.moneda;
-  const inicio = NEXO_ESQUEMA.canonVigente(c, pend[0]);
-  const final = r.periodos.reduce((v, p) => Math.round(v * (1 + (p.porcentaje || 0) / 100) * 100) / 100, inicio);
-  const ro = state.soloLectura;
-  return `<table class="aj-pend">
-    <thead><tr><th>Ajuste</th><th>Período del índice</th><th>%</th><th></th></tr></thead>
-    <tbody>${r.periodos.map((p) => `<tr>
-      <td>${fmt(p.fecha)}</td><td>${fmtMes(p.desde)} – ${fmtMes(p.hasta)}${p.corrido ? ` <span class="muted" title="${fmtMes(p.ideal)} todavía no se publicó">*</span>` : ""}</td>
-      <td>${p.porcentaje == null ? `<span class="muted">falta${p.faltan.length > 1 ? "n" : ""} ${p.faltan.length} mes${p.faltan.length > 1 ? "es" : ""}</span>` : `<b>${fmtPct(p.porcentaje)}</b>`}</td>
-      <td>${ro || p.porcentaje == null ? "" : `<button class="btn sm ghost" type="button" onclick="usarPeriodo('${c.id}','${p.fecha}')">Usar</button>`}</td>
-    </tr>`).join("")}</tbody>
-    <tfoot><tr><td colspan="2"><b>Total de los ${r.periodos.length}</b> <span class="muted">(compuesto, no sumado)</span></td>
-      <td>${r.total == null ? "—" : `<b>${fmtPct(r.total)}</b>`}</td><td></td></tr></tfoot>
-  </table>
-  ${r.total == null ? `<div class="muted" style="font-size:12px">Para el total ${faltanTxt(r.faltan)}.</div>`
-    : `<div class="muted" style="font-size:12px;margin-top:4px">Se factura: ${money(inicio, m)} → ${money(final, m)}
-      ${ro ? "" : `<button class="btn sm" type="button" onclick="registrarPendientes('${c.id}')">Registrar los ${r.periodos.length} ajustes</button>`}</div>`}`;
-}
-function calcSugerencia(id) {
-  const c = state.data.find((x) => x.id === id);
-  if (!IX()) return;
-  const el = document.getElementById("ajSug");
-  const indice = document.getElementById("ajIdx")?.value || indiceDe(c);
-  if (el) el.innerHTML = htmlSugerencia(c, {
-    fecha: document.getElementById("ajFecha")?.value || hoyISO(), indice,
-    desde: document.getElementById("ajDesde")?.value, hasta: document.getElementById("ajHasta")?.value,
-  });
-  const ep = document.getElementById("ajPend");
-  if (ep) ep.innerHTML = htmlPendientes(c, indice);
-}
-function periodoPorDefecto(id) {
-  const c = state.data.find((x) => x.id === id);
-  const d = document.getElementById("ajDesde"), h = document.getElementById("ajHasta");
-  if (!d || !h || !IX()) return;
-  const p = IX().periodoSugerido(state.indices, document.getElementById("ajIdx").value,
-    document.getElementById("ajFecha")?.value || hoyISO(), AJUSTE_STEP[c.ajuste?.periodicidad] || 1);
-  d.value = p.desde; h.value = p.hasta;
-  calcSugerencia(id);
-}
-// Lleva un período atrasado al formulario: fecha, meses y %.
-function usarPeriodo(id, fecha) {
-  document.getElementById("ajFecha").value = fecha;
-  periodoPorDefecto(id);
-  usarSugerencia(id);
-}
-function cambioFechaAjuste(id) {
-  calcAjuste(id);
-  periodoPorDefecto(id);
-}
-function usarSugerencia(id) {
-  if (ultimaSugerencia?.porcentaje == null) return;
-  document.getElementById("ajPct").value = ultimaSugerencia.porcentaje;
-  calcAjuste(id);
-}
-async function traerIndice(id) {
-  const indice = document.getElementById("ajIdx").value;
-  toast("Consultando la fuente…");
-  const r = await IX().traer(indice, state.indices);
-  if (!r.ok) { toast(`No respondió la fuente (${r.error}). Cargá los meses a mano.`, true, true); return; }
-  if (!r.nuevos.length && !r.cambiados.length) { toast("El índice ya estaba al día"); return; }
-  state.indices = r.serie;
-  try {
-    await persist(`Índice ${indice}: ${[...r.nuevos, ...r.cambiados].length} mes(es)`, "indices");
-    toast(`${IX().INDICES[indice].etiqueta}: ${r.nuevos.length} mes(es) nuevo(s)${r.cambiados.length ? `, ${r.cambiados.length} revisado(s) por la fuente` : ""}`);
-    periodoPorDefecto(id);
-  } catch (e) { toast("Error: " + e.message, true, true); }
-}
-async function cargarMesIndice(id) {
-  const indice = document.getElementById("ajIdx").value;
-  const mes = document.getElementById("ixMes").value;
-  const v = document.getElementById("ixVar").value;
-  const nv = document.getElementById("ixNivel")?.value ?? "";
-  if (!mes) { toast("Falta el mes", true, true); return; }
-  if ((v === "" || isNaN(Number(v))) && !(Number(nv) > 0)) { toast("Falta la variación mensual o el nivel", true, true); return; }
-  const previo = (state.indices || []).find((x) => x.indice === indice && x.mes === mes);
-  state.indices = IX().upsert(state.indices, { indice, mes,
-    variacion: v === "" ? previo?.variacion ?? null : Number(v),
-    nivel: Number(nv) > 0 ? Number(nv) : previo?.nivel ?? null,
-    fuente: `a mano · ${state.user || "—"}` });
-  try {
-    await persist(`Índice ${indice} ${mes}: ${v !== "" ? v + "%" : ""}${Number(nv) > 0 ? ` nivel ${nv}` : ""}`, "indices");
-    toast(`${IX().INDICES[indice].etiqueta} ${fmtMes(mes)} guardado`);
-    document.getElementById("ixVar").value = "";
-    if (document.getElementById("ixNivel")) document.getElementById("ixNivel").value = "";
-    document.getElementById("ixMes").value = IX().mesMas(mes, 1);
-    calcSugerencia(id);
-  } catch (e) { toast("Error: " + e.message, true, true); }
 }
 // ---- Aviso de ajuste al cliente ----
 // La app no manda el correo: lo arma con lo cargado en el formulario de
@@ -664,13 +527,11 @@ function armarAvisoAjuste(c) {
   const m = c.economico?.moneda;
   const iva = sufijoIVA(c);
   const r = NEXO_ESQUEMA.ajustarCanon(c, fecha, nuevo);
-  const s = ultimaSugerencia;
-  const conIndice = s?.porcentaje != null && pct !== "" && Number(pct) === s.porcentaje;
   const lblIdx = LEGAL.indiceLabel[c.ajuste?.indice] || c.ajuste?.indice || "";
   const { nombre } = contactoCliente(c);
   const pctTxt = pct !== "" && !isNaN(Number(pct)) ? fmtPct(Number(pct)) : null;
   const lineas = [
-    pctTxt ? `- Ajuste: ${pctTxt}${conIndice ? ` (${s.etiqueta} ${MES_LARGO[Number(s.desde.slice(5, 7)) - 1]}${s.meses > 1 ? ` a ${mesLargo(s.hasta + "-01")}` : ` de ${s.hasta.slice(0, 4)}`}: ${s.detalle.map((d) => fmtPct(d.variacion, 1)).join(", ")})` : ""}` : null,
+    pctTxt ? `- Ajuste: ${pctTxt}${lblIdx ? ` (${lblIdx})` : ""}` : null,
     `- Canon actual: ${money(r.anterior, m)}${iva}`,
     `- Canon desde ${mesLargo(fecha)}: ${money(nuevo, m)}${iva}`,
     r.enTramo ? `- Canon pleno, con todos los equipos incorporados: pasa de ${money(r.plenoAnterior, m)} a ${money(r.plenoNuevo, m)}${iva}` : null,
@@ -788,9 +649,8 @@ function hintAjuste(c, base) {
   el.textContent = `${money(base, m)} → ${money(nuevo, m)} · ${money(Math.round((nuevo - base) * 12), m)}/año de diferencia`
     + (r.enTramo ? ` · el pleno pasa de ${money(r.plenoAnterior, m)} a ${money(r.plenoNuevo, m)}` : "");
 }
-// Aplica un ajuste sobre el contrato en memoria (sin guardar). Lo usan el
-// registro de uno y el de varios atrasados de una vez.
-function aplicarAjusteEn(c, fecha, pct, nuevo, sug) {
+// Aplica un ajuste sobre el contrato en memoria (sin guardar).
+function aplicarAjusteEn(c, fecha, pct, nuevo) {
   // Lo que se factura en la fecha (el tramo, si rige uno) es la base. El
   // pleno y los tramos que siguen corriendo suben en la misma proporción.
   const r = NEXO_ESQUEMA.ajustarCanon(c, fecha, nuevo);
@@ -803,9 +663,6 @@ function aplicarAjusteEn(c, fecha, pct, nuevo, sug) {
     // Foto de lo económico antes del ajuste, para poder deshacerlo exacto.
     origen: "ajuste",
     economicoAntes: { canonMensual: c.economico?.canonMensual, tramos: c.economico?.tramos || [] },
-    // Si el % es el sugerido, queda de qué índice y qué meses salió.
-    ...(sug?.porcentaje != null && pct !== "" && pct != null && Number(pct) === sug.porcentaje
-      ? { indiceAplicado: { indice: sug.indice, desde: sug.desde, hasta: sug.hasta, porcentaje: sug.porcentaje } } : {}),
     ...(r.enTramo ? { nota: `sobre el tramo vigente; el pleno pasa de ${money(r.plenoAnterior, m)} a ${money(r.plenoNuevo, m)}` }
       : (c.economico.tramos || []).length ? { nota: "también se ajustaron los tramos en curso" } : {}),
   });
@@ -819,30 +676,10 @@ async function registrarAjuste(id) {
   const nuevo = Number(document.getElementById("ajCanon").value);
   if (!fecha) { toast("Falta la fecha del ajuste", true, true); return; }
   if (!nuevo || nuevo <= 0) { toast("Falta el canon nuevo", true, true); return; }
-  const r = aplicarAjusteEn(c, fecha, pct, nuevo, ultimaSugerencia);
+  const r = aplicarAjusteEn(c, fecha, pct, nuevo);
   try {
     await persist(`Ajuste ${c.numero} · ${money(r.anterior)} → ${money(nuevo)}`);
     toast(`Ajuste registrado · canon ${money(nuevo)}`);
-    router();
-  } catch (e) { toast("Error: " + e.message, true, true); }
-}
-// Varios ajustes atrasados de una vez: cada uno con su fecha y su %, en orden,
-// así el historial muestra cada período y el canon termina en el compuesto.
-// Se deshacen de a uno, del último hacia atrás.
-async function registrarPendientes(id) {
-  const c = state.data.find((x) => x.id === id);
-  const r = ultimosPendientes;
-  if (!r || r.total == null) return;
-  const m = c.economico?.moneda;
-  const inicio = NEXO_ESQUEMA.canonVigente(c, r.periodos[0].fecha);
-  if (!confirm(`¿Registrar los ${r.periodos.length} ajustes atrasados?\n\n${r.periodos.map((p) => `${fmt(p.fecha)}: ${fmtPct(p.porcentaje)} (${fmtMes(p.desde)} – ${fmtMes(p.hasta)})`).join("\n")}\n\nTotal: ${fmtPct(r.total)}. Se factura: ${money(inicio, m)} → ${money(r.periodos.reduce((v, p) => Math.round(v * (1 + p.porcentaje / 100) * 100) / 100, inicio), m)}.`)) return;
-  for (const p of r.periodos) {
-    const base = NEXO_ESQUEMA.canonVigente(c, p.fecha);
-    aplicarAjusteEn(c, p.fecha, p.porcentaje, Math.round(base * (1 + p.porcentaje / 100) * 100) / 100, p);
-  }
-  try {
-    await persist(`Ajustes ${c.numero} · ${r.periodos.length} períodos · ${fmtPct(r.total)}`);
-    toast(`${r.periodos.length} ajustes registrados · total ${fmtPct(r.total)}`);
     router();
   } catch (e) { toast("Error: " + e.message, true, true); }
 }

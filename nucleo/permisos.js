@@ -89,15 +89,6 @@
       marketing:              { crear: null, leer: "todos", editar: null, borrar: null },
       admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
     },
-    // Índices de precios (IPC, CPI): los carga quien registra ajustes.
-    indices: {
-      vendedor:               { crear: null, leer: "todos", editar: null, borrar: null },
-      gerente_comercial:      { crear: "todos", leer: "todos", editar: "todos", borrar: null },
-      gerente_administrativo: { crear: "todos", leer: "todos", editar: "todos", borrar: null },
-      direccion:              { crear: "todos", leer: "todos", editar: "todos", borrar: null },
-      marketing:              { crear: null, leer: "todos", editar: null, borrar: null },
-      admin:                  { crear: "todos", leer: "todos", editar: "todos", borrar: "todos" },
-    },
     campanas: {
       vendedor:               { crear: null, leer: null, editar: null, borrar: null },
       gerente_comercial:      { crear: null, leer: "todos", editar: null, borrar: null },

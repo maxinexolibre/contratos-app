@@ -34,14 +34,14 @@ contexto.window = contexto;
 contexto.globalThis = contexto;
 vm.createContext(contexto);
 
-for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "indices", "comisiones", "catalogo", "planilla", "clientes"]) {
+for (const f of ["esquema", "permisos", "reglas", "kpi", "almacen", "adaptador", "cambio", "comisiones", "catalogo", "planilla", "clientes"]) {
   vm.runInContext(readFileSync(resolve(RAIZ, `nucleo/${f}.js`), "utf8"), contexto, { filename: f });
 }
 
 const {
   NEXO_ESQUEMA: E, NEXO_PERMISOS: P, NEXO_REGLAS: R, NEXO_KPI: K,
   NEXO_ALMACEN: A, NEXO_ADAPTADOR: AD, NEXO_CAMBIO: C, NEXO_COMISIONES: CM,
-  NEXO_CATALOGO_PARTES: CAT, NEXO_INDICES: IX,
+  NEXO_CATALOGO_PARTES: CAT,
 } = contexto;
 
 // --- mini framework --------------------------------------------------------
@@ -2437,105 +2437,6 @@ prueba("cliente nuevo · un ticket o un presupuesto rechazado no lo hacen client
     presupuestos: [presuBase(), presuBase({ id: "pre_r", numero: "P20250601", ticketId: "tk_v", fecha: "2025-06-01", estado: "Rechazado" })],
   });
   igual(CM.elegibilidad("Presupuesto", presuBase(), c).criterio, "ClienteNuevo");
-});
-
-// ===========================================================================
-// ÍNDICES Y AJUSTE SUGERIDO (variaciones inventadas)
-// ===========================================================================
-
-const SERIE_IX = [["2026-08", 2], ["2026-09", 2], ["2026-10", 2], ["2026-11", 3]]
-  .reduce((s, [mes, v]) => IX.upsert(s, { indice: "IPC_INDEC", mes, variacion: v }), []);
-
-prueba("índices · el acumulado compone los meses, no los suma", () => {
-  const a = IX.acumulado(SERIE_IX, "IPC_INDEC", "2026-08", "2026-10");
-  igual(a.porcentaje, 6.12);
-  igual(a.meses, 3);
-  igual(a.faltan, []);
-});
-
-prueba("índices · un mes faltante deja la sugerencia en null, no en un número corto", () => {
-  const a = IX.acumulado(SERIE_IX, "IPC_INDEC", "2026-07", "2026-09");
-  igual(a.porcentaje, null);
-  igual(a.faltan, ["2026-07"]);
-});
-
-prueba("índices · un 0% cargado cuenta como dato, un mes vacío no", () => {
-  const s = IX.upsert(SERIE_IX, { indice: "IPC_INDEC", mes: "2026-12", variacion: 0 });
-  igual(IX.acumulado(s, "IPC_INDEC", "2026-12", "2026-12").porcentaje, 0);
-  igual(E.ENTIDADES.indices.normalizar({ indice: "IPC_INDEC", mes: "2027-01", variacion: "" }).variacion, null);
-});
-
-prueba("índices · período de ajuste a ajuste cuando todo está publicado", () => {
-  igual(IX.periodoSugerido([], "IPC_INDEC", "2024-09-01", 12, "2026-11-26"),
-    { desde: "2023-09", hasta: "2024-08", ideal: "2024-08", corrido: false });
-  igual(IX.periodoSugerido(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, "2026-12-20"),
-    { desde: "2026-09", hasta: "2026-11", ideal: "2026-11", corrido: false });
-});
-
-prueba("índices · si el último mes no se publicó, la ventana se corre con el mismo largo", () => {
-  // Trimestral de diciembre calculado el 26/11: noviembre sale a mitad de diciembre.
-  const sinNov = SERIE_IX.filter((x) => x.mes !== "2026-11");
-  const s = IX.sugerirAjuste(sinNov, "IPC_INDEC", "2026-12-01", 3, null, "2026-11-26");
-  igual([s.desde, s.hasta, s.corrido, s.ideal, s.porcentaje], ["2026-08", "2026-10", true, "2026-11", 6.12]);
-  // Antes del 15 todavía no salió el mes anterior.
-  igual(IX.ultimoPublicado([], "IPC_INDEC", "2026-11-10"), "2026-09");
-  igual(IX.ultimoPublicado([], "IPC_INDEC", "2026-11-15"), "2026-10");
-});
-
-prueba("índices · un mes ya cargado cuenta como publicado aunque no sea el 15", () => {
-  // SERIE_IX tiene noviembre cargado: el 10/12 ya se puede usar.
-  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, null, "2026-12-10");
-  igual([s.desde, s.hasta, s.porcentaje], ["2026-09", "2026-11", 7.16]);
-});
-
-prueba("índices · un mes publicado que falta en la serie se pide, no se saltea", () => {
-  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2027-02-01", 3, null, "2027-02-20");
-  igual([s.desde, s.hasta, s.porcentaje, s.faltan], ["2026-11", "2027-01", null, ["2026-12", "2027-01"]]);
-});
-
-prueba("índices · ajustes atrasados: de ajuste a ajuste, % por período y total compuesto", () => {
-  const serie = IX.rangoMeses("2023-09", "2026-08")
-    .reduce((s, mes) => IX.upsert(s, { indice: "IPC_INDEC", mes, variacion: mes < "2024-09" ? 10 : mes < "2025-09" ? 2 : 1 }), []);
-  const r = IX.sugerirPendientes(serie, "IPC_INDEC", ["2024-09-01", "2025-09-01", "2026-09-01"], 12, "2026-11-26");
-  igual(r.periodos.map((p) => [p.desde, p.hasta]), [["2023-09", "2024-08"], ["2024-09", "2025-08"], ["2025-09", "2026-08"]]);
-  igual(r.periodos.map((p) => p.porcentaje), [213.84, 26.82, 12.68]);
-  igual(r.total, 348.48, "con el % redondeado de cada período, que es el que se registra");
-  const corta = IX.sugerirPendientes(serie.filter((x) => x.mes !== "2025-01"), "IPC_INDEC", ["2024-09-01", "2025-09-01"], 12, "2026-11-26");
-  igual([corta.total, corta.faltan], [null, ["2025-01"]]);
-});
-
-prueba("índices · con los niveles de las puntas el acumulado no necesita todos los meses", () => {
-  // Como el CPI de 2025: un mes sin publicar en el medio (niveles inventados).
-  let s = [["2025-08", 100], ["2025-09", 101], ["2025-11", 103], ["2025-12", 104]]
-    .reduce((a, [mes, nivel]) => IX.upsert(a, { indice: "US_CPI", mes, nivel, variacion: null }), []);
-  s = IX.upsert(s, { indice: "US_CPI", mes: "2025-09", nivel: 101, variacion: 1 });
-  const a = IX.acumulado(s, "US_CPI", "2025-09", "2025-12");
-  igual([a.porNivel, a.porcentaje, a.faltan], [true, 4, []]);
-  // Sin el nivel inicial vuelve a componer meses y pide los que faltan.
-  const b = IX.acumulado(s.filter((x) => x.mes !== "2025-08"), "US_CPI", "2025-09", "2025-12");
-  igual([b.porNivel, b.porcentaje, b.faltan], [false, null, ["2025-10", "2025-11", "2025-12"]]);
-  igual(E.ENTIDADES.indices.normalizar({ indice: "US_CPI", mes: "2025-10" }).nivel, null);
-});
-
-prueba("índices · el período elegido a mano manda sobre el de la periodicidad", () => {
-  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, { desde: "2026-11", hasta: "2026-11" });
-  igual([s.porcentaje, s.meses], [3, 1]);
-});
-
-prueba("índices · upsert reemplaza el mes y no mezcla índices", () => {
-  let s = IX.upsert(SERIE_IX, { indice: "IPC_INDEC", mes: "2026-11", variacion: 2.5 });
-  s = IX.upsert(s, { indice: "US_CPI", mes: "2026-11", variacion: 0.3 });
-  igual(s.filter((x) => x.mes === "2026-11").map((x) => [x.indice, x.variacion]), [["IPC_INDEC", 2.5], ["US_CPI", 0.3]]);
-  igual(IX.mesMas("2026-11", 2), "2027-01");
-  igual(IX.mesMas("2027-01", -1), "2026-12");
-});
-
-prueba("índices · la sugerencia sobre un tramo usa lo que se factura", () => {
-  const c = E.ENTIDADES.contratos.normalizar({ economico: { canonMensual: 4800, moneda: "ARS",
-    tramos: [{ hasta: "2026-12-31", canonMensual: 4000, motivo: "equipo en garantía" }] } });
-  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, null, "2026-12-20");
-  const r = E.ajustarCanon(c, "2026-12-01", Math.round(E.canonVigente(c, "2026-12-01") * (1 + s.porcentaje / 100) * 100) / 100);
-  igual([r.anterior, r.nuevo], [4000, 4286.4]);
 });
 
 // ===========================================================================

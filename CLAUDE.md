@@ -21,7 +21,6 @@ contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
 | Lectura/escritura particionada, índice, conflictos | `nucleo/almacen.js` | 4k |
 | Traducción forma vieja ↔ modelo v3 | `nucleo/adaptador.js` | 4k |
 | Tipos de cambio, conversión, facturación | `nucleo/cambio.js` | 3k |
-| Índices (IPC, CPI) y ajuste sugerido de canon | `nucleo/indices.js` | 2k |
 | Comisiones: seguimiento por operación, cliente nuevo, alertas, reparto 6:2:1 | `nucleo/comisiones.js` · `vistas/comisiones.js` | 9k · 6k |
 | Capa de datos de la app sobre el almacén | `nucleo/repositorio.js` | 3k |
 | Filtros, paginación, CSV, selector de país | `nucleo/tabla.js` | 2k |
@@ -93,19 +92,11 @@ presupuesto o reemplazar por un texto propio.
   en orden y la regla rechaza una historia imposible. Una pausa con canon
   reducido abre un tramo que la reanudación cierra; una baja con canon nuevo
   deja el cambio también en `ajuste.historial`.
-- **Ajuste sugerido por índice.** La ficha del contrato propone el % de ajuste
-  con el índice y el período elegidos. Por defecto mide **de ajuste a ajuste**
-  (anual de sep-2024: sep-2023 a ago-2024) y solo corre la ventana hacia atrás,
-  con el mismo largo, si el último mes no se publicó todavía (se da por
-  publicado M-1 desde el 15, o antes si ya está cargado): el trimestral de
-  diciembre calculado en noviembre usa ago–oct. Con varios ajustes atrasados
-  muestra el % de cada período y el total compuesto, y los registra todos. La serie (`data/indices.json`)
-  guarda la **variación mensual** por índice y mes; el acumulado se compone, no
-  se suma, y un mes faltante deja la sugerencia en `null`. Si están los
-  `nivel` de las puntas (CPI), el acumulado sale de su cociente y no necesita
-  los meses del medio (BLS no publicó oct-2025). Se trae de
-  datos.gob.ar (IPC) o BLS (CPI) o se carga a mano. Si se usa el sugerido, el
-  historial guarda `indiceAplicado`.
+- **Ajuste de canon.** El % se consulta en la fuente oficial del índice del
+  contrato (botón "Consultar IPC/CPI": INDEC o la calculadora de BLS) y se
+  carga a mano. Hubo un cálculo automático por series y se sacó a pedido de
+  Maxi: no lo vuelvas a meter sin hablarlo. Los ajustes viejos con
+  `indiceAplicado` se siguen mostrando.
   "Avisar al cliente" arma el correo del ajuste (no lo manda: se copia o se
   abre en el correo de cada uno) y, al confirmarlo, queda en `ajuste.avisos`.
   El **último** ajuste se puede deshacer (`deshacerAjuste()`): vuelve canon y
