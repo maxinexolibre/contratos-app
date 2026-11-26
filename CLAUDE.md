@@ -94,9 +94,11 @@ presupuesto o reemplazar por un texto propio.
   reducido abre un tramo que la reanudación cierra; una baja con canon nuevo
   deja el cambio también en `ajuste.historial`.
 - **Ajuste sugerido por índice.** La ficha del contrato propone el % de ajuste
-  con el índice y el período elegidos (por defecto, los meses de la
-  periodicidad que terminan **dos meses antes** del ajuste: diciembre usa
-  ago–oct, porque noviembre no está publicado). Con varios ajustes atrasados
+  con el índice y el período elegidos. Por defecto mide **de ajuste a ajuste**
+  (anual de sep-2024: sep-2023 a ago-2024) y solo corre la ventana hacia atrás,
+  con el mismo largo, si el último mes no se publicó todavía (se da por
+  publicado M-1 desde el 15, o antes si ya está cargado): el trimestral de
+  diciembre calculado en noviembre usa ago–oct. Con varios ajustes atrasados
   muestra el % de cada período y el total compuesto, y los registra todos. La serie (`data/indices.json`)
   guarda la **variación mensual** por índice y mes; el acumulado se compone, no
   se suma, y un mes faltante deja la sugerencia en `null`. Se trae de

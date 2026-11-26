@@ -2465,25 +2465,42 @@ prueba("índices · un 0% cargado cuenta como dato, un mes vacío no", () => {
   igual(E.ENTIDADES.indices.normalizar({ indice: "IPC_INDEC", mes: "2027-01", variacion: "" }).variacion, null);
 });
 
-prueba("índices · período por defecto: los meses de la periodicidad, con dos de rezago", () => {
-  igual(IX.periodoSugerido("2026-12-01", 3), { desde: "2026-08", hasta: "2026-10" });
-  igual(IX.periodoSugerido("2025-09-01", 12), { desde: "2024-08", hasta: "2025-07" });
-  igual(IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3).porcentaje, 6.12);
+prueba("índices · período de ajuste a ajuste cuando todo está publicado", () => {
+  igual(IX.periodoSugerido([], "IPC_INDEC", "2024-09-01", 12, "2026-11-26"),
+    { desde: "2023-09", hasta: "2024-08", ideal: "2024-08", corrido: false });
+  igual(IX.periodoSugerido(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, "2026-12-20"),
+    { desde: "2026-09", hasta: "2026-11", ideal: "2026-11", corrido: false });
 });
 
-prueba("índices · el período no se corre según lo cargado: si falta un mes, lo dice", () => {
-  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2027-02-01", 3);
-  igual([s.desde, s.hasta, s.porcentaje, s.faltan], ["2026-10", "2026-12", null, ["2026-12"]]);
+prueba("índices · si el último mes no se publicó, la ventana se corre con el mismo largo", () => {
+  // Trimestral de diciembre calculado el 26/11: noviembre sale a mitad de diciembre.
+  const sinNov = SERIE_IX.filter((x) => x.mes !== "2026-11");
+  const s = IX.sugerirAjuste(sinNov, "IPC_INDEC", "2026-12-01", 3, null, "2026-11-26");
+  igual([s.desde, s.hasta, s.corrido, s.ideal, s.porcentaje], ["2026-08", "2026-10", true, "2026-11", 6.12]);
+  // Antes del 15 todavía no salió el mes anterior.
+  igual(IX.ultimoPublicado([], "IPC_INDEC", "2026-11-10"), "2026-09");
+  igual(IX.ultimoPublicado([], "IPC_INDEC", "2026-11-15"), "2026-10");
 });
 
-prueba("índices · ajustes atrasados: % por período y total compuesto", () => {
-  const serie = IX.rangoMeses("2023-08", "2026-07")
-    .reduce((s, mes) => IX.upsert(s, { indice: "IPC_INDEC", mes, variacion: mes < "2024-08" ? 10 : mes < "2025-08" ? 2 : 1 }), []);
-  const r = IX.sugerirPendientes(serie, "IPC_INDEC", ["2024-09-01", "2025-09-01", "2026-09-01"], 12);
-  igual(r.periodos.map((p) => [p.desde, p.hasta]), [["2023-08", "2024-07"], ["2024-08", "2025-07"], ["2025-08", "2026-07"]]);
+prueba("índices · un mes ya cargado cuenta como publicado aunque no sea el 15", () => {
+  // SERIE_IX tiene noviembre cargado: el 10/12 ya se puede usar.
+  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, null, "2026-12-10");
+  igual([s.desde, s.hasta, s.porcentaje], ["2026-09", "2026-11", 7.16]);
+});
+
+prueba("índices · un mes publicado que falta en la serie se pide, no se saltea", () => {
+  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2027-02-01", 3, null, "2027-02-20");
+  igual([s.desde, s.hasta, s.porcentaje, s.faltan], ["2026-11", "2027-01", null, ["2026-12", "2027-01"]]);
+});
+
+prueba("índices · ajustes atrasados: de ajuste a ajuste, % por período y total compuesto", () => {
+  const serie = IX.rangoMeses("2023-09", "2026-08")
+    .reduce((s, mes) => IX.upsert(s, { indice: "IPC_INDEC", mes, variacion: mes < "2024-09" ? 10 : mes < "2025-09" ? 2 : 1 }), []);
+  const r = IX.sugerirPendientes(serie, "IPC_INDEC", ["2024-09-01", "2025-09-01", "2026-09-01"], 12, "2026-11-26");
+  igual(r.periodos.map((p) => [p.desde, p.hasta]), [["2023-09", "2024-08"], ["2024-09", "2025-08"], ["2025-09", "2026-08"]]);
   igual(r.periodos.map((p) => p.porcentaje), [213.84, 26.82, 12.68]);
   igual(r.total, 348.48, "con el % redondeado de cada período, que es el que se registra");
-  const corta = IX.sugerirPendientes(serie.filter((x) => x.mes !== "2025-01"), "IPC_INDEC", ["2024-09-01", "2025-09-01"], 12);
+  const corta = IX.sugerirPendientes(serie.filter((x) => x.mes !== "2025-01"), "IPC_INDEC", ["2024-09-01", "2025-09-01"], 12, "2026-11-26");
   igual([corta.total, corta.faltan], [null, ["2025-01"]]);
 });
 
@@ -2503,7 +2520,7 @@ prueba("índices · upsert reemplaza el mes y no mezcla índices", () => {
 prueba("índices · la sugerencia sobre un tramo usa lo que se factura", () => {
   const c = E.ENTIDADES.contratos.normalizar({ economico: { canonMensual: 4800, moneda: "ARS",
     tramos: [{ hasta: "2026-12-31", canonMensual: 4000, motivo: "equipo en garantía" }] } });
-  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2027-01-01", 3);
+  const s = IX.sugerirAjuste(SERIE_IX, "IPC_INDEC", "2026-12-01", 3, null, "2026-12-20");
   const r = E.ajustarCanon(c, "2026-12-01", Math.round(E.canonVigente(c, "2026-12-01") * (1 + s.porcentaje / 100) * 100) / 100);
   igual([r.anterior, r.nuevo], [4000, 4286.4]);
 });

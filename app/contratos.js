@@ -496,7 +496,7 @@ function bloqueSugerencia(c, fecha) {
   if (!IX()) return "";
   const indice = indiceDe(c);
   const meses = AJUSTE_STEP[c.ajuste?.periodicidad] || 1;
-  const p = IX().periodoSugerido(fecha, meses);
+  const p = IX().periodoSugerido(state.indices, indice, fecha, meses);
   const opts = Object.entries(IX().INDICES).map(([k, d]) => `<option value="${k}"${k === indice ? " selected" : ""}>${esc(d.etiqueta)}</option>`).join("");
   return `<div class="aj-sug">
     <div class="aj-row">
@@ -524,7 +524,11 @@ function htmlSugerencia(c) {
   const indice = document.getElementById("ajIdx")?.value || indiceDe(c);
   const meses = AJUSTE_STEP[c.ajuste?.periodicidad] || 1;
   const desde = document.getElementById("ajDesde")?.value, hasta = document.getElementById("ajHasta")?.value;
-  const s = IX().sugerirAjuste(state.indices, indice, fecha, meses, desde && hasta ? { desde, hasta } : null);
+  // Si el período es el calculado se pide sin fijarlo, así avisa cuando se
+  // corrió porque el último mes todavía no se publicó.
+  const def = IX().periodoSugerido(state.indices, indice, fecha, meses);
+  const manual = desde && hasta && (desde !== def.desde || hasta !== def.hasta);
+  const s = IX().sugerirAjuste(state.indices, indice, fecha, meses, manual ? { desde, hasta } : null);
   ultimaSugerencia = s;
   if (s.desde > s.hasta) return `<span class="muted">El mes "desde" es posterior al "hasta".</span>`;
   const rango = `${s.etiqueta} ${fmtMes(s.desde)}${s.meses > 1 ? ` – ${fmtMes(s.hasta)}` : ""}`;
@@ -533,7 +537,8 @@ function htmlSugerencia(c) {
   const base = baseAjuste(c);
   const nuevo = Math.round(base * (1 + s.porcentaje / 100) * 100) / 100;
   return `<b>Ajuste del ${fmt(fecha)}: ${fmtPct(s.porcentaje)}</b> <span class="muted">· ${esc(rango)}${s.meses <= 6 ? ` (${s.detalle.map((d) => fmtPct(d.variacion, 1)).join(" · ")})` : ""} · ${money(base, m)} → ${money(nuevo, m)}</span>
-    ${state.soloLectura ? "" : `<button class="btn sm" type="button" onclick="usarSugerencia('${c.id}')">Usar ${fmtPct(s.porcentaje)}</button>`}`;
+    ${state.soloLectura ? "" : `<button class="btn sm" type="button" onclick="usarSugerencia('${c.id}')">Usar ${fmtPct(s.porcentaje)}</button>`}
+    ${s.corrido ? `<div class="muted" style="font-size:11.5px">${fmtMes(s.ideal)} todavía no se publicó: se tomaron los ${s.meses} meses hasta ${fmtMes(s.hasta)}.</div>` : ""}`;
 }
 // Con dos o más ajustes atrasados (p. ej. tres anuales sin aplicar) se ve el
 // % de cada período y el total compuesto, y se pueden registrar todos juntos.
@@ -551,7 +556,7 @@ function htmlPendientes(c) {
   return `<table class="aj-pend">
     <thead><tr><th>Ajuste</th><th>Período del índice</th><th>%</th><th></th></tr></thead>
     <tbody>${r.periodos.map((p) => `<tr>
-      <td>${fmt(p.fecha)}</td><td>${fmtMes(p.desde)} – ${fmtMes(p.hasta)}</td>
+      <td>${fmt(p.fecha)}</td><td>${fmtMes(p.desde)} – ${fmtMes(p.hasta)}${p.corrido ? ` <span class="muted" title="${fmtMes(p.ideal)} todavía no se publicó">*</span>` : ""}</td>
       <td>${p.porcentaje == null ? `<span class="muted">falta${p.faltan.length > 1 ? "n" : ""} ${p.faltan.length} mes${p.faltan.length > 1 ? "es" : ""}</span>` : `<b>${fmtPct(p.porcentaje)}</b>`}</td>
       <td>${ro || p.porcentaje == null ? "" : `<button class="btn sm ghost" type="button" onclick="usarPeriodo('${c.id}','${p.fecha}')">Usar</button>`}</td>
     </tr>`).join("")}</tbody>
@@ -574,7 +579,8 @@ function periodoPorDefecto(id) {
   const c = state.data.find((x) => x.id === id);
   const d = document.getElementById("ajDesde"), h = document.getElementById("ajHasta");
   if (!d || !h || !IX()) return;
-  const p = IX().periodoSugerido(document.getElementById("ajFecha")?.value || hoyISO(), AJUSTE_STEP[c.ajuste?.periodicidad] || 1);
+  const p = IX().periodoSugerido(state.indices, document.getElementById("ajIdx").value,
+    document.getElementById("ajFecha")?.value || hoyISO(), AJUSTE_STEP[c.ajuste?.periodicidad] || 1);
   d.value = p.desde; h.value = p.hasta;
   calcSugerencia(id);
 }
