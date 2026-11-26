@@ -343,6 +343,51 @@
       plenoAnterior, plenoNuevo, enTramo: !!vig, factor };
   }
 
+  /**
+   * Ajuste que se puede deshacer: solo el último del historial, y solo si es
+   * un ajuste de canon (no una baja de equipo ni una regularización) y nada
+   * cambió el canon después. Deshacer uno del medio dejaría los posteriores
+   * calculados sobre una base que ya no existe.
+   */
+  function ajusteDeshacible(registro) {
+    const hist = esLista(registro?.ajuste?.historial);
+    const h = hist[hist.length - 1];
+    if (!h) return { ok: false, motivo: "No hay ajustes registrados." };
+    if (h.origen && h.origen !== "ajuste") return { ok: false, motivo: "El último movimiento no es un ajuste." };
+    if (!h.origen && (!(Number(h.canonAnterior) > 0) || /^baja de /.test(h.nota || "")))
+      return { ok: false, motivo: "El último movimiento no es un ajuste: es una baja de equipo o una regularización." };
+    if (Math.abs(canonVigente(registro, h.fecha) - money(h.canonNuevo)) > 0.01)
+      return { ok: false, motivo: "El canon cambió después de ese ajuste; corregilo a mano desde Editar." };
+    return { ok: true, entrada: h, indice: hist.length - 1 };
+  }
+
+  /**
+   * Vuelve `economico` a como estaba antes del último ajuste. Los ajustes
+   * nuevos guardan una foto (`economicoAntes`); los anteriores a eso se
+   * revierten dividiendo por el mismo factor, que es la inversa exacta de
+   * ajustarCanon salvo centavos de redondeo.
+   */
+  function deshacerAjuste(registro) {
+    const d = ajusteDeshacible(registro);
+    if (!d.ok) return d;
+    const h = d.entrada;
+    const eco = registro.economico || {};
+    let economico;
+    if (h.economicoAntes) {
+      economico = { ...eco, canonMensual: money(h.economicoAntes.canonMensual), tramos: normalizarTramos(h.economicoAntes.tramos) };
+    } else {
+      const factor = money(h.canonNuevo) / money(h.canonAnterior);
+      const vig = tramoVigente(registro, h.fecha);
+      const tramos = normalizarTramos(eco.tramos).map((t) => {
+        if (vig && t.desde === vig.desde && t.hasta === vig.hasta) return { ...t, canonMensual: money(h.canonAnterior) };
+        return (!t.hasta || t.hasta >= h.fecha) ? { ...t, canonMensual: money(t.canonMensual / factor) } : t;
+      });
+      economico = { ...eco, canonMensual: vig ? money(money(eco.canonMensual) / factor) : money(h.canonAnterior), tramos };
+    }
+    const historial = esLista(registro.ajuste?.historial).slice(0, d.indice);
+    return { ok: true, economico, historial, deshecho: h };
+  }
+
   /** Equipos con servicio vigente en una fecha. */
   function equiposActivos(registro, f = hoy()) {
     return esLista(registro?.equipos).filter((e) => equipoCubierto(e, f));
@@ -1304,7 +1349,7 @@
     CATALOGO_AUDITORIA,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
-    normalizarTramos, tramoVigente, canonVigente, ajustarCanon, equipoCubierto, equiposPorIngresar,
+    normalizarTramos, tramoVigente, canonVigente, ajustarCanon, ajusteDeshacible, deshacerAjuste, equipoCubierto, equiposPorIngresar,
     EVENTO_EQUIPO, EVENTO_EQUIPO_LABEL, normalizarEventosEquipo, estadoEquipo, motivoNoEvento,
     diasEnPausa, equiposActivos, FACTURACION_CONTRATO, FACTURACION_LABEL,
     normalizarVersion,
