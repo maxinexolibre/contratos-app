@@ -1620,6 +1620,22 @@ prueba("tramos · superpuestos o al revés no se aceptan", () => {
     { hasta: "2026-12-31", canonMensual: 4000 }, { desde: "2027-01-01", hasta: "2027-02-01", canonMensual: 4400 }] } }), null, ADMIN);
 });
 
+prueba("ajuste · con un tramo vigente se ajusta lo que se factura, no el pleno", () => {
+  // 4.000 por tramo hasta fin de año, pleno 4.800. Un 10% en diciembre.
+  const r = E.ajustarCanon(conTramo(), "2026-12-01", 4400);
+  igual(r.anterior, 4000, "la base es el tramo");
+  igual(r.economico.tramos[0].canonMensual, 4400);
+  igual(r.plenoNuevo, 5280, "el pleno sube en la misma proporción");
+  igual(E.canonVigente({ economico: r.economico }, "2027-01-01"), 5280);
+});
+
+prueba("ajuste · fuera del tramo se ajusta el pleno y el tramo vencido no se toca", () => {
+  const r = E.ajustarCanon(conTramo(), "2027-03-01", 5280);
+  igual(r.anterior, 4800);
+  igual(r.plenoNuevo, 5280);
+  igual(r.economico.tramos[0].canonMensual, 4000, "un tramo que ya terminó es historia");
+});
+
 prueba("equipos · el que entra en enero no está cubierto en diciembre", () => {
   const c = conTramo();
   cierto(!E.equipoCubierto(c.equipos[1], "2026-12-15"));

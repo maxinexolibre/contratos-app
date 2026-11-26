@@ -321,6 +321,28 @@
     return estadoEquipo(equipo, f) === "Activo";
   }
 
+  /**
+   * Aplica un ajuste de canon en una fecha. `nuevo` es lo que se va a
+   * facturar desde esa fecha: si rige un tramo reducido, es el tramo el que se
+   * ajusta, y el pleno y los demás tramos que siguen corriendo suben en la
+   * misma proporción. Antes se tomaba siempre el pleno como base y un
+   * contrato que pagaba 4M por un tramo se ajustaba sobre 4,8M.
+   */
+  function ajustarCanon(registro, f, nuevo) {
+    const eco = registro?.economico || {};
+    const anterior = canonVigente(registro, f);
+    const factor = anterior > 0 ? Number(nuevo) / anterior : 1;
+    const plenoAnterior = money(eco.canonMensual);
+    const vig = tramoVigente(registro, f);
+    const plenoNuevo = vig ? money(plenoAnterior * factor) : money(nuevo);
+    const tramos = normalizarTramos(eco.tramos).map((t) => {
+      if (vig && t.desde === vig.desde && t.hasta === vig.hasta) return { ...t, canonMensual: money(nuevo) };
+      return (!t.hasta || t.hasta >= f) ? { ...t, canonMensual: money(t.canonMensual * factor) } : t;
+    });
+    return { economico: { ...eco, canonMensual: plenoNuevo, tramos }, anterior, nuevo: money(nuevo),
+      plenoAnterior, plenoNuevo, enTramo: !!vig, factor };
+  }
+
   /** Equipos con servicio vigente en una fecha. */
   function equiposActivos(registro, f = hoy()) {
     return esLista(registro?.equipos).filter((e) => equipoCubierto(e, f));
@@ -1259,7 +1281,7 @@
     CATALOGO_AUDITORIA,
     normalizarColeccion, periodoDe, periodo, fecha, sumarDias, hoy,
     money, claveCliente, nuevoId,
-    normalizarTramos, tramoVigente, canonVigente, equipoCubierto, equiposPorIngresar,
+    normalizarTramos, tramoVigente, canonVigente, ajustarCanon, equipoCubierto, equiposPorIngresar,
     EVENTO_EQUIPO, EVENTO_EQUIPO_LABEL, normalizarEventosEquipo, estadoEquipo, motivoNoEvento,
     diasEnPausa, equiposActivos, FACTURACION_CONTRATO, FACTURACION_LABEL,
     normalizarVersion,
