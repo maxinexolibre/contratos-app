@@ -460,9 +460,11 @@ function renderAjustes(c) {
       </div>
       ${bloqueSugerencia(c, (pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10))}
       <button class="btn primary sm" onclick="registrarAjuste('${c.id}')">Registrar ajuste</button>
+      <button class="btn sm" type="button" onclick="avisoAjuste('${c.id}')" title="Arma el correo para avisarle al cliente el ajuste que cargaste arriba">Avisar al cliente</button>
       <span class="muted" style="font-size:12px" id="ajHint">Se factura: ${money(NEXO_ESQUEMA.canonVigente(c, (pend[0] ? pend[0] : hoy()).toISOString().slice(0, 10)), m)}${(c.economico?.tramos || []).length ? ` · pleno ${money(canon, m)}` : ""}</span>
     </div>`}
 
+    ${renderAvisos(c)}
     ${hist.length ? `<table class="aj-hist">
       <thead><tr><th>Fecha</th><th>%</th><th>Canon</th><th>Quién</th></tr></thead>
       <tbody>${hist.map((h) => `<tr>
@@ -584,6 +586,122 @@ async function cargarMesIndice(id) {
     document.getElementById("ixMes").value = IX().mesMas(mes, 1);
     calcSugerencia(id);
   } catch (e) { toast("Error: " + e.message, true, true); }
+}
+// ---- Aviso de ajuste al cliente ----
+// La app no manda el correo: lo arma con lo cargado en el formulario de
+// ajuste, se copia o se abre en el correo de cada uno, y al mandarlo se
+// registra el aviso. Así queda constancia de cuándo y a quién se avisó, que
+// es lo que se discute si el cliente después objeta el aumento.
+const MES_LARGO = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const mesLargo = (iso) => iso ? `${MES_LARGO[Number(iso.slice(5, 7)) - 1]} de ${iso.slice(0, 4)}` : "";
+function contactoCliente(c) {
+  const cli = (state.clientes || []).find((x) => NEXO_ESQUEMA.claveCliente(x.nombreComercial) === NEXO_ESQUEMA.claveCliente(c.cliente?.nombreComercial));
+  const texto = c.cliente?.contacto || "";
+  const mail = cli?.email || (texto.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/) || [""])[0];
+  const nombre = (cli?.contacto || texto.replace(mail, "")).replace(/[<>()·,;-]+\s*$/, "").trim();
+  return { mail, nombre };
+}
+function sufijoIVA(c) {
+  if (c.economico?.facturacion === "SinFactura") return "";
+  return c.economico?.incluyeIVA ? " (IVA incluido)" : " + IVA";
+}
+function armarAvisoAjuste(c) {
+  const fecha = document.getElementById("ajFecha")?.value || hoyISO();
+  const pct = document.getElementById("ajPct")?.value;
+  const nuevo = Number(document.getElementById("ajCanon")?.value);
+  if (!(nuevo > 0)) return null;
+  const m = c.economico?.moneda;
+  const iva = sufijoIVA(c);
+  const r = NEXO_ESQUEMA.ajustarCanon(c, fecha, nuevo);
+  const s = ultimaSugerencia;
+  const conIndice = s?.porcentaje != null && pct !== "" && Number(pct) === s.porcentaje;
+  const lblIdx = LEGAL.indiceLabel[c.ajuste?.indice] || c.ajuste?.indice || "";
+  const { nombre } = contactoCliente(c);
+  const pctTxt = pct !== "" && !isNaN(Number(pct)) ? fmtPct(Number(pct)) : null;
+  const lineas = [
+    pctTxt ? `- Ajuste: ${pctTxt}${conIndice ? ` (${s.etiqueta} ${MES_LARGO[Number(s.desde.slice(5, 7)) - 1]}${s.meses > 1 ? ` a ${mesLargo(s.hasta + "-01")}` : ` de ${s.hasta.slice(0, 4)}`}: ${s.detalle.map((d) => fmtPct(d.variacion, 1)).join(", ")})` : ""}` : null,
+    `- Canon actual: ${money(r.anterior, m)}${iva}`,
+    `- Canon desde ${mesLargo(fecha)}: ${money(nuevo, m)}${iva}`,
+    r.enTramo ? `- Canon pleno, con todos los equipos incorporados: pasa de ${money(r.plenoAnterior, m)} a ${money(r.plenoNuevo, m)}${iva}` : null,
+  ].filter(Boolean);
+  const clausula = [c.ajuste?.periodicidad && c.ajuste.periodicidad !== "ninguno" ? `ajuste ${c.ajuste.periodicidad}` : "", lblIdx ? `por ${lblIdx}` : ""].filter(Boolean).join(" ");
+  const asunto = `Ajuste de canon · Contrato ${c.numero || ""} · ${mesLargo(fecha)}`.replace(/\s+·\s+·/, " ·");
+  const cuerpo = `Hola${nombre ? ` ${nombre}` : ""},
+
+Les escribimos para avisarles que, según lo previsto en el contrato ${c.numero || ""}${clausula ? ` (${clausula})` : ""}, a partir del ${fmt(parseDate(fecha))} se aplica el ajuste del canon mensual:
+
+${lineas.join("\n")}
+
+${c.economico?.facturacion === "SinFactura" ? `El importe de ${mesLargo(fecha)} ya refleja el nuevo valor.` : `La factura de ${mesLargo(fecha)} ya va a reflejar el nuevo valor.`} Ante cualquier consulta quedamos a disposición.
+
+Saludos cordiales.`;
+  return { fecha, pct: pctTxt == null ? null : Number(pct), nuevo, anterior: r.anterior, asunto, cuerpo };
+}
+function avisoAjuste(id) {
+  const c = state.data.find((x) => x.id === id);
+  const a = armarAvisoAjuste(c);
+  if (!a) { toast("Cargá primero el % o el canon nuevo del ajuste", true, true); return; }
+  const { mail } = contactoCliente(c);
+  document.getElementById("ovAviso")?.remove();
+  const ov = document.createElement("div");
+  ov.className = "overlay";
+  ov.id = "ovAviso";
+  ov.innerHTML = `<div class="modal" style="max-width:640px">
+    <div class="kicker">${esc(c.numero)} · ${esc(nombreCliente(c))}</div>
+    <h2>Avisar el ajuste al cliente</h2>
+    <div class="field"><label for="avPara">Para</label><input id="avPara" type="email" value="${esc(mail)}" placeholder="correo del cliente"></div>
+    <div class="field"><label for="avAsunto">Asunto</label><input id="avAsunto" value="${esc(a.asunto)}"></div>
+    <div class="field"><label for="avCuerpo">Mensaje</label>
+      <textarea id="avCuerpo" rows="14" style="width:100%;font-family:inherit;line-height:1.5">${esc(a.cuerpo)}</textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:8px">
+        <span class="muted" style="font-size:12px">Revisalo antes de mandarlo. No lleva firma: la agrega tu correo.</span>
+        <button class="btn sm ghost" type="button" onclick="copiarAviso()">Copiar mensaje</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+      <button class="btn ghost" type="button" onclick="document.getElementById('ovAviso').remove()">Cancelar</button>
+      <button class="btn ghost" type="button" onclick="abrirAvisoEnMail()">Abrir en mi mail</button>
+      ${state.soloLectura ? "" : `<button class="btn primary" type="button" id="avOk">Lo mandé · registrar aviso</button>`}
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:10px">La app no manda el correo: lo copiás o lo abrís en tu casilla, lo mandás vos y registrás el aviso en el contrato.</p>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.style.display = "flex";
+  ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+  const ok = document.getElementById("avOk");
+  if (ok) ok.onclick = () => registrarAviso(id, a);
+}
+async function copiarAviso() {
+  const el = document.getElementById("avCuerpo");
+  try { await navigator.clipboard.writeText(el.value); toast("Mensaje copiado"); }
+  catch { el.focus(); el.select(); toast("Copiá a mano (Ctrl/Cmd+C)", true); }
+}
+function abrirAvisoEnMail() {
+  const para = document.getElementById("avPara").value.trim();
+  const url = `mailto:${encodeURIComponent(para)}?subject=${encodeURIComponent(document.getElementById("avAsunto").value)}&body=${encodeURIComponent(document.getElementById("avCuerpo").value)}`;
+  window.open(url, "_blank");
+}
+async function registrarAviso(id, a) {
+  const c = state.data.find((x) => x.id === id);
+  const para = document.getElementById("avPara").value.trim();
+  c.ajuste.avisos = [...(c.ajuste.avisos || []), {
+    enviado: hoyISO(), fechaAjuste: a.fecha, porcentaje: a.pct, canonAnterior: a.anterior, canonNuevo: a.nuevo,
+    para, asunto: document.getElementById("avAsunto").value.trim(), usuario: state.user || "—",
+  }];
+  try {
+    await persist(`Aviso de ajuste ${c.numero} · ${a.fecha}`);
+    document.getElementById("ovAviso")?.remove();
+    toast("Aviso registrado en el contrato");
+    router();
+  } catch (e) { toast("Error: " + e.message, true, true); }
+}
+function renderAvisos(c) {
+  const av = (c.ajuste?.avisos || []).slice().sort((a, b) => String(b.enviado).localeCompare(String(a.enviado)));
+  if (!av.length) return "";
+  const m = c.economico?.moneda;
+  return `<div class="aj-avisos"><b>Avisos al cliente</b>
+    <ul>${av.slice(0, 4).map((a) => `<li>${fmt(parseDate(a.enviado))} · ajuste del ${fmt(parseDate(a.fechaAjuste))}${a.porcentaje != null ? ` · ${fmtPct(a.porcentaje)}` : ""} · ${money(a.canonNuevo, m)}<span class="muted"> · ${esc(a.para || "sin destinatario")} · ${esc(a.usuario || "")}</span></li>`).join("")}</ul>
+  </div>`;
 }
 // Los dos campos se completan entre sí: cargás el % y sale el canon, o al revés.
 // La base es lo que se factura en la fecha del ajuste: con un tramo reducido
