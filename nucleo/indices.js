@@ -92,32 +92,48 @@
       porcentaje: pct == null ? null : Math.round(pct * 100) / 100 };
   }
 
-  /**
-   * Rezago por defecto entre el último mes del índice y el mes del ajuste.
-   * Un ajuste del 1/12 no puede usar noviembre (INDEC lo publica a mitad de
-   * diciembre): toma hasta octubre. Antes se usaba el mes anterior y, si no
-   * estaba, se corría al último cargado; eso hacía que el mismo ajuste diera
-   * un % distinto según el día en que se miraba (Maxi, 2026-11-25).
-   */
-  const REZAGO = 2;
+  /** Día del mes desde el que se da por publicado el índice del mes anterior. */
+  const DIA_PUBLICACION = 15;
 
   /**
-   * Período de un ajuste: los `meses` de la periodicidad que terminan
-   * `rezago` meses antes del mes del ajuste. Trimestral al 1/12 → ago a oct;
-   * anual a septiembre → ago del año anterior a jul.
+   * Último mes publicado a una fecha. INDEC y BLS publican el mes M a mitad
+   * de M+1: hasta el 15 se da por publicado M-2, después M-1. Si el mes ya
+   * está cargado en la serie, está publicado aunque no haya llegado el 15.
    */
-  function periodoSugerido(fechaAjuste, meses, rezago = REZAGO) {
+  function ultimoPublicado(serie, indice, hoy) {
+    const h = (E.fecha(hoy) || E.hoy());
+    const porCalendario = mesMas(h.slice(0, 7), Number(h.slice(8, 10)) >= DIA_PUBLICACION ? -1 : -2);
+    const cargado = ultimoMes(serie, indice);
+    return cargado && cargado > porCalendario ? cargado : porCalendario;
+  }
+
+  /**
+   * Período de un ajuste: de ajuste a ajuste. El de septiembre de 2024 anual
+   * mide de septiembre de 2023 a agosto de 2024; el trimestral de diciembre,
+   * septiembre a noviembre.
+   *
+   * Solo si el último mes todavía no se publicó, la ventana se corre hacia
+   * atrás con el mismo largo: el trimestral de diciembre calculado el 26/11
+   * toma agosto a octubre, porque noviembre sale a mitad de diciembre. Lo que
+   * decide es la publicación, no lo que haya cargado: si un mes ya publicado
+   * no está en la serie, se pide cargarlo en vez de correrse (Maxi,
+   * 2026-11-26).
+   */
+  function periodoSugerido(serie, indice, fechaAjuste, meses, hoy) {
     const f = E.fecha(fechaAjuste) || E.hoy();
-    const hasta = mesMas(f.slice(0, 7), -rezago);
+    const ideal = mesMas(f.slice(0, 7), -1);
+    const publicado = ultimoPublicado(serie, indice, hoy);
+    const hasta = ideal <= publicado ? ideal : publicado;
     const n = Math.max(1, Number(meses) || 1);
-    return { desde: mesMas(hasta, -(n - 1)), hasta };
+    return { desde: mesMas(hasta, -(n - 1)), hasta, ideal, corrido: hasta !== ideal };
   }
 
   /** Sugerencia para un ajuste. `periodo` explícito manda sobre el calculado. */
-  function sugerirAjuste(serie, indice, fechaAjuste, meses, periodo, rezago = REZAGO) {
-    const p = periodo?.desde && periodo?.hasta ? periodo : periodoSugerido(fechaAjuste, meses, rezago);
+  function sugerirAjuste(serie, indice, fechaAjuste, meses, periodo, hoy) {
+    const p = periodo?.desde && periodo?.hasta ? { ...periodo, corrido: false }
+      : periodoSugerido(serie, indice, fechaAjuste, meses, hoy);
     return { ...acumulado(serie, indice, p.desde, p.hasta), fecha: E.fecha(fechaAjuste) || E.hoy(),
-      etiqueta: INDICES[indice]?.etiqueta || indice };
+      corrido: !!p.corrido, ideal: p.ideal || null, etiqueta: INDICES[indice]?.etiqueta || indice };
   }
 
   /**
@@ -126,8 +142,8 @@
    * el canon si se aplican todos. Si falta un mes en cualquier período, el
    * total queda en null.
    */
-  function sugerirPendientes(serie, indice, fechas, meses, rezago = REZAGO) {
-    const periodos = (fechas || []).map((f) => sugerirAjuste(serie, indice, f, meses, null, rezago));
+  function sugerirPendientes(serie, indice, fechas, meses, hoy) {
+    const periodos = (fechas || []).map((f) => sugerirAjuste(serie, indice, f, meses, null, hoy));
     const completos = periodos.length && periodos.every((p) => p.porcentaje != null);
     const total = completos
       // Se compone con el % redondeado de cada período, que es el que se
@@ -173,6 +189,6 @@
   }
 
   global.NEXO_INDICES = {
-    REZAGO, INDICES, mesMas, rangoMeses, ultimoMes, acumulado, periodoSugerido, sugerirAjuste, sugerirPendientes, upsert, traer,
+    DIA_PUBLICACION, INDICES, mesMas, rangoMeses, ultimoMes, ultimoPublicado, acumulado, periodoSugerido, sugerirAjuste, sugerirPendientes, upsert, traer,
   };
 })(typeof window !== "undefined" ? window : globalThis);
