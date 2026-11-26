@@ -522,8 +522,8 @@ const faltanTxt = (faltan) => `falta${faltan.length > 1 ? "n" : ""} ${faltan.map
 // de que existan los inputs: por eso los valores por defecto salen del contrato.
 // Los valores llegan como parámetro y no se leen del DOM al pintar: mientras
 // se arma la ficha, los campos que hay en pantalla son los del contrato que se
-// estaba mirando antes, y así IMAXE (US CPI) salía calculado con el IPC de
-// Sadiv (Maxi, 2026-11-26).
+// estaba mirando antes, y así un contrato en US CPI salía calculado con el
+// IPC y la fecha del anterior (Maxi, 2026-11-26).
 function htmlSugerencia(c, { fecha, indice, desde, hasta }) {
   const meses = AJUSTE_STEP[c.ajuste?.periodicidad] || 1;
   // Si el período es el calculado se pide sin fijarlo, así avisa cuando se
