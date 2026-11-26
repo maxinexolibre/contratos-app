@@ -34,7 +34,6 @@ const state = {
   leads: [], leadsSha: null,
   facturaciones: [], facturacionesSha: null,
   tiposCambio: [], tiposCambioSha: null,
-  indices: [], indicesSha: null,
   propuestas: [], propuestasSha: null,
   clientes: [], clientesSha: null,
   vendedores: [], vendedoresSha: null,

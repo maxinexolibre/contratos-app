@@ -512,17 +512,7 @@ ul.files li:last-child { border-bottom: 0; }
 }
 .aj-row input { width: 118px; }
 .aj-row select { width: 118px; }
-.aj-row input[type=month] { width: 140px; }
-.aj-sug { flex-basis: 100%; padding: 8px 10px; border: 1px dashed var(--line); border-radius: var(--radius-sm); }
-.aj-sug-txt { font-size: 13px; margin-top: 6px; line-height: 1.6; }
-.aj-sug-txt .btn { margin-left: 6px; }
-.aj-carga { margin-top: 6px; font-size: 12.5px; }
-.aj-carga summary { cursor: pointer; color: var(--mut); }
 .aj-avisos { font-size: 12.5px; margin: 0 0 10px; }
-table.aj-pend { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
-table.aj-pend th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--mut); font-weight: 600; padding: 3px 6px; border-bottom: 1px solid var(--line); }
-table.aj-pend td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
-table.aj-pend tfoot td { border-bottom: 0; }
 .aj-avisos ul { margin: 4px 0 0; padding-left: 18px; line-height: 1.6; }
 table.aj-hist { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.aj-hist th {

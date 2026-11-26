@@ -46,7 +46,6 @@ const STORE_DEF = {
   leads: { path: () => CFG.leadsPath, key: "leads", shaKey: "leadsSha", ls: "nexo_demo_leads", seed: () => [], migrate: (a) => normalizar("leads", a) },
   facturaciones: { path: () => CFG.facturacionesPath, key: "facturaciones", shaKey: "facturacionesSha", ls: "nexo_demo_facturaciones", seed: () => [], migrate: (a) => normalizar("facturaciones", a) },
   tiposCambio: { path: () => CFG.tiposCambioPath, key: "tiposCambio", shaKey: "tiposCambioSha", ls: "nexo_demo_tc", seed: () => [], migrate: (a) => normalizar("tiposCambio", a) },
-  indices: { path: () => CFG.indicesPath, key: "indices", shaKey: "indicesSha", ls: "nexo_demo_ix", seed: () => DEMO_INDICES, migrate: (a) => normalizar("indices", a) },
   propuestas: { path: () => CFG.propuestasPath, key: "propuestas", shaKey: "propuestasSha", ls: "nexo_demo_prop", seed: () => [], migrate: (a) => normalizar("propuestas", a) },
   clientes: { path: () => CFG.clientesPath, key: "clientes", shaKey: "clientesSha", ls: "nexo_demo_cli", seed: () => [], migrate: (a) => normalizar("clientes", a) },
   vendedores: { path: () => CFG.vendedoresPath, key: "vendedores", shaKey: "vendedoresSha", ls: "nexo_demo_vnd", seed: () => [], migrate: (a) => normalizar("vendedores", a) },
@@ -322,14 +321,6 @@ const DEMO_PRESU = [
 
 // Catálogo demo: piezas FICTICIAS (repo público). Una propia en stock, una de
 // terceros pendiente de auditoría y un equipo sin publicar.
-// Variaciones mensuales INVENTADAS para el modo demo: sirven para ver la
-// sugerencia de ajuste funcionando, no son el IPC ni el CPI reales.
-const DEMO_INDICES = [
-  ["2026-06", 2.4], ["2026-07", 2.1], ["2026-08", 2.6], ["2026-09", 2.2], ["2026-10", 2.3],
-].flatMap(([mes, v]) => [
-  { indice: "IPC_INDEC", mes, variacion: v, fuente: "demo" },
-  { indice: "US_CPI", mes, variacion: Math.round(v * 12) / 100, fuente: "demo" },
-]);
 const DEMO_CATALOGO = [
   { id: "demo_cat1", ref: "NX-AR-001", tipo: "Parte", nombre: "Bobina de ejemplo 8 canales", categoria: "Bobina",
     modalidad: "MRI", marca: "MarcaA", modeloCompatible: "Modelo A 1.5T", nroParte: "0000001", condicion: "Usado",
