@@ -21,6 +21,7 @@ contenidos de GitHub con un PAT por usuario guardado en `localStorage`.
 | Lectura/escritura particionada, índice, conflictos | `nucleo/almacen.js` | 4k |
 | Traducción forma vieja ↔ modelo v3 | `nucleo/adaptador.js` | 4k |
 | Tipos de cambio, conversión, facturación | `nucleo/cambio.js` | 3k |
+| Índices (IPC, CPI) y ajuste sugerido de canon | `nucleo/indices.js` | 2k |
 | Comisiones: seguimiento por operación, cliente nuevo, alertas, reparto 6:2:1 | `nucleo/comisiones.js` · `vistas/comisiones.js` | 9k · 6k |
 | Capa de datos de la app sobre el almacén | `nucleo/repositorio.js` | 3k |
 | Filtros, paginación, CSV, selector de país | `nucleo/tabla.js` | 2k |
@@ -92,6 +93,13 @@ presupuesto o reemplazar por un texto propio.
   en orden y la regla rechaza una historia imposible. Una pausa con canon
   reducido abre un tramo que la reanudación cierra; una baja con canon nuevo
   deja el cambio también en `ajuste.historial`.
+- **Ajuste sugerido por índice.** La ficha del contrato propone el % de ajuste
+  con el índice y el período elegidos (por defecto, los meses de la
+  periodicidad que terminan antes del ajuste). La serie (`data/indices.json`)
+  guarda la **variación mensual** por índice y mes; el acumulado se compone, no
+  se suma, y un mes faltante deja la sugerencia en `null`. Se trae de
+  datos.gob.ar (IPC) o BLS (CPI) o se carga a mano. Si se usa el sugerido, el
+  historial guarda `indiceAplicado`.
 - **Moneda y facturación del contrato.** `economico.moneda` (USD/ARS) y
   `economico.facturacion` (`ConFactura` / `SinFactura`, interno: no se imprime).
   El tablero muestra la cartera vigente por cada combinación y el listado filtra

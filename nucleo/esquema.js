@@ -910,6 +910,29 @@
     },
 
     /**
+     * Índices de precios para sugerir ajustes de canon: un registro por índice
+     * y por mes, con la variación mensual en %. Se guarda la variación y no el
+     * nivel porque es lo que publica INDEC y lo que se carga a mano sin errores
+     * de base.
+     */
+    indices: {
+      archivo: "indices",
+      particionado: false,
+      idPrefijo: "ix_",
+      normalizar(r) {
+        const mes = /^\d{4}-\d{2}/.test(esTexto(r.mes)) ? esTexto(r.mes).slice(0, 7) : "";
+        return {
+          id: esTexto(r.id) || `ix_${esTexto(r.indice)}_${mes}`,
+          indice: esTexto(r.indice),
+          mes,
+          // Mes sin dato: null, no 0. Un 0% es "no hubo inflación".
+          variacion: r.variacion == null || r.variacion === "" ? null : esNumero(r.variacion),
+          fuente: esTexto(r.fuente),
+        };
+      },
+    },
+
+    /**
      * Vendedores. Distinto de `usuarios`: un usuario es alguien que entra a la
      * aplicación; un vendedor es alguien que cobra comisión. Un representante
      * externo comisiona sin tener acceso, y un gerente puede tener acceso sin
